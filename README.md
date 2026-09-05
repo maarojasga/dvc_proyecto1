@@ -63,6 +63,8 @@ src/
 │   ├── config/              entorno y navegación
 │   └── utils/               formato y utilidades
 └── types/                   dominio (curso, quiz, progreso, insignia) y transporte
+
+public/                      activos estáticos servidos desde la raíz del sitio
 ```
 
 Los grupos de rutas entre paréntesis no aparecen en la URL: sirven para agrupar
