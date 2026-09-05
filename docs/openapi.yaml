@@ -1,0 +1,26 @@
+openapi: 3.1.0
+info:
+  title: Plataforma MOOC API
+  version: 0.1.0
+  description: >
+    API REST de la plataforma web de cursos masivos abiertos en línea.
+    Prefijo de versión: /api/v1. Errores uniformes, cursores, ETag e
+    Idempotency-Key según las restricciones técnicas del proyecto.
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      summary: Estado del servicio
+      operationId: getHealth
+      responses:
+        "200":
+          description: El servicio responde correctamente.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok

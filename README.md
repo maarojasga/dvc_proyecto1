@@ -1,105 +1,99 @@
-# Plataforma MOOC — Frontend
+# Plataforma MOOC
 
-Frontend de la plataforma web de cursos masivos abiertos en línea del curso
-Cloud. Este repositorio contiene **la base del proyecto**: estructura de rutas,
-modelo de dominio en TypeScript, capa de transporte hacia la API y empaquetado
-en Docker. **Todavía no hay funcionalidad**: cada pantalla es un marcador
-navegable que declara qué debe implementarse y a qué criterio de evaluación
-aporta.
+## Integrantes
 
-## Contexto
+- Juan David Guzman Casadiego
+- Laura Fernanda Martinez Galindo
+- Tatiana Luna Perez Suancha
+- Maria Alejandra Rojas Garzon
 
-| | |
-|---|---|
-| Backend | Go, monolito modular + workers asíncronos (repositorio aparte) |
-| Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4 |
-| Integración | REST JSON sobre HTTPS contra `/api/v1` (OpenAPI 3.1) |
-| Despliegue | Docker y Docker Compose, escalable a múltiples instancias |
+## Descripción
 
-## Puesta en marcha
+Plataforma web de cursos masivos abiertos en línea (proyecto del curso Cloud).
+Administradores, profesores y estudiantes; jerarquía Curso → Módulo → Unidad →
+Recurso; multimedia con procesamiento asíncrono a HLS; quizzes calificados en
+servidor; progreso validado e insignias digitales verificables.
 
-```bash
-npm install
-cp .env.example .env.local
-npm run dev            # http://localhost:3000
+Este repositorio contiene **la base del proyecto**, sin funcionalidad todavía:
+la estructura de carpetas, los puntos de entrada de API y workers, y el
+frontend con sus rutas como marcadores navegables. Cada pieza declara qué debe
+implementarse y a qué criterio de evaluación aporta.
+
+## Estructura del repositorio
+
+```
+.
+├── backend/            Monolito modular en Go (API) + workers independientes
+│   ├── cmd/api/            Punto de entrada de la API REST (/api/v1)
+│   ├── cmd/worker/         Punto de entrada de los workers asíncronos
+│   ├── internal/config/    Lectura de variables de entorno
+│   ├── internal/domain/    Entidades y reglas de negocio (sin framework ni cloud)
+│   ├── internal/platform/  Adaptadores: HTTP, PostgreSQL, Redis, S3/MinIO, cola
+│   └── migrations/         Migraciones SQL de PostgreSQL
+├── frontend/           Next.js 16 (App Router), React 19, TypeScript, Tailwind 4
+├── docs/               Especificación OpenAPI y notas de arquitectura
+└── docker-compose.yml  Postgres, Redis, MinIO, Mailpit, API, workers y frontend
 ```
 
-Otros comandos:
+Cada subproyecto tiene su propio README con el detalle.
+
+## Arquitectura
+
+- **Backend**: Go, monolito modular con el dominio desacoplado del framework
+  HTTP y del proveedor cloud; workers independientes sin estado local.
+- **Persistencia**: PostgreSQL como fuente de verdad transaccional; Redis para
+  sesiones, caché, rate limiting y la cola (asynq).
+- **Almacenamiento de objetos**: S3/MinIO para originales, derivados HLS, PDFs
+  e imágenes de insignias; ningún binario vive en la base relacional.
+- **Frontend**: Next.js con TypeScript. El navegador llama a `/api/v1` del
+  mismo origen y Next reescribe hacia la API en Go, así no hay CORS y las
+  cookies de sesión permanecen `SameSite`.
+- **Despliegue**: Docker y Docker Compose, con API y workers preparados para
+  escalar a múltiples instancias.
+
+## Cómo levantar el entorno local
 
 ```bash
-npm run build          # compilación de producción (salida standalone)
-npm run start          # sirve la compilación
-npm run lint           # ESLint
-npm run typecheck      # tsc --noEmit
-```
-
-### Con Docker
-
-El backend, PostgreSQL, Redis, MinIO y Mailpit viven en el compose del
-repositorio de backend. Este compose se une a la misma red:
-
-```bash
-docker network create mooc     # una sola vez, si no existe
+cp .env.example .env
 docker compose up --build
 ```
 
-## Estructura
+| Servicio | URL |
+|---|---|
+| Frontend | http://localhost:3000 |
+| API | http://localhost:8080/api/v1/health |
+| MinIO (S3) | http://localhost:9100 — consola http://localhost:9101 |
+| Mailpit | http://localhost:8025 |
 
-```
-src/
-├── app/
-│   ├── (auth)/              login, registro, verificación de correo, recuperación
-│   ├── (publico)/           catálogo y verificación pública de insignias
-│   ├── (estudiante)/        mis cursos, visor de recursos, intentos de quiz
-│   ├── (profesor)/          autoría: metadatos, estructura, versiones
-│   ├── (admin)/             usuarios, auditoría, operación de workers
-│   └── salud/               sonda usada por el healthcheck de Docker
-├── components/
-│   ├── layout/              cabecera, pie, skip link, navegación lateral
-│   └── ui/                  primitivas presentacionales
-├── lib/
-│   ├── api/                 cliente REST, catálogo de endpoints, errores
-│   ├── auth/                lectura de sesión (marcador)
-│   ├── config/              entorno y navegación
-│   └── utils/               formato y utilidades
-└── types/                   dominio (curso, quiz, progreso, insignia) y transporte
+Los puertos de MinIO son configurables con `MINIO_API_PORT` y
+`MINIO_CONSOLE_PORT` en el `.env`, porque 9000/9001 suelen estar ocupados por
+otros proyectos.
 
-public/                      activos estáticos servidos desde la raíz del sitio
+### Escalar instancias
+
+```bash
+docker compose up -d --scale worker=3
 ```
 
-Los grupos de rutas entre paréntesis no aparecen en la URL: sirven para agrupar
-por audiencia y darle a cada área su propio layout.
+## Verificación de la base
 
-## Decisiones ya tomadas en la base
+```bash
+cd backend  && go vet ./... && go build ./...
+cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
+```
 
-- **Jerarquía académica.** `src/types/domain.ts` modela Curso → Módulo → Unidad
-  → Recurso con `stableId` en cada nivel, para preservar el progreso cuando se
-  publica una nueva versión.
-- **La clave del quiz nunca viaja al cliente.** `PreguntaQuiz` expone opciones
-  sin marcar la correcta; la calificación es responsabilidad del servidor.
-- **Convenciones de la API.** El cliente en `src/lib/api/client.ts` deja
-  resueltos `Idempotency-Key`, `If-Match`/ETag, credenciales por cookie y el
-  formato de error uniforme (`ProblemDetails`).
-- **Mismo origen.** `next.config.ts` reescribe `/api/v1/*` hacia la API en Go,
-  de modo que no hay CORS y las cookies de sesión permanecen `SameSite`.
-- **Sin estado local.** La imagen usa la salida `standalone` y corre como
-  usuario sin privilegios; cualquier instancia es reemplazable.
-- **Accesibilidad desde el inicio.** `lang="es"`, salto al contenido principal,
-  foco visible, respeto a `prefers-reduced-motion` y paleta con contraste AA.
+## Pendientes para las siguientes iteraciones
 
-## Siguientes pasos
-
-1. Autenticación real: sesión en `src/lib/auth/session.ts` y protección de las
-   áreas por rol, propiedad e inscripción.
-2. Catálogo e inscripción contra `endpoints.catalogo` y `endpoints.inscripciones`.
-3. Editor de bloques con autosave y Markdown extendido canónico.
-4. Carga multipart directa a almacenamiento de objetos con URLs prefirmadas.
-5. Reproductor HLS y visor PDF accesible con reporte de progreso por heartbeat.
-6. Pruebas E2E de los nueve flujos críticos y auditoría automática de accesibilidad.
+- Esquema de base de datos y migraciones SQL.
+- Implementación funcional de cada dominio y los endpoints de la API.
+- Reverse proxy (nginx/traefik) para poder escalar la API a varias instancias:
+  hoy publica el puerto 8080 fijo en el host, lo que impide `--scale api=N`.
+- Pipeline de CI: build, lint, análisis de seguridad, migraciones y pruebas.
+- Pruebas E2E de los nueve flujos críticos y auditoría de accesibilidad.
 
 ## Versionado de datos
 
-Se conserva la configuración de [DVC](https://dvc.org) heredada de
-`dvc_proyecto` (`.dvc/`, `.dvcignore`, `data/`) para versionar conjuntos de
-datos fuera de git. Si este repositorio no va a manejar datasets, puede
-eliminarse sin afectar a la aplicación.
+Se conserva la configuración de [DVC](https://dvc.org) heredada del repositorio
+original (`.dvc/`, `.dvcignore`, `data/`) para versionar conjuntos de datos
+fuera de git. Si el proyecto no va a manejar datasets, puede eliminarse sin
+afectar a la aplicación.
