@@ -1,10 +1,13 @@
 # Plataforma MOOC — Frontend
 
-Interfaz de la plataforma web de cursos masivos abiertos en línea. Contiene
-**la base**: estructura de rutas, modelo de dominio en TypeScript, capa de
-transporte hacia la API y empaquetado en Docker. **Todavía no hay
-funcionalidad**: cada pantalla es un marcador navegable que declara qué debe
-implementarse y a qué criterio de evaluación aporta.
+Interfaz de la plataforma web de cursos masivos abiertos en línea. Contiene la
+estructura de rutas, el modelo de dominio en TypeScript, la capa de transporte
+hacia la API y el empaquetado en Docker.
+
+**Implementado**: el flujo de identidad (registro, verificación de correo,
+inicio y cierre de sesión, recuperación de clave y gestión de sesiones
+revocables). El resto de las pantallas siguen siendo marcadores navegables que
+declaran qué debe implementarse y a qué criterio de evaluación aportan.
 
 El README de la raíz describe el monorepo completo y cómo levantar todo el
 entorno con Docker Compose.
@@ -57,13 +60,15 @@ src/
 │   ├── (estudiante)/        mis cursos, visor de recursos, intentos de quiz
 │   ├── (profesor)/          autoría: metadatos, estructura, versiones
 │   ├── (admin)/             usuarios, auditoría, operación de workers
+│   ├── (cuenta)/            sesiones activas del usuario, con revocación
 │   └── salud/               sonda usada por el healthcheck de Docker
 ├── components/
+│   ├── auth/                formularios de identidad y gestión de sesiones
 │   ├── layout/              cabecera, pie, skip link, navegación lateral
-│   └── ui/                  primitivas presentacionales
+│   └── ui/                  primitivas presentacionales y de formulario
 ├── lib/
 │   ├── api/                 cliente REST, catálogo de endpoints, errores
-│   ├── auth/                lectura de sesión (marcador)
+│   ├── auth/                lectura de la sesión en el servidor
 │   ├── config/              entorno y navegación
 │   └── utils/               formato y utilidades
 └── types/                   dominio (curso, quiz, progreso, insignia) y transporte
@@ -90,13 +95,22 @@ por audiencia y darle a cada área su propio layout.
   usuario sin privilegios; cualquier instancia es reemplazable.
 - **Accesibilidad desde el inicio.** `lang="es"`, salto al contenido principal,
   foco visible, respeto a `prefers-reduced-motion` y paleta con contraste AA.
+  Los campos llevan etiqueta asociada, el error se anuncia con `aria-invalid` y
+  `aria-describedby`, y los avisos son regiones vivas.
+- **Las mutaciones salen del navegador.** Gracias al rewrite, van al mismo
+  origen, así que la API puede fijar la cookie de sesión directamente. El
+  cliente repite la cookie `mooc_csrf` en `X-CSRF-Token`, que es lo que un
+  sitio atacante no puede hacer.
+- **La sesión se resuelve en el servidor.** `src/lib/auth/session.ts` pregunta a
+  la API en cada render: la cookie es opaca y quien decide si sigue valiendo es
+  el backend, que puede haberla revocado hace un instante.
+- **El filtrado por rol de la cabecera es presentación.** La autorización real
+  la aplica cada endpoint según rol, propiedad e inscripción.
 
 ## Siguientes pasos
 
-1. Autenticación real: sesión en `src/lib/auth/session.ts` y protección de las
-   áreas por rol, propiedad e inscripción.
-2. Catálogo e inscripción contra `endpoints.catalogo` y `endpoints.inscripciones`.
-3. Editor de bloques con autosave y Markdown extendido canónico.
-4. Carga multipart directa a almacenamiento de objetos con URLs prefirmadas.
-5. Reproductor HLS y visor PDF accesible con reporte de progreso por heartbeat.
-6. Pruebas E2E de los nueve flujos críticos y auditoría automática de accesibilidad.
+1. Catálogo e inscripción contra `endpoints.catalogo` y `endpoints.inscripciones`.
+2. Editor de bloques con autosave y Markdown extendido canónico.
+3. Carga multipart directa a almacenamiento de objetos con URLs prefirmadas.
+4. Reproductor HLS y visor PDF accesible con reporte de progreso por heartbeat.
+5. Pruebas E2E de los nueve flujos críticos y auditoría automática de accesibilidad.

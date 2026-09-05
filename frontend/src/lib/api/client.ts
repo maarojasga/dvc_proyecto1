@@ -1,5 +1,6 @@
 import { env } from "@/lib/config/env";
 import { ApiError } from "@/lib/api/errors";
+import { CABECERA_CSRF, tokenCsrf } from "@/lib/api/csrf";
 import type { OpcionesPeticion, ProblemDetails } from "@/types";
 
 /**
@@ -34,6 +35,13 @@ export async function peticion<T>(
   }
   if (idempotencyKey) cabeceras.set("Idempotency-Key", idempotencyKey);
   if (etag) cabeceras.set("If-Match", etag);
+
+  // La API exige el token anti-CSRF en todo metodo que cambie estado.
+  const metodo = (init.method ?? "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(metodo) && !cabeceras.has(CABECERA_CSRF)) {
+    const csrf = tokenCsrf();
+    if (csrf) cabeceras.set(CABECERA_CSRF, csrf);
+  }
 
   const respuesta = await fetch(construirUrl(ruta, query), {
     ...init,

@@ -11,7 +11,11 @@ export const endpoints = {
     logout: "/auth/logout",
     sesionActual: "/auth/sesion",
     verificarCorreo: "/auth/verificar-correo",
+    reenviarVerificacion: "/auth/reenviar-verificacion",
     recuperarClave: "/auth/recuperar-clave",
+    confirmarRecuperacion: "/auth/recuperar-clave/confirmar",
+    sesiones: "/auth/sesiones",
+    sesion: (sesionId: string) => `/auth/sesiones/${sesionId}`,
   },
   catalogo: {
     listar: "/catalogo/cursos",

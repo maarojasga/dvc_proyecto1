@@ -63,6 +63,13 @@ services:
       REDIS_ADDR: redis:6379
       S3_ENDPOINT: minio:9000
       S3_BUCKET: ${S3_BUCKET:-mooc}
+      # Base publica del frontend: con ella se arman los enlaces de
+      # verificacion de correo y de recuperacion de clave.
+      FRONTEND_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+      SMTP_ADDR: mailpit:1025
+      SMTP_FROM: ${SMTP_FROM:-no-responder@mooc.local}
+      # Sin TLS en local, la cookie de sesion no puede exigir Secure.
+      COOKIE_SECURE: "false"
     # Puerto fijo en el host: impide `--scale api=N` hasta que exista el
     # reverse proxy. Ver "Pendientes" en el README.
     ports:
@@ -72,6 +79,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     restart: unless-stopped
 
   worker:

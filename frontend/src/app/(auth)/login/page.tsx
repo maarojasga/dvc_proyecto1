@@ -1,19 +1,20 @@
+import Link from "next/link";
 import { PageHeader } from "@/components/ui/page-header";
-import { EstadoPendiente } from "@/components/ui/estado-pendiente";
+import { FormularioLogin } from "@/components/auth/formulario-login";
 
 export const metadata = { title: "Iniciar sesion" };
 
 export default function PaginaLogin() {
   return (
     <div className="space-y-6">
-      <PageHeader
-        titulo="Iniciar sesion"
-        descripcion="Acceso con correo y contraseña; la sesion se emite y revoca desde la API."
-      />
-      <EstadoPendiente
-        detalle="Formulario de credenciales, proteccion CSRF, limite de intentos y manejo de sesion revocable."
-        criterio="Identidad, autorizacion y seguridad"
-      />
+      <PageHeader titulo="Iniciar sesion" />
+      <FormularioLogin />
+      <p className="text-sm text-texto-suave">
+        ¿No tienes cuenta?{" "}
+        <Link href="/registro" className="underline">
+          Crear una
+        </Link>
+      </p>
     </div>
   );
 }

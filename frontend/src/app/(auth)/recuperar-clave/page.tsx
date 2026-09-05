@@ -1,19 +1,25 @@
 import { PageHeader } from "@/components/ui/page-header";
-import { EstadoPendiente } from "@/components/ui/estado-pendiente";
+import { FormularioRecuperacion } from "@/components/auth/formulario-recuperacion";
 
-export const metadata = { title: "Recuperar contraseña" };
+export const metadata = { title: "Recuperar clave" };
 
-export default function PaginaRecuperarClave() {
+export default async function PaginaRecuperarClave({
+  searchParams,
+}: {
+  searchParams: Promise<{ token?: string }>;
+}) {
+  const { token } = await searchParams;
   return (
     <div className="space-y-6">
       <PageHeader
-        titulo="Recuperar contraseña"
-        descripcion="Solicitud y restablecimiento de la contraseña con token de un solo uso."
+        titulo="Recuperar clave"
+        descripcion={
+          token
+            ? "Elige una clave nueva para tu cuenta."
+            : "Te enviaremos un enlace para restablecerla."
+        }
       />
-      <EstadoPendiente
-        detalle="Solicitud del enlace, canje del token y revocacion de las sesiones activas."
-        criterio="Identidad, autorizacion y seguridad"
-      />
+      <FormularioRecuperacion token={token} />
     </div>
   );
 }

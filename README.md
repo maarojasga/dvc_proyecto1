@@ -14,10 +14,15 @@ Administradores, profesores y estudiantes; jerarquía Curso → Módulo → Unid
 Recurso; multimedia con procesamiento asíncrono a HLS; quizzes calificados en
 servidor; progreso validado e insignias digitales verificables.
 
-Este repositorio contiene **la base del proyecto**, sin funcionalidad todavía:
-la estructura de carpetas, los puntos de entrada de API y workers, y el
-frontend con sus rutas como marcadores navegables. Cada pieza declara qué debe
-implementarse y a qué criterio de evaluación aporta.
+## Estado
+
+Implementado el primer punto del alcance mínimo (§5.1.1): **registro público de
+estudiantes con verificación de correo, sesiones revocables y recuperación de
+clave; los profesores solo se crean por administración**. Está completo de
+punta a punta: migraciones, dominio, API, frontend y pruebas.
+
+El resto de las pantallas y módulos siguen siendo marcadores navegables que
+declaran qué debe implementarse y a qué criterio de evaluación aportan.
 
 ## Estructura del repositorio
 
@@ -75,17 +80,41 @@ otros proyectos.
 docker compose up -d --scale worker=3
 ```
 
-## Verificación de la base
+## Verificación
 
 ```bash
-cd backend  && go vet ./... && go build ./...
-cd frontend && npm ci && npm run lint && npm run typecheck && npm run build
+cd backend
+go vet ./... && go build ./...
+TEST_DATABASE_URL="postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable" \
+TEST_REDIS_ADDR=localhost:6379 go test ./...
+
+cd ../frontend
+npm ci && npm run lint && npm run typecheck && npm run build
 ```
+
+Sin `TEST_DATABASE_URL` y `TEST_REDIS_ADDR`, las pruebas de integración se
+omiten en lugar de fallar y solo corren las unitarias.
+
+### Recorrido manual del flujo de identidad
+
+Con el compose levantado, los enlaces de verificación y recuperación llegan a
+Mailpit (http://localhost:8025). La API nunca devuelve esos tokens en la
+respuesta HTTP: hacerlo permitiría activar cuentas ajenas.
+
+1. Crear una cuenta en http://localhost:3000/registro
+2. Abrir el enlace del correo en Mailpit para activarla
+3. Entrar en http://localhost:3000/login
+4. Revisar y revocar sesiones en http://localhost:3000/cuenta/sesiones
 
 ## Pendientes para las siguientes iteraciones
 
-- Esquema de base de datos y migraciones SQL.
-- Implementación funcional de cada dominio y los endpoints de la API.
+- Los puntos 2 a 10 del alcance mínimo (§5.1): administración de usuarios,
+  autoría y publicación, editor de bloques, carga multimedia, procesamiento
+  asíncrono, visores, quizzes, progreso e insignias, y catálogo.
+- Workers: hoy el proceso arranca y espera; falta registrar los consumidores
+  asynq con reintentos, backoff y dead-letter queue.
+- OpenTelemetry: hoy hay logs estructurados y correlación por `X-Request-Id`,
+  faltan métricas y trazas.
 - Reverse proxy (nginx/traefik) para poder escalar la API a varias instancias:
   hoy publica el puerto 8080 fijo en el host, lo que impide `--scale api=N`.
 - Pipeline de CI: build, lint, análisis de seguridad, migraciones y pruebas.

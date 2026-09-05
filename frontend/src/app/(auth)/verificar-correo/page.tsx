@@ -1,19 +1,21 @@
 import { PageHeader } from "@/components/ui/page-header";
-import { EstadoPendiente } from "@/components/ui/estado-pendiente";
+import { FormularioVerificacion } from "@/components/auth/formulario-verificacion";
 
 export const metadata = { title: "Verificar correo" };
 
-export default function PaginaVerificarCorreo() {
+export default async function PaginaVerificarCorreo({
+  searchParams,
+}: {
+  searchParams: Promise<{ token?: string }>;
+}) {
+  const { token } = await searchParams;
   return (
     <div className="space-y-6">
       <PageHeader
         titulo="Verificar correo"
-        descripcion="Confirmacion del correo mediante el enlace enviado tras el registro."
+        descripcion="La cuenta se activa al abrir el enlace que enviamos por correo."
       />
-      <EstadoPendiente
-        detalle="Canje del token de verificacion y activacion de la cuenta."
-        criterio="Identidad, autorizacion y seguridad"
-      />
+      <FormularioVerificacion token={token} />
     </div>
   );
 }

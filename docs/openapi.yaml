@@ -1,16 +1,116 @@
 openapi: 3.1.0
 info:
   title: Plataforma MOOC API
-  version: 0.1.0
+  version: 0.2.0
   description: >
     API REST de la plataforma web de cursos masivos abiertos en línea.
-    Prefijo de versión: /api/v1. Errores uniformes, cursores, ETag e
-    Idempotency-Key según las restricciones técnicas del proyecto.
+    Prefijo de versión: /api/v1. Errores uniformes (RFC 9457), cursores,
+    ETag e Idempotency-Key según las restricciones técnicas del proyecto.
+
+
+    Estado: implementado el alcance 5.1.1 (registro público de estudiantes con
+    verificación de correo, sesiones revocables y recuperación de clave). El
+    resto de los módulos se documentará a medida que se implementen.
 servers:
   - url: /api/v1
+
+tags:
+  - name: Salud
+  - name: Identidad
+
+components:
+  securitySchemes:
+    cookieSesion:
+      type: apiKey
+      in: cookie
+      name: mooc_sesion
+      description: >
+        Cookie de sesión httpOnly, SameSite=Lax y Secure fuera de desarrollo.
+        Las operaciones que cambian estado exigen además repetir el valor de la
+        cookie `mooc_csrf` en la cabecera `X-CSRF-Token`.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, maxLength: 200 }
+      description: >
+        Hace repetible la operación durante 24 horas: reintentar con la misma
+        clave devuelve la respuesta guardada sin volver a ejecutar nada. La
+        repetición se marca con la cabecera `Idempotency-Replayed: true`.
+    CSRF:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: { type: string }
+      description: Valor de la cookie `mooc_csrf`.
+
+  schemas:
+    ProblemDetails:
+      type: object
+      description: Error uniforme según RFC 9457.
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        errors:
+          type: object
+          description: Errores por campo en las validaciones.
+          additionalProperties:
+            type: array
+            items: { type: string }
+
+    Usuario:
+      type: object
+      required: [id, correo, nombre, estado, roles]
+      properties:
+        id: { type: string, format: uuid }
+        correo: { type: string, format: email }
+        nombre: { type: string }
+        estado:
+          type: string
+          enum: [pendiente, activo, suspendido]
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [administrador, profesor, estudiante]
+
+    Sesion:
+      type: object
+      required: [id, creadaEn, ultimoUsoEn, expiraEn, actual]
+      properties:
+        id: { type: string, format: uuid }
+        creadaEn: { type: string, format: date-time }
+        ultimoUsoEn: { type: string, format: date-time }
+        expiraEn: { type: string, format: date-time }
+        ip: { type: string }
+        userAgent: { type: string }
+        actual:
+          type: boolean
+          description: Indica si es la sesión que hace la petición.
+
+    Mensaje:
+      type: object
+      required: [mensaje]
+      properties:
+        mensaje: { type: string }
+
+  responses:
+    Problema:
+      description: Error uniforme.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetails' }
+
 paths:
   /health:
     get:
+      tags: [Salud]
       summary: Estado del servicio
       operationId: getHealth
       responses:
@@ -21,6 +121,269 @@ paths:
               schema:
                 type: object
                 properties:
-                  status:
-                    type: string
-                    example: ok
+                  status: { type: string, example: ok }
+
+  /auth/registro:
+    post:
+      tags: [Identidad]
+      summary: Registro público de estudiantes
+      description: >
+        Crea una cuenta de estudiante en estado `pendiente` y envía el enlace de
+        verificación. Los profesores y administradores no se crean por aquí:
+        solo por administración.
+
+
+        Responde 202 aunque el correo ya esté registrado, para que el formulario
+        no sirva para averiguar qué cuentas existen.
+      operationId: registrarEstudiante
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [correo, nombre, clave]
+              properties:
+                correo: { type: string, format: email, maxLength: 254 }
+                nombre: { type: string, maxLength: 120 }
+                clave: { type: string, minLength: 10, maxLength: 128 }
+      responses:
+        "202":
+          description: Solicitud aceptada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mensaje' }
+        "422": { $ref: '#/components/responses/Problema' }
+        "429": { $ref: '#/components/responses/Problema' }
+
+  /auth/verificar-correo:
+    post:
+      tags: [Identidad]
+      summary: Verificar el correo y activar la cuenta
+      description: El token es de un solo uso y vence a las 24 horas.
+      operationId: verificarCorreo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Cuenta verificada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mensaje' }
+        "400": { $ref: '#/components/responses/Problema' }
+
+  /auth/reenviar-verificacion:
+    post:
+      tags: [Identidad]
+      summary: Reenviar el enlace de verificación
+      description: Responde 202 exista o no la cuenta.
+      operationId: reenviarVerificacion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [correo]
+              properties:
+                correo: { type: string, format: email }
+      responses:
+        "202":
+          description: Solicitud aceptada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mensaje' }
+        "429": { $ref: '#/components/responses/Problema' }
+
+  /auth/login:
+    post:
+      tags: [Identidad]
+      summary: Iniciar sesión
+      description: >
+        Emite las cookies `mooc_sesion` (httpOnly) y `mooc_csrf`. El token de
+        sesión nunca viaja en el cuerpo de la respuesta.
+      operationId: iniciarSesion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [correo, clave]
+              properties:
+                correo: { type: string, format: email }
+                clave: { type: string }
+      responses:
+        "200":
+          description: Sesión iniciada.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  usuario: { $ref: '#/components/schemas/Usuario' }
+                  expiraEn: { type: string, format: date-time }
+        "401":
+          description: >
+            Credenciales incorrectas. La respuesta es idéntica para un correo
+            inexistente y para una clave errada.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        "403":
+          description: La cuenta está pendiente de verificación o suspendida.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        "429": { $ref: '#/components/responses/Problema' }
+
+  /auth/logout:
+    post:
+      tags: [Identidad]
+      summary: Cerrar la sesión en curso
+      operationId: cerrarSesion
+      security: [{ cookieSesion: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        "204": { description: Sesión revocada. }
+        "401": { $ref: '#/components/responses/Problema' }
+        "403": { $ref: '#/components/responses/Problema' }
+
+  /auth/sesion:
+    get:
+      tags: [Identidad]
+      summary: Usuario de la sesión en curso
+      operationId: sesionActual
+      security: [{ cookieSesion: [] }]
+      responses:
+        "200":
+          description: Sesión vigente.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  usuario: { $ref: '#/components/schemas/Usuario' }
+                  sesionId: { type: string, format: uuid }
+        "401": { $ref: '#/components/responses/Problema' }
+
+  /auth/sesiones:
+    get:
+      tags: [Identidad]
+      summary: Listar las sesiones activas
+      operationId: listarSesiones
+      security: [{ cookieSesion: [] }]
+      responses:
+        "200":
+          description: Colección paginada por cursor.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Sesion' }
+                  siguienteCursor:
+                    type: [string, "null"]
+        "401": { $ref: '#/components/responses/Problema' }
+    delete:
+      tags: [Identidad]
+      summary: Revocar todas las sesiones salvo la actual
+      operationId: revocarOtrasSesiones
+      security: [{ cookieSesion: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        "200":
+          description: Sesiones revocadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revocadas: { type: integer }
+        "401": { $ref: '#/components/responses/Problema' }
+
+  /auth/sesiones/{sesionId}:
+    delete:
+      tags: [Identidad]
+      summary: Revocar una sesión concreta
+      description: >
+        Solo sesiones propias. Una sesión ajena responde 404, igual que una
+        inexistente, para no confirmar identificadores de otras cuentas.
+      operationId: revocarSesion
+      security: [{ cookieSesion: [] }]
+      parameters:
+        - name: sesionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CSRF'
+      responses:
+        "204": { description: Sesión revocada. }
+        "401": { $ref: '#/components/responses/Problema' }
+        "404": { $ref: '#/components/responses/Problema' }
+
+  /auth/recuperar-clave:
+    post:
+      tags: [Identidad]
+      summary: Solicitar el enlace de recuperación
+      description: Responde 202 exista o no la cuenta. El enlace vence en una hora.
+      operationId: solicitarRecuperacion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [correo]
+              properties:
+                correo: { type: string, format: email }
+      responses:
+        "202":
+          description: Solicitud aceptada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mensaje' }
+        "429": { $ref: '#/components/responses/Problema' }
+
+  /auth/recuperar-clave/confirmar:
+    post:
+      tags: [Identidad]
+      summary: Fijar la nueva clave
+      description: >
+        Consume el token, cambia la clave y revoca todas las sesiones del
+        usuario, porque quien recupera puede estar expulsando a un intruso.
+      operationId: confirmarRecuperacion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, clave]
+              properties:
+                token: { type: string }
+                clave: { type: string, minLength: 10, maxLength: 128 }
+      responses:
+        "200":
+          description: Clave actualizada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Mensaje' }
+        "400": { $ref: '#/components/responses/Problema' }
+        "422": { $ref: '#/components/responses/Problema' }

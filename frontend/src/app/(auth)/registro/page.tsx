@@ -1,5 +1,5 @@
 import { PageHeader } from "@/components/ui/page-header";
-import { EstadoPendiente } from "@/components/ui/estado-pendiente";
+import { FormularioRegistro } from "@/components/auth/formulario-registro";
 
 export const metadata = { title: "Crear cuenta" };
 
@@ -8,12 +8,9 @@ export default function PaginaRegistro() {
     <div className="space-y-6">
       <PageHeader
         titulo="Crear cuenta"
-        descripcion="Registro publico de estudiantes. Los profesores se crean unicamente por administracion."
+        descripcion="El registro publico crea cuentas de estudiante. Los profesores se dan de alta por administracion."
       />
-      <EstadoPendiente
-        detalle="Alta de estudiante con validaciones y envio del correo de verificacion."
-        criterio="Identidad, autorizacion y seguridad"
-      />
+      <FormularioRegistro />
     </div>
   );
 }
