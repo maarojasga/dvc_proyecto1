@@ -1,0 +1,3 @@
+Activos estaticos servidos tal cual desde la raiz del sitio.
+Next.js no crea este directorio y el Dockerfile lo copia a la imagen final,
+por lo que debe existir en el repositorio aunque este vacio.
