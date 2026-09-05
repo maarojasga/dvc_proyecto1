@@ -1,0 +1,2 @@
+# Los datos se versionan con DVC, no con git.
+/*.csv

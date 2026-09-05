@@ -1,0 +1,26 @@
+# Entorno local del frontend.
+#
+# El backend en Go, PostgreSQL, Redis, MinIO y Mailpit viven en el compose del
+# repositorio de backend; aqui se declara la red externa compartida para que el
+# frontend alcance a la API por nombre de servicio.
+services:
+  web:
+    build:
+      context: .
+      args:
+        NEXT_PUBLIC_API_BASE_URL: /api/v1
+        NEXT_PUBLIC_SITE_URL: http://localhost:3000
+    environment:
+      # Nombre del servicio de la API dentro de la red compartida.
+      API_INTERNAL_URL: http://api:8080/api/v1
+    ports:
+      - "3000:3000"
+    networks:
+      - mooc
+    restart: unless-stopped
+
+networks:
+  mooc:
+    # Creada por el compose del backend: docker network create mooc
+    external: true
+    name: mooc
