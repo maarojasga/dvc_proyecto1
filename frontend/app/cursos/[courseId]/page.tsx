@@ -42,19 +42,27 @@ export default function CourseDetailPage() {
 
   return (
     <div>
-      <h1>{version.Title}</h1>
-      <p>{version.Summary}</p>
-      <div className="row">
-        <span className="badge">{version.Category}</span>
-        <span className="badge">{version.Level}</span>
-        <span className="badge">{version.Language}</span>
-      </div>
-
-      {user?.role === "student" && (
-        <div className="card">
-          <button onClick={handleEnroll}>Inscribirme</button>
-          {enrollMessage && <p role="status">{enrollMessage}</p>}
+      <header className="page-header">
+        <div>
+          <h1>{version.Title}</h1>
+          <p>{version.Summary}</p>
+          <div className="row" style={{ marginTop: "0.5rem" }}>
+            {version.Category && <span className="badge">{version.Category}</span>}
+            {version.Level && <span className="badge">{version.Level}</span>}
+            <span className="badge">{version.Language}</span>
+          </div>
         </div>
+        {user?.role === "student" && (
+          <div>
+            <button onClick={handleEnroll}>Inscribirme</button>
+          </div>
+        )}
+      </header>
+
+      {enrollMessage && (
+        <p className="success-banner" role="status">
+          {enrollMessage}
+        </p>
       )}
 
       <h2>Contenido</h2>

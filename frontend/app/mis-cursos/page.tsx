@@ -44,28 +44,47 @@ export default function MyCoursesPage() {
 
   if (!authLoading && !user) {
     return (
-      <p>
-        Debes <Link href="/login">iniciar sesión</Link> para ver tus cursos.
-      </p>
+      <div className="estado-vacio columna-estrecha">
+        <p>
+          Debes <Link href="/login">iniciar sesión</Link> para ver tus cursos.
+        </p>
+      </div>
     );
   }
 
   return (
     <div>
-      <h1>Mis cursos</h1>
+      <header className="page-header">
+        <div>
+          <h1>Mis cursos</h1>
+          <p>Los cursos a los que estás inscrito y su estado.</p>
+        </div>
+      </header>
+
       {error && (
         <p className="error-banner" role="alert">
           {error}
         </p>
       )}
-      {items === null && <p>Cargando…</p>}
-      {items?.length === 0 && <p>Aún no te has inscrito a ningún curso. Explora el catálogo.</p>}
-      <ul className="stack" style={{ listStyle: "none", padding: 0 }}>
+      {items === null && <p role="status">Cargando…</p>}
+
+      {items?.length === 0 && (
+        <div className="estado-vacio">
+          <p>Aún no te has inscrito a ningún curso.</p>
+          <p>
+            <Link href="/">Explora el catálogo</Link> para empezar.
+          </p>
+        </div>
+      )}
+
+      <ul className="lista-filas">
         {items?.map((e) => (
-          <li key={e.ID} className="card row">
-            <div style={{ flex: 1 }}>
+          <li key={e.ID} className="card fila">
+            <div className="fila__datos">
               <Link href={`/cursos/${e.CourseID}`}>Ver curso</Link>
-              <p className="badge">{statusLabel[e.Status]}</p>
+              <p>
+                <span className="badge">{statusLabel[e.Status]}</span>
+              </p>
             </div>
             {e.Status === "active" && (
               <button className="secondary" onClick={() => handleWithdraw(e.CourseID)}>

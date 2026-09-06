@@ -32,8 +32,9 @@ export default function LoginPage() {
   }
 
   return (
-    <div style={{ maxWidth: 420 }}>
+    <div className="columna-estrecha">
       <h1>Iniciar sesión</h1>
+      <p className="muted">Entra con el correo y la clave de tu cuenta.</p>
       {error && (
         <p className="error-banner" role="alert">
           {error}

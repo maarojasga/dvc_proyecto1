@@ -40,10 +40,18 @@ export default function TeacherDashboardPage() {
 
   return (
     <div>
-      <h1>Autoría de cursos</h1>
+      <header className="page-header">
+        <div>
+          <h1>Autoría de cursos</h1>
+          <p>Crea borradores y publica versiones. Una versión publicada es inmutable.</p>
+        </div>
+      </header>
 
       <section className="card">
-        <h2>Nuevo curso</h2>
+        <header>
+          <h2>Nuevo curso</h2>
+          <p>El curso nace como borrador editable.</p>
+        </header>
         {error && (
           <p className="error-banner" role="alert">
             {error}
@@ -72,7 +80,7 @@ export default function TeacherDashboardPage() {
       </section>
 
       <h2>Mis cursos</h2>
-      {courses === null && <p>Cargando…</p>}
+      {courses === null && <p role="status">Cargando…</p>}
       {courses?.length === 0 && <p>Aún no has creado ningún curso.</p>}
       <ul className="stack" style={{ listStyle: "none", padding: 0 }}>
         {courses?.map((c) => (

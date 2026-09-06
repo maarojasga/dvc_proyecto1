@@ -10,6 +10,13 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/redisclient"
 )
 
+const (
+	// CabeceraIdempotencia la envía el cliente para hacer repetible una
+	// operación; CabeceraIdempotenciaRepetida marca la respuesta guardada.
+	CabeceraIdempotencia         = "Idempotency-Key"
+	CabeceraIdempotenciaRepetida = "Idempotency-Replayed"
+)
+
 // maxIdempotencyKeyLen acota la cabecera para que no se use como vía de
 // almacenamiento arbitrario en Redis.
 const maxIdempotencyKeyLen = 200
@@ -49,7 +56,7 @@ func Idempotency(rdb *redis.Client) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			key := r.Header.Get("Idempotency-Key")
+			key := r.Header.Get(CabeceraIdempotencia)
 			if key == "" || safeMethod(r.Method) {
 				next.ServeHTTP(w, r)
 				return
@@ -73,7 +80,7 @@ func Idempotency(rdb *redis.Client) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			case previous != nil:
-				w.Header().Set("Idempotency-Replayed", "true")
+				w.Header().Set(CabeceraIdempotenciaRepetida, "true")
 				if previous.Tipo != "" {
 					w.Header().Set("Content-Type", previous.Tipo)
 				}
