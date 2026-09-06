@@ -16,7 +16,7 @@ servidor; progreso validado e insignias digitales verificables.
 
 ## Estado
 
-Implementado el primer punto del alcance mínimo (§5.1.1): **registro público de
+Implementado el primer punto del alcance mínimo: **registro público de
 estudiantes con verificación de correo, sesiones revocables y recuperación de
 clave; los profesores solo se crean por administración**. Está completo de
 punta a punta: migraciones, dominio, API, frontend y pruebas.
@@ -28,16 +28,16 @@ declaran qué debe implementarse y a qué criterio de evaluación aportan.
 
 ```
 .
-├── backend/            Monolito modular en Go (API) + workers independientes
-│   ├── cmd/api/            Punto de entrada de la API REST (/api/v1)
-│   ├── cmd/worker/         Punto de entrada de los workers asíncronos
-│   ├── internal/config/    Lectura de variables de entorno
-│   ├── internal/domain/    Entidades y reglas de negocio (sin framework ni cloud)
-│   ├── internal/platform/  Adaptadores: HTTP, PostgreSQL, Redis, S3/MinIO, cola
-│   └── migrations/         Migraciones SQL de PostgreSQL
-├── frontend/           Next.js 16 (App Router), React 19, TypeScript, Tailwind 4
-├── docs/               Especificación OpenAPI y notas de arquitectura
-└── docker-compose.yml  Postgres, Redis, MinIO, Mailpit, API, workers y frontend
+|-- backend/            Monolito modular en Go (API) + workers independientes
+|   |-- cmd/api/            Punto de entrada de la API REST (/api/v1)
+|   |-- cmd/worker/         Punto de entrada de los workers asíncronos
+|   |-- internal/config/    Lectura de variables de entorno
+|   |-- internal/domain/    Entidades y reglas de negocio (sin framework ni cloud)
+|   |-- internal/platform/  Adaptadores: HTTP, PostgreSQL, Redis, S3/MinIO, cola
+|   `-- migrations/         Migraciones SQL de PostgreSQL
+|-- frontend/           Next.js 16 (App Router), React 19, TypeScript, Tailwind 4
+|-- docs/               Especificación OpenAPI y notas de arquitectura
+`-- docker-compose.yml  Postgres, Redis, MinIO, Mailpit, API, workers y frontend
 ```
 
 Cada subproyecto tiene su propio README con el detalle.
@@ -108,7 +108,7 @@ respuesta HTTP: hacerlo permitiría activar cuentas ajenas.
 
 ## Pendientes para las siguientes iteraciones
 
-- Los puntos 2 a 10 del alcance mínimo (§5.1): administración de usuarios,
+- Los puntos 2 a 10 del alcance mínimo: administración de usuarios,
   autoría y publicación, editor de bloques, carga multimedia, procesamiento
   asíncrono, visores, quizzes, progreso e insignias, y catálogo.
 - Workers: hoy el proceso arranca y espera; falta registrar los consumidores

@@ -1,5 +1,5 @@
-// Package postgres implementa los repositorios de dominio sobre PostgreSQL,
-// fuente de verdad transaccional del sistema.
+// Package postgres provee el pool de conexión a PostgreSQL (fuente de
+// verdad transaccional) y un runner de migraciones embebidas.
 package postgres
 
 import (
@@ -10,25 +10,25 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Abrir crea el pool de conexiones y comprueba que la base responde.
-func Abrir(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	cfg, err := pgxpool.ParseConfig(url)
+// Connect abre un pool de conexiones y verifica conectividad con un ping.
+func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: url invalida: %w", err)
+		return nil, fmt.Errorf("postgres: config inválida: %w", err)
 	}
-	// La API y los workers son sin estado y escalan horizontalmente: cada
-	// instancia mantiene un pool acotado para no agotar max_connections.
-	cfg.MaxConns = 10
+	cfg.MaxConns = 20
 	cfg.MaxConnLifetime = time.Hour
-	cfg.MaxConnIdleTime = 5 * time.Minute
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: no se pudo crear el pool: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
+
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("postgres: sin conexion: %w", err)
+		return nil, fmt.Errorf("postgres: ping falló: %w", err)
 	}
 	return pool, nil
 }

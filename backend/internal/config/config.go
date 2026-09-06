@@ -4,63 +4,57 @@ package config
 import (
 	"os"
 	"strconv"
-	"strings"
+	"time"
 )
 
-// Config agrupa los parametros de configuracion compartidos por la API y los workers.
-//
-// Todo se lee del entorno: ningun secreto vive en el repositorio ni en la
-// imagen, que es lo que exige la gestion externa de secretos.
+// Config agrupa los parámetros de configuración compartidos por la API y los workers.
 type Config struct {
 	Env         string
 	HTTPPort    string
 	DatabaseURL string
 	RedisAddr   string
+
 	S3Endpoint  string
 	S3Bucket    string
+	S3AccessKey string
+	S3SecretKey string
+	S3UseSSL    bool
+	S3PublicURL string // base URL pública/CDN para servir objetos (opcional)
 
-	// URLFrontend es el origen publico del frontend. Se usa para construir
-	// los enlaces de los correos transaccionales.
-	URLFrontend string
+	SMTPHost string
+	SMTPPort string
+	SMTPFrom string
 
-	SMTPDireccion string
-	SMTPRemitente string
-	SMTPUsuario   string
-	SMTPClave     string
-
-	// CookieSegura marca las cookies de sesion como Secure. Se desactiva en
-	// desarrollo, donde no hay TLS.
-	CookieSegura bool
+	SessionTTL       time.Duration
+	PublicBaseURL    string // URL pública del frontend, para links de verificación/reseteo
+	CookieSecure     bool
 }
 
-// Load construye la configuracion a partir de variables de entorno, con valores
+// Load construye la configuración a partir de variables de entorno, con valores
 // por defecto razonables para desarrollo local.
 func Load() Config {
-	env := getEnv("APP_ENV", "development")
 	return Config{
-		Env:         env,
+		Env:         getEnv("APP_ENV", "development"),
 		HTTPPort:    getEnv("API_PORT", "8080"),
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable"),
 		RedisAddr:   getEnv("REDIS_ADDR", "localhost:6379"),
+
 		S3Endpoint:  getEnv("S3_ENDPOINT", "localhost:9000"),
 		S3Bucket:    getEnv("S3_BUCKET", "mooc"),
+		S3AccessKey: getEnv("S3_ACCESS_KEY", "minioadmin"),
+		S3SecretKey: getEnv("S3_SECRET_KEY", "minioadmin"),
+		S3UseSSL:    getBool("S3_USE_SSL", false),
+		S3PublicURL: getEnv("S3_PUBLIC_URL", ""),
 
-		URLFrontend: getEnv("FRONTEND_URL", "http://localhost:3000"),
+		SMTPHost: getEnv("SMTP_HOST", "localhost"),
+		SMTPPort: getEnv("SMTP_PORT", "1025"),
+		SMTPFrom: getEnv("SMTP_FROM", "no-reply@mooc.local"),
 
-		// SMTP_ADDR admite la cadena vacia como valor deliberado: significa
-		// "sin servidor de correo", y hace que la API registre los enlaces en
-		// el log en lugar de enviarlos.
-		SMTPDireccion: getEnvOpcional("SMTP_ADDR", "localhost:1025"),
-		SMTPRemitente: getEnv("SMTP_FROM", "no-responder@mooc.local"),
-		SMTPUsuario:   getEnv("SMTP_USER", ""),
-		SMTPClave:     getEnv("SMTP_PASSWORD", ""),
-
-		CookieSegura: getBool("COOKIE_SECURE", env != "development"),
+		SessionTTL:    getDuration("SESSION_TTL", 30*24*time.Hour),
+		PublicBaseURL: getEnv("PUBLIC_BASE_URL", "http://localhost:3000"),
+		CookieSecure:  getBool("COOKIE_SECURE", false),
 	}
 }
-
-// EsDesarrollo informa si la instancia corre en el entorno local.
-func (c Config) EsDesarrollo() bool { return c.Env == "development" }
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -69,17 +63,8 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
-// getEnvOpcional distingue una variable ausente de una fijada a la cadena
-// vacia: si esta declarada, se respeta su valor aunque sea vacio.
-func getEnvOpcional(key, fallback string) string {
-	if v, hay := os.LookupEnv(key); hay {
-		return v
-	}
-	return fallback
-}
-
 func getBool(key string, fallback bool) bool {
-	v := strings.TrimSpace(os.Getenv(key))
+	v := os.Getenv(key)
 	if v == "" {
 		return fallback
 	}
@@ -88,4 +73,16 @@ func getBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func getDuration(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
 }

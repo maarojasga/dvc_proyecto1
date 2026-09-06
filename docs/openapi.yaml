@@ -4,115 +4,22 @@ info:
   version: 0.2.0
   description: >
     API REST de la plataforma web de cursos masivos abiertos en línea.
-    Prefijo de versión: /api/v1. Errores uniformes (RFC 9457), cursores,
-    ETag e Idempotency-Key según las restricciones técnicas del proyecto.
-
-
-    Estado: implementado el alcance 5.1.1 (registro público de estudiantes con
-    verificación de correo, sesiones revocables y recuperación de clave). El
-    resto de los módulos se documentará a medida que se implementen.
+    Prefijo de versión: /api/v1. Errores uniformes ({"error":{"code","message","details"}}),
+    sesiones por cookie httpOnly o cabecera Authorization: Bearer <token>.
+    Este documento cubre los endpoints implementados en la iteración actual
+    (identidad, administración, autoría de cursos, catálogo e inscripciones).
+    Pendientes: quizzes, progreso e insignias (ver README).
 servers:
   - url: /api/v1
-
-tags:
-  - name: Salud
-  - name: Identidad
-
-components:
-  securitySchemes:
-    cookieSesion:
-      type: apiKey
-      in: cookie
-      name: mooc_sesion
-      description: >
-        Cookie de sesión httpOnly, SameSite=Lax y Secure fuera de desarrollo.
-        Las operaciones que cambian estado exigen además repetir el valor de la
-        cookie `mooc_csrf` en la cabecera `X-CSRF-Token`.
-
-  parameters:
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      schema: { type: string, maxLength: 200 }
-      description: >
-        Hace repetible la operación durante 24 horas: reintentar con la misma
-        clave devuelve la respuesta guardada sin volver a ejecutar nada. La
-        repetición se marca con la cabecera `Idempotency-Replayed: true`.
-    CSRF:
-      name: X-CSRF-Token
-      in: header
-      required: true
-      schema: { type: string }
-      description: Valor de la cookie `mooc_csrf`.
-
-  schemas:
-    ProblemDetails:
-      type: object
-      description: Error uniforme según RFC 9457.
-      required: [type, title, status]
-      properties:
-        type: { type: string, format: uri }
-        title: { type: string }
-        status: { type: integer }
-        detail: { type: string }
-        instance: { type: string }
-        errors:
-          type: object
-          description: Errores por campo en las validaciones.
-          additionalProperties:
-            type: array
-            items: { type: string }
-
-    Usuario:
-      type: object
-      required: [id, correo, nombre, estado, roles]
-      properties:
-        id: { type: string, format: uuid }
-        correo: { type: string, format: email }
-        nombre: { type: string }
-        estado:
-          type: string
-          enum: [pendiente, activo, suspendido]
-        roles:
-          type: array
-          items:
-            type: string
-            enum: [administrador, profesor, estudiante]
-
-    Sesion:
-      type: object
-      required: [id, creadaEn, ultimoUsoEn, expiraEn, actual]
-      properties:
-        id: { type: string, format: uuid }
-        creadaEn: { type: string, format: date-time }
-        ultimoUsoEn: { type: string, format: date-time }
-        expiraEn: { type: string, format: date-time }
-        ip: { type: string }
-        userAgent: { type: string }
-        actual:
-          type: boolean
-          description: Indica si es la sesión que hace la petición.
-
-    Mensaje:
-      type: object
-      required: [mensaje]
-      properties:
-        mensaje: { type: string }
-
-  responses:
-    Problema:
-      description: Error uniforme.
-      content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/ProblemDetails' }
-
+security:
+  - sessionCookie: []
+  - bearerAuth: []
 paths:
   /health:
     get:
-      tags: [Salud]
       summary: Estado del servicio
       operationId: getHealth
+      security: []
       responses:
         "200":
           description: El servicio responde correctamente.
@@ -123,47 +30,32 @@ paths:
                 properties:
                   status: { type: string, example: ok }
 
-  /auth/registro:
+  /auth/register:
     post:
-      tags: [Identidad]
       summary: Registro público de estudiantes
-      description: >
-        Crea una cuenta de estudiante en estado `pendiente` y envía el enlace de
-        verificación. Los profesores y administradores no se crean por aquí:
-        solo por administración.
-
-
-        Responde 202 aunque el correo ya esté registrado, para que el formulario
-        no sirva para averiguar qué cuentas existen.
-      operationId: registrarEstudiante
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+      operationId: registerStudent
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [correo, nombre, clave]
+              required: [email, password, full_name]
               properties:
-                correo: { type: string, format: email, maxLength: 254 }
-                nombre: { type: string, maxLength: 120 }
-                clave: { type: string, minLength: 10, maxLength: 128 }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 10 }
+                full_name: { type: string }
       responses:
-        "202":
-          description: Solicitud aceptada.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Mensaje' }
-        "422": { $ref: '#/components/responses/Problema' }
-        "429": { $ref: '#/components/responses/Problema' }
+        "201": { description: Usuario creado, pendiente de verificación de correo. }
+        "409": { description: El correo ya está registrado. }
+        "422": { description: Contraseña débil. }
 
-  /auth/verificar-correo:
+  /auth/verify-email:
     post:
-      tags: [Identidad]
-      summary: Verificar el correo y activar la cuenta
-      description: El token es de un solo uso y vence a las 24 horas.
-      operationId: verificarCorreo
+      summary: Confirma el correo mediante el token enviado por correo
+      operationId: verifyEmail
+      security: []
       requestBody:
         required: true
         content:
@@ -171,219 +63,462 @@ paths:
             schema:
               type: object
               required: [token]
-              properties:
-                token: { type: string }
+              properties: { token: { type: string } }
       responses:
-        "200":
-          description: Cuenta verificada.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Mensaje' }
-        "400": { $ref: '#/components/responses/Problema' }
-
-  /auth/reenviar-verificacion:
-    post:
-      tags: [Identidad]
-      summary: Reenviar el enlace de verificación
-      description: Responde 202 exista o no la cuenta.
-      operationId: reenviarVerificacion
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [correo]
-              properties:
-                correo: { type: string, format: email }
-      responses:
-        "202":
-          description: Solicitud aceptada.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Mensaje' }
-        "429": { $ref: '#/components/responses/Problema' }
+        "200": { description: Correo verificado; la cuenta queda activa. }
+        "400": { description: Token inválido o expirado. }
 
   /auth/login:
     post:
-      tags: [Identidad]
-      summary: Iniciar sesión
-      description: >
-        Emite las cookies `mooc_sesion` (httpOnly) y `mooc_csrf`. El token de
-        sesión nunca viaja en el cuerpo de la respuesta.
-      operationId: iniciarSesion
+      summary: Inicio de sesión
+      operationId: login
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [correo, clave]
+              required: [email, password]
               properties:
-                correo: { type: string, format: email }
-                clave: { type: string }
+                email: { type: string }
+                password: { type: string }
       responses:
         "200":
-          description: Sesión iniciada.
-          headers:
-            Set-Cookie:
-              schema: { type: string }
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  usuario: { $ref: '#/components/schemas/Usuario' }
-                  expiraEn: { type: string, format: date-time }
-        "401":
-          description: >
-            Credenciales incorrectas. La respuesta es idéntica para un correo
-            inexistente y para una clave errada.
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/ProblemDetails' }
-        "403":
-          description: La cuenta está pendiente de verificación o suspendida.
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/ProblemDetails' }
-        "429": { $ref: '#/components/responses/Problema' }
+          description: Sesión creada (cookie httpOnly mooc_session + token en el cuerpo).
+        "401": { description: Credenciales inválidas o cuenta no activa. }
 
   /auth/logout:
     post:
-      tags: [Identidad]
-      summary: Cerrar la sesión en curso
-      operationId: cerrarSesion
-      security: [{ cookieSesion: [] }]
-      parameters:
-        - $ref: '#/components/parameters/CSRF'
+      summary: Revoca la sesión actual
+      operationId: logout
       responses:
-        "204": { description: Sesión revocada. }
-        "401": { $ref: '#/components/responses/Problema' }
-        "403": { $ref: '#/components/responses/Problema' }
+        "200": { description: Sesión revocada. }
 
-  /auth/sesion:
+  /auth/me:
     get:
-      tags: [Identidad]
-      summary: Usuario de la sesión en curso
-      operationId: sesionActual
-      security: [{ cookieSesion: [] }]
+      summary: Usuario autenticado actual
+      operationId: getMe
       responses:
-        "200":
-          description: Sesión vigente.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  usuario: { $ref: '#/components/schemas/Usuario' }
-                  sesionId: { type: string, format: uuid }
-        "401": { $ref: '#/components/responses/Problema' }
+        "200": { description: Datos del usuario. }
+        "401": { description: No autenticado. }
 
-  /auth/sesiones:
-    get:
-      tags: [Identidad]
-      summary: Listar las sesiones activas
-      operationId: listarSesiones
-      security: [{ cookieSesion: [] }]
-      responses:
-        "200":
-          description: Colección paginada por cursor.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items: { $ref: '#/components/schemas/Sesion' }
-                  siguienteCursor:
-                    type: [string, "null"]
-        "401": { $ref: '#/components/responses/Problema' }
-    delete:
-      tags: [Identidad]
-      summary: Revocar todas las sesiones salvo la actual
-      operationId: revocarOtrasSesiones
-      security: [{ cookieSesion: [] }]
-      parameters:
-        - $ref: '#/components/parameters/CSRF'
-      responses:
-        "200":
-          description: Sesiones revocadas.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  revocadas: { type: integer }
-        "401": { $ref: '#/components/responses/Problema' }
-
-  /auth/sesiones/{sesionId}:
-    delete:
-      tags: [Identidad]
-      summary: Revocar una sesión concreta
-      description: >
-        Solo sesiones propias. Una sesión ajena responde 404, igual que una
-        inexistente, para no confirmar identificadores de otras cuentas.
-      operationId: revocarSesion
-      security: [{ cookieSesion: [] }]
-      parameters:
-        - name: sesionId
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
-        - $ref: '#/components/parameters/CSRF'
-      responses:
-        "204": { description: Sesión revocada. }
-        "401": { $ref: '#/components/responses/Problema' }
-        "404": { $ref: '#/components/responses/Problema' }
-
-  /auth/recuperar-clave:
+  /auth/password/reset-request:
     post:
-      tags: [Identidad]
-      summary: Solicitar el enlace de recuperación
-      description: Responde 202 exista o no la cuenta. El enlace vence en una hora.
-      operationId: solicitarRecuperacion
+      summary: Solicita un enlace de recuperación de contraseña
+      operationId: requestPasswordReset
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [correo]
-              properties:
-                correo: { type: string, format: email }
+              required: [email]
+              properties: { email: { type: string } }
       responses:
-        "202":
-          description: Solicitud aceptada.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Mensaje' }
-        "429": { $ref: '#/components/responses/Problema' }
+        "202": { description: Si el correo existe, se envía un enlace (respuesta uniforme para evitar enumeración). }
 
-  /auth/recuperar-clave/confirmar:
+  /auth/password/reset-confirm:
     post:
-      tags: [Identidad]
-      summary: Fijar la nueva clave
-      description: >
-        Consume el token, cambia la clave y revoca todas las sesiones del
-        usuario, porque quien recupera puede estar expulsando a un intruso.
-      operationId: confirmarRecuperacion
+      summary: Confirma el restablecimiento de contraseña
+      operationId: confirmPasswordReset
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [token, clave]
+              required: [token, new_password]
               properties:
                 token: { type: string }
-                clave: { type: string, minLength: 10, maxLength: 128 }
+                new_password: { type: string, minLength: 10 }
       responses:
-        "200":
-          description: Clave actualizada.
+        "200": { description: Contraseña actualizada; sesiones previas revocadas. }
+        "400": { description: Token inválido o expirado. }
+
+  /admin/users:
+    get:
+      summary: Lista usuarios con filtros administrativos
+      operationId: listUsers
+      parameters:
+        - { name: role, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: Lista de usuarios. }
+        "403": { description: Requiere rol admin. }
+
+  /admin/users/{id}/role:
+    patch:
+      summary: Cambia el rol de un usuario
+      operationId: updateUserRole
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties: { role: { type: string, enum: [admin, teacher, student] } }
+      responses:
+        "200": { description: Rol actualizado. }
+        "409": { description: Operación rechazada por proteger al último administrador activo. }
+
+  /admin/users/{id}/status:
+    patch:
+      summary: Cambia el estado de un usuario (activar/suspender)
+      operationId: updateUserStatus
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties: { status: { type: string, enum: [pending_verification, active, suspended] } }
+      responses:
+        "200": { description: Estado actualizado; si se suspende, se revocan todas sus sesiones. }
+        "409": { description: Operación rechazada por proteger al último administrador activo. }
+
+  /admin/teachers:
+    post:
+      summary: Crea una cuenta de profesor (los profesores no se autorregistran)
+      operationId: createTeacher
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, full_name]
+              properties:
+                email: { type: string }
+                full_name: { type: string }
+      responses:
+        "201": { description: Profesor creado; se envía enlace para establecer contraseña. }
+
+  /courses:
+    post:
+      summary: Crea un curso nuevo con su primera versión en borrador
+      operationId: createCourseDraft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, title]
+              properties:
+                slug: { type: string }
+                title: { type: string }
+      responses:
+        "201": { description: Curso y borrador creados. }
+
+  /courses/mine:
+    get:
+      summary: Lista los cursos del profesor autenticado
+      operationId: listMyCourses
+      responses:
+        "200": { description: Lista de cursos. }
+
+  /courses/{courseId}/update-draft:
+    post:
+      summary: Crea la siguiente versión en borrador copiando la estructura publicada
+      operationId: createUpdateDraft
+      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "201": { description: Nuevo borrador creado, con los mismos identificadores estables. }
+
+  /courses/{courseId}/unpublish:
+    post:
+      summary: Despublica temporalmente la versión vigente para permitir su edición
+      operationId: unpublishCourse
+      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Versión despublicada. }
+
+  /courses/versions/{versionId}:
+    get:
+      summary: Obtiene una versión (propia) con su árbol completo, para previsualización
+      operationId: previewVersion
+      parameters: [{ name: versionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Versión con módulos, unidades y recursos. }
+        "403": { description: No eres el profesor dueño ni administrador. }
+    patch:
+      summary: Actualiza metadatos de una versión en borrador
+      operationId: updateVersionMetadata
+      parameters: [{ name: versionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VersionMetadataInput" }
+      responses:
+        "200": { description: Metadatos actualizados. }
+        "409": { description: La versión no es un borrador. }
+
+  /courses/versions/{versionId}/publish:
+    post:
+      summary: Valida y publica una versión en borrador
+      operationId: publishVersion
+      parameters: [{ name: versionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Versión publicada; la anterior queda unpublished. }
+        "422":
+          description: Lista exhaustiva de motivos de rechazo (metadatos, estructura, recursos sin procesar).
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Mensaje' }
-        "400": { $ref: '#/components/responses/Problema' }
-        "422": { $ref: '#/components/responses/Problema' }
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /courses/versions/{versionId}/modules:
+    post:
+      summary: Agrega un módulo a una versión en borrador
+      operationId: addModule
+      parameters: [{ name: versionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionedTitle" }
+      responses:
+        "201": { description: Módulo creado. }
+
+  /courses/versions/{versionId}/modules/{moduleId}:
+    patch:
+      summary: Actualiza un módulo
+      operationId: updateModule
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: moduleId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionedTitle" }
+      responses:
+        "200": { description: Módulo actualizado. }
+    delete:
+      summary: Elimina un módulo y su contenido
+      operationId: deleteModule
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: moduleId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Módulo eliminado. }
+
+  /courses/versions/{versionId}/modules/{moduleId}/units:
+    post:
+      summary: Agrega una unidad a un módulo
+      operationId: addUnit
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: moduleId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionedTitle" }
+      responses:
+        "201": { description: Unidad creada. }
+
+  /courses/versions/{versionId}/units/{unitId}:
+    patch:
+      summary: Actualiza una unidad
+      operationId: updateUnit
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: unitId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionedTitle" }
+      responses:
+        "200": { description: Unidad actualizada. }
+    delete:
+      summary: Elimina una unidad y sus recursos
+      operationId: deleteUnit
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: unitId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Unidad eliminada. }
+
+  /courses/versions/{versionId}/units/{unitId}/resources:
+    post:
+      summary: Agrega un recurso a una unidad
+      operationId: addResource
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: unitId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceInput" }
+      responses:
+        "201": { description: Recurso creado. }
+
+  /courses/versions/{versionId}/resources/{resourceId}:
+    patch:
+      summary: Actualiza un recurso
+      operationId: updateResource
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceInput" }
+      responses:
+        "200": { description: Recurso actualizado. }
+    delete:
+      summary: Elimina un recurso
+      operationId: deleteResource
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Recurso eliminado. }
+
+  /courses/versions/{versionId}/resources/{resourceId}/upload-url:
+    post:
+      summary: Emite una URL prefirmada de subida directa al almacenamiento de objetos
+      operationId: requestResourceUploadURL
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { mime_type: { type: string } }
+      responses:
+        "200": { description: URL prefirmada (PUT) y clave de objeto. }
+
+  /courses/versions/{versionId}/resources/{resourceId}/confirm-upload:
+    post:
+      summary: Confirma una subida y encola el procesamiento asíncrono si aplica (video/audio)
+      operationId: confirmResourceUpload
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Recurso listo de inmediato (no requiere procesamiento). }
+        "202": { description: Trabajo de transcodificación encolado (video/audio). }
+
+  /catalog:
+    get:
+      summary: Catálogo de cursos publicados, con búsqueda y filtros
+      operationId: listCatalog
+      security: []
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: level, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: Lista de versiones publicadas. }
+
+  /catalog/{courseId}:
+    get:
+      summary: Detalle de la versión publicada vigente de un curso
+      operationId: getPublishedCourse
+      security: []
+      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Versión publicada con su árbol de contenido. }
+        "404": { description: El curso no tiene versión publicada. }
+
+  /enrollments:
+    post:
+      summary: Inscribe al estudiante autenticado en un curso publicado
+      operationId: enroll
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [course_id]
+              properties: { course_id: { type: string, format: uuid } }
+      responses:
+        "201": { description: Inscripción creada (o reactivada si era una reinscripción). }
+        "409": { description: Ya inscrito o el curso no tiene versión publicada. }
+
+  /enrollments/mine:
+    get:
+      summary: Lista las inscripciones del estudiante autenticado
+      operationId: listMyEnrollments
+      responses:
+        "200": { description: Lista de inscripciones. }
+
+  /enrollments/{courseId}/withdraw:
+    post:
+      summary: Retira al estudiante de un curso, conservando su progreso
+      operationId: withdraw
+      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Inscripción retirada. }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: mooc_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: array, items: { type: string } }
+    PositionedTitle:
+      type: object
+      required: [title, position]
+      properties:
+        title: { type: string }
+        position: { type: integer }
+    VersionMetadataInput:
+      type: object
+      properties:
+        title: { type: string }
+        summary: { type: string }
+        description_md: { type: string }
+        category: { type: string }
+        level: { type: string }
+        language: { type: string }
+        approval_min_score: { type: number }
+        approval_required_resources_pct: { type: number }
+    ResourceInput:
+      type: object
+      required: [type, title, position]
+      properties:
+        type:
+          type: string
+          enum: [text, image, video, audio, pdf, presentation, file, iframe, link, quiz]
+        title: { type: string }
+        position: { type: integer }
+        visible: { type: boolean }
+        required: { type: boolean }
+        downloadable: { type: boolean }
+        text_content_md: { type: string }
+        external_url: { type: string }
