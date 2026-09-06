@@ -27,7 +27,7 @@ function VerifyEmailInner() {
   }, [token]);
 
   return (
-    <div style={{ maxWidth: 480 }}>
+    <div className="columna-estrecha">
       <h1>Verificación de correo</h1>
       {status === "pending" && <p>Verificando…</p>}
       {status === "ok" && (

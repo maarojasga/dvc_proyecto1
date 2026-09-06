@@ -166,7 +166,160 @@ code {
 .container {
   max-width: 68rem;
   margin: 0 auto;
-  padding: 2rem 1.5rem;
+  padding: 2rem 1.5rem 4rem;
+}
+
+/* Columna estrecha y centrada para lo que se lee o se rellena de una sola
+   vez: formularios de identidad y avisos de una frase. A ancho completo, un
+   formulario de tres campos queda perdido en la página. */
+.columna-estrecha {
+  max-width: 26rem;
+  margin: 0 auto;
+}
+
+/* Encabezado de página: título, descripción opcional y acciones a la derecha.
+   Da a todas las secciones el mismo punto de partida. */
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  margin-bottom: 1.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.page-header h1 {
+  margin: 0;
+}
+
+.page-header p {
+  margin: 0.35rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  max-width: 48ch;
+}
+
+/* Cabecera dentro de una tarjeta, para separar el qué del cómo. */
+.card > header {
+  margin-bottom: 1rem;
+}
+
+.card > header h2,
+.card > header h3 {
+  margin: 0;
+}
+
+.card > header p {
+  margin: 0.25rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
+/* Rejilla de tarjetas: se acomoda al ancho disponible sin puntos de corte
+   arbitrarios. */
+.rejilla {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.rejilla > li {
+  margin: 0;
+}
+
+/* El título de una tarjeta ya se lee como destino por su posición y tamaño:
+   subrayarlo en azul añade ruido sin añadir información. */
+.rejilla .card h2 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.rejilla .card h2 a:hover,
+.rejilla .card h2 a:focus-visible {
+  text-decoration: underline;
+  text-decoration-color: var(--color-primary);
+}
+
+.rejilla .card {
+  height: 100%;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Estado vacío: un bloque centrado que explica qué falta, en lugar de una
+   frase suelta que se lee como un error. */
+.estado-vacio {
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius);
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.estado-vacio p {
+  margin: 0 auto 0.5rem;
+  max-width: 40ch;
+}
+
+.estado-vacio :last-child {
+  margin-bottom: 0;
+}
+
+/* Barra de búsqueda: el campo no debe estirarse hasta el borde de la página.
+   Un campo de mil píxeles no invita a escribir tres palabras. */
+.barra-busqueda {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 1.5rem;
+}
+
+.barra-busqueda .form-field {
+  margin-bottom: 0;
+  flex: 1 1 18rem;
+  max-width: 28rem;
+}
+
+/* En tarjetas anchas, los campos tampoco deberían estirarse sin límite. */
+.card .form-field input,
+.card .form-field select {
+  max-width: 26rem;
+}
+
+/* Lista de filas con acción a la derecha (sesiones, inscripciones). */
+.lista-filas {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin: 0;
+}
+
+.fila__datos {
+  min-width: 0;
+  flex: 1 1 20rem;
+}
+
+.fila__datos > p {
+  margin: 0.15rem 0 0;
 }
 
 /* Cabecera */

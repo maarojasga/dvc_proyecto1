@@ -76,38 +76,41 @@ export default function SesionesPage() {
   const otras = sesiones.filter((s) => !s.current).length;
 
   return (
-    <div style={{ maxWidth: 640 }}>
-      <h1>Sesiones activas</h1>
-      <p>
-        Cada dispositivo con la sesión abierta. Revocar una la invalida de inmediato.
-      </p>
+    <div>
+      <header className="page-header">
+        <div>
+          <h1>Sesiones activas</h1>
+          <p>Cada dispositivo con la sesión abierta. Revocar una la invalida de inmediato.</p>
+        </div>
+        {otras > 0 && (
+          <button className="secondary" disabled={ocupado} onClick={revocarLasDemas}>
+            Cerrar las demás ({otras})
+          </button>
+        )}
+      </header>
 
       {error && <p className="error-banner" role="alert">{error}</p>}
 
-      <ul style={{ listStyle: "none", padding: 0 }}>
+      <ul className="lista-filas">
         {sesiones.map((s) => (
-          <li key={s.id} className="card">
-            <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div>
-                <strong>{s.current ? "Este dispositivo" : "Otro dispositivo"}</strong>
-                <p>Iniciada: {new Date(s.created_at).toLocaleString("es-CO")}</p>
-                <p>Vence: {new Date(s.expires_at).toLocaleString("es-CO")}</p>
-                {s.ip_address && <p>IP: {s.ip_address}</p>}
-                {s.user_agent && <p style={{ wordBreak: "break-all" }}>{s.user_agent}</p>}
-              </div>
-              <button className="secondary" disabled={ocupado} onClick={() => revocar(s)}>
-                {s.current ? "Cerrar esta sesión" : "Revocar"}
-              </button>
+          <li key={s.id} className="card fila">
+            <div className="fila__datos">
+              <strong>{s.current ? "Este dispositivo" : "Otro dispositivo"}</strong>
+              <p className="muted">Iniciada: {new Date(s.created_at).toLocaleString("es-CO")}</p>
+              <p className="muted">Vence: {new Date(s.expires_at).toLocaleString("es-CO")}</p>
+              {s.ip_address && <p className="muted">IP: {s.ip_address}</p>}
+              {s.user_agent && (
+                <p className="muted" style={{ wordBreak: "break-all" }}>
+                  {s.user_agent}
+                </p>
+              )}
             </div>
+            <button className="secondary" disabled={ocupado} onClick={() => revocar(s)}>
+              {s.current ? "Cerrar esta sesión" : "Revocar"}
+            </button>
           </li>
         ))}
       </ul>
-
-      {otras > 0 && (
-        <button className="secondary" disabled={ocupado} onClick={revocarLasDemas}>
-          Cerrar las demás sesiones ({otras})
-        </button>
-      )}
     </div>
   );
 }

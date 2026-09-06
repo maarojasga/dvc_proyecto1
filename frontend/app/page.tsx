@@ -26,16 +26,22 @@ export default function HomePage() {
 
   return (
     <div>
-      <h1>Catálogo de cursos</h1>
+      <header className="page-header">
+        <div>
+          <h1>Catálogo de cursos</h1>
+          <p>Cursos publicados y abiertos a inscripción.</p>
+        </div>
+      </header>
+
       <form
         role="search"
-        className="row"
+        className="barra-busqueda"
         onSubmit={(e) => {
           e.preventDefault();
           load(q);
         }}
       >
-        <div className="form-field" style={{ marginBottom: 0, flex: 1 }}>
+        <div className="form-field">
           <label htmlFor="q">Buscar cursos</label>
           <input id="q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Título o resumen" />
         </div>
@@ -48,21 +54,29 @@ export default function HomePage() {
         </p>
       )}
 
-      {courses === null && !error && <p>Cargando cursos…</p>}
-      {courses?.length === 0 && <p>No hay cursos publicados que coincidan con la búsqueda.</p>}
+      {courses === null && !error && <p role="status">Cargando cursos…</p>}
 
-      <ul className="stack" style={{ listStyle: "none", padding: 0 }}>
+      {courses?.length === 0 && (
+        <div className="estado-vacio">
+          <p>No hay cursos publicados que coincidan con la búsqueda.</p>
+          <p>Prueba con otro término o vuelve más tarde.</p>
+        </div>
+      )}
+
+      <ul className="rejilla">
         {courses?.map((v) => (
-          <li key={v.ID} className="card">
-            <h2 style={{ marginTop: 0 }}>
-              <Link href={`/cursos/${v.CourseID}`}>{v.Title}</Link>
-            </h2>
-            <p>{v.Summary}</p>
-            <p className="row">
-              {v.Category && <span className="badge">{v.Category}</span>}
-              {v.Level && <span className="badge">{v.Level}</span>}
-              <span className="badge">{v.Language}</span>
-            </p>
+          <li key={v.ID}>
+            <article className="card">
+              <h2>
+                <Link href={`/cursos/${v.CourseID}`}>{v.Title}</Link>
+              </h2>
+              <p style={{ flex: 1 }}>{v.Summary}</p>
+              <p className="row">
+                {v.Category && <span className="badge">{v.Category}</span>}
+                {v.Level && <span className="badge">{v.Level}</span>}
+                <span className="badge">{v.Language}</span>
+              </p>
+            </article>
           </li>
         ))}
       </ul>

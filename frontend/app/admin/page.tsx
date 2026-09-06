@@ -49,7 +49,13 @@ export default function AdminDashboardPage() {
 
   return (
     <div>
-      <h1>Administración</h1>
+      <header className="page-header">
+        <div>
+          <h1>Administración</h1>
+          <p>Cuentas, roles, sesiones y la bitácora inmutable de la plataforma.</p>
+        </div>
+      </header>
+
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -60,16 +66,19 @@ export default function AdminDashboardPage() {
       <InviteTeacherForm onInvited={() => { setNotice("Profesor creado. Se le envió un correo para establecer su contraseña."); load(q); }} />
 
       <section className="card">
-        <h2 style={{ marginTop: 0 }}>Usuarios</h2>
+        <header>
+          <h2>Usuarios</h2>
+          <p>Cambia el rol o el estado de una cuenta, y revisa sus sesiones abiertas.</p>
+        </header>
         <form
           role="search"
-          className="row"
+          className="barra-busqueda"
           onSubmit={(e) => {
             e.preventDefault();
             load(q);
           }}
         >
-          <div className="form-field" style={{ marginBottom: 0, flex: 1 }}>
+          <div className="form-field">
             <label htmlFor="q">Buscar por nombre o correo</label>
             <input id="q" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
@@ -212,20 +221,20 @@ function Auditoria({ onError }: { onError: (m: string) => void }) {
 
   return (
     <section className="card">
-      <h2 style={{ marginTop: 0 }}>Auditoría</h2>
-      <p className="muted">
-        Registro inmutable: la base rechaza modificarlo o borrarlo.
-      </p>
+      <header>
+        <h2>Auditoría</h2>
+        <p>Registro inmutable: la base rechaza modificarlo o borrarlo.</p>
+      </header>
 
       <form
         role="search"
-        className="row"
+        className="barra-busqueda"
         onSubmit={(e) => {
           e.preventDefault();
           void cargar(accion);
         }}
       >
-        <div className="form-field" style={{ marginBottom: 0, flex: 1 }}>
+        <div className="form-field">
           <label htmlFor="audit-action">Filtrar por acción</label>
           <input
             id="audit-action"
@@ -238,7 +247,11 @@ function Auditoria({ onError }: { onError: (m: string) => void }) {
       </form>
 
       {entradas === null && <p>Cargando…</p>}
-      {entradas && entradas.length === 0 && <p className="muted">Sin entradas.</p>}
+      {entradas && entradas.length === 0 && (
+        <div className="estado-vacio">
+          <p>Sin entradas para ese filtro.</p>
+        </div>
+      )}
       {entradas && entradas.length > 0 && (
         <div style={{ overflowX: "auto" }}>
           <table>
@@ -293,7 +306,10 @@ function InviteTeacherForm({ onInvited }: { onInvited: () => void }) {
 
   return (
     <form onSubmit={handleSubmit} className="card stack">
-      <h2 style={{ marginTop: 0 }}>Invitar profesor</h2>
+      <header>
+        <h2>Invitar profesor</h2>
+        <p>Los profesores no se autorregistran: reciben un enlace para fijar su clave.</p>
+      </header>
       {error && <p className="error-banner">{error}</p>}
       <div className="row">
         <div className="form-field" style={{ flex: 1 }}>
