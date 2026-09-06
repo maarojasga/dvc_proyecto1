@@ -713,24 +713,31 @@ paths:
         "200": { description: Versión publicada con su árbol de contenido. }
         "404": { description: El curso no tiene versión publicada. }
 
-  /resources/{resourceId}/playback:
+  /resources/{resourceId}/content:
     get:
       tags: [Multimedia]
-      summary: URL de reproducción HLS de un recurso
+      summary: Contenido de un recurso para el estudiante
       description: >
-        Devuelve la lista maestra HLS del recurso. La autorización ocurre antes
-        de resolver ninguna URL: el recurso debe pertenecer a la versión
-        vigente del curso, ser visible, y quien lo pide debe estar inscrito
-        (el profesor dueño y la administración pasan sin inscripción). Un
-        recurso oculto, de un borrador o de una versión retirada responde como
-        inexistente.
+        Devuelve lo necesario para presentar el recurso: la lista maestra HLS
+        en video y audio, la URL del objeto en PDF, imagen y descargables, el
+        Markdown en los recursos de texto, y la URL externa en enlaces e
+        iframes. En video y audio incluye además la última posición reportada,
+        para reanudar donde se dejó.
+
+
+        La autorización ocurre antes de resolver ninguna URL: el recurso debe
+        pertenecer a la versión vigente del curso, ser visible, y quien lo pide
+        debe estar inscrito (el profesor dueño y la administración pasan sin
+        inscripción). Un recurso oculto, de un borrador o de una versión
+        retirada responde como inexistente.
 
 
         La URL procede del CDN cuando `S3_PUBLIC_URL` está configurado, y de
         una firma temporal en caso contrario. El reproductor pide los segmentos
-        con rutas relativas al manifiesto, así que su autorización la resuelve
-        el CDN.
-      operationId: resourcePlayback
+        HLS con rutas relativas al manifiesto, así que su autorización la
+        resuelve el CDN, que además debe permitir el origen del frontend por
+        CORS para que hls.js pueda leerlos.
+      operationId: resourceContent
       security: [{ sessionCookie: [] }]
       parameters:
         - name: resourceId
@@ -739,20 +746,10 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "200":
-          description: URL de reproducción.
+          description: Contenido del recurso.
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  url: { type: string, format: uri }
-                  type: { type: string, example: application/vnd.apple.mpegurl }
-                  expires_in:
-                    type: integer
-                    description: Segundos de validez cuando la URL va firmada.
-                  cdn:
-                    type: boolean
-                    description: Indica si la entrega se hace por CDN, en cuyo caso la URL no caduca.
+              schema: { $ref: '#/components/schemas/ResourceContent' }
         "401": { $ref: '#/components/responses/Error' }
         "404":
           description: El recurso no existe, está oculto o quien lo pide no está inscrito.
@@ -761,6 +758,49 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         "409":
           description: El recurso existe pero su transcodificación no ha terminado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /resources/{resourceId}/position:
+    put:
+      tags: [Multimedia]
+      summary: Reportar la posición de reproducción
+      description: >
+        Registra el segundo donde reanudar un video o un audio.
+
+
+        Es una comodidad reportada por el cliente y **no acredita avance**: el
+        progreso lo calcula el servidor a partir de heartbeats y eventos de
+        apertura, así que lo que llegue aquí no sostiene ninguna decisión
+        académica. Se guarda por inscripción y contra el `stable_id` del
+        recurso, de modo que sobrevive a la publicación de una versión nueva.
+      operationId: saveResourcePosition
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [position_seconds]
+              properties:
+                position_seconds:
+                  type: integer
+                  minimum: 0
+                  maximum: 86400
+      responses:
+        "204": { description: Posición registrada. }
+        "401": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+        "422":
+          description: Posición fuera de rango, o el recurso no se reproduce.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -866,6 +906,35 @@ components:
         metadata: { type: object, additionalProperties: true }
         ip_address: { type: string }
         created_at: { type: string, format: date-time }
+    ResourceContent:
+      type: object
+      required: [type, title, downloadable]
+      properties:
+        type:
+          type: string
+          enum: [text, image, video, audio, pdf, presentation, file, iframe, link, quiz]
+        title: { type: string }
+        downloadable: { type: boolean }
+        url:
+          type: string
+          format: uri
+          description: Lista maestra HLS en video y audio; el archivo en PDF, imagen y descargables.
+        cdn:
+          type: boolean
+          description: Indica si la URL viene de una base pública y por tanto no caduca.
+        expires_in:
+          type: integer
+          description: Segundos de validez cuando la URL va firmada.
+        markdown:
+          type: string
+          description: Contenido de los recursos de texto.
+        external_url:
+          type: string
+          format: uri
+          description: Destino de enlaces e iframes.
+        position_seconds:
+          type: integer
+          description: Segundo donde reanudar. Solo en video y audio.
     QueueInfo:
       type: object
       properties:

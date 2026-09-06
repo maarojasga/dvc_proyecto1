@@ -143,7 +143,7 @@ func nuevoEntorno(t *testing.T) *entorno {
 		Auth:         authSvc,
 		Admin:        admin.NewService(users),
 		Courses:      courses.NewService(cursos),
-		Enrollments:  enrollments.NewService(postgres.NewEnrollmentRepo(pool), cursos),
+		Enrollments:  enrollments.NewService(postgres.NewEnrollmentRepo(pool), cursos, postgres.NewProgressRepo(pool)),
 		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
 		Redis:        rdb,
 		CORSOrigin:   "http://localhost:3000",

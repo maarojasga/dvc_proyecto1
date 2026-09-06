@@ -71,7 +71,7 @@ func main() {
 	authSvc := auth.NewService(userRepo, m, cfg.PublicBaseURL, cfg.SessionTTL)
 	adminSvc := admin.NewService(userRepo)
 	coursesSvc := courses.NewService(courseRepo)
-	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo)
+	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, postgres.NewProgressRepo(pool))
 
 	if err := bootstrapAdmin(ctx, userRepo); err != nil {
 		log.Printf("api: no se pudo crear el administrador inicial: %v", err)

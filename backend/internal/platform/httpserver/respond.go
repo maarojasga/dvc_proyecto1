@@ -80,6 +80,8 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusNotFound, "not_enrolled", nil
 	case errors.Is(err, enrollments.ErrMediaNoLista):
 		return http.StatusConflict, "media_not_ready", nil
+	case errors.Is(err, enrollments.ErrPosicionInvalida):
+		return http.StatusUnprocessableEntity, "invalid_position", nil
 	case errors.Is(err, enrollment.ErrCourseNotPublished):
 		return http.StatusConflict, "course_not_published", nil
 	case errors.Is(err, ErrUnauthenticated):

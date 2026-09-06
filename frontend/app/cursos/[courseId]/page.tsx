@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Version, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -77,7 +78,12 @@ export default function CourseDetailPage() {
                   <ul>
                     {u.Resources?.filter((r) => r.Visible).map((r) => (
                       <li key={r.ID}>
-                        {r.Title} <span className="badge">{r.Type}</span>
+                        {/* Solo quien esté inscrito recibirá el contenido; la
+                            API lo comprueba en cada entrega. El enlace se
+                            muestra igual para que se vea qué trae el curso. */}
+                        <Link href={`/cursos/${courseId}/recursos/${r.ID}`}>{r.Title}</Link>{" "}
+                        <span className="badge">{r.Type}</span>
+                        {r.Required && <span className="badge">obligatorio</span>}
                       </li>
                     ))}
                   </ul>

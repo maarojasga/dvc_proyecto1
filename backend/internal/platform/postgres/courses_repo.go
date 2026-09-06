@@ -295,8 +295,14 @@ func (r *CourseRepo) GetResource(ctx context.Context, versionID, id uuid.UUID) (
 type RecursoPublicadoConMedia struct {
 	CourseID     uuid.UUID
 	TeacherID    uuid.UUID
+	StableID     uuid.UUID
 	Type         string
+	Title        string
 	Visible      bool
+	Downloadable bool
+	TextContent  string
+	ExternalURL  string
+	ObjectKey    string
 	AssetStatus  string
 	HLSMasterKey string
 }
@@ -310,7 +316,9 @@ type RecursoPublicadoConMedia struct {
 func (r *CourseRepo) GetRecursoPublicadoConMedia(ctx context.Context, resourceID uuid.UUID) (*RecursoPublicadoConMedia, error) {
 	var out RecursoPublicadoConMedia
 	err := r.pool.QueryRow(ctx, `
-		SELECT c.id, c.teacher_id, res.type, res.visible,
+		SELECT c.id, c.teacher_id, res.stable_id, res.type, res.title, res.visible,
+		       res.downloadable, coalesce(res.text_content_md, ''),
+		       coalesce(res.external_url, ''), coalesce(res.object_key, ''),
 		       coalesce(ma.status, ''), coalesce(ma.hls_master_key, '')
 		  FROM resources res
 		  JOIN units u   ON u.id = res.unit_id
@@ -319,7 +327,9 @@ func (r *CourseRepo) GetRecursoPublicadoConMedia(ctx context.Context, resourceID
 		  JOIN courses c ON c.id = v.course_id AND c.current_published_version_id = v.id
 		  LEFT JOIN media_assets ma ON ma.resource_id = res.id
 		 WHERE res.id = $1`, resourceID).
-		Scan(&out.CourseID, &out.TeacherID, &out.Type, &out.Visible, &out.AssetStatus, &out.HLSMasterKey)
+		Scan(&out.CourseID, &out.TeacherID, &out.StableID, &out.Type, &out.Title, &out.Visible,
+			&out.Downloadable, &out.TextContent, &out.ExternalURL, &out.ObjectKey,
+			&out.AssetStatus, &out.HLSMasterKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
