@@ -8,7 +8,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// EntregaDeObjetos es lo único que la reproducción necesita del
+// vigenciaEntrega es lo que dura una URL firmada de contenido. Corta a
+// propósito: se pide al abrir el recurso, no se guarda.
+const vigenciaEntrega = 15 * time.Minute
+
+// EntregaDeObjetos es lo único que la entrega de contenido necesita del
 // almacenamiento: resolver la URL de lectura de un objeto ya autorizado.
 //
 // Se declara aquí, estrecha, en lugar de depender del cliente completo: así
@@ -19,27 +23,44 @@ type EntregaDeObjetos interface {
 	SirveDesdeCDN() bool
 }
 
-// vigenciaReproduccion es lo que dura la URL entregada al reproductor. Corta
-// a propósito: el manifiesto se pide al empezar, no se guarda.
-const vigenciaReproduccion = 15 * time.Minute
-
 func (h *handlers) registerMedia(mux *http.ServeMux) {
-	mux.Handle("GET /api/v1/resources/{resourceId}/playback",
-		h.auth()(http.HandlerFunc(h.resourcePlayback)))
+	mux.Handle("GET /api/v1/resources/{resourceId}/content",
+		h.auth()(http.HandlerFunc(h.resourceContent)))
+	mux.Handle("PUT /api/v1/resources/{resourceId}/position",
+		h.auth()(http.HandlerFunc(h.saveResourcePosition)))
 }
 
-// resourcePlayback entrega la URL de la lista maestra HLS de un recurso.
+type contentResponse struct {
+	Type         string `json:"type"`
+	Title        string `json:"title"`
+	Downloadable bool   `json:"downloadable"`
+	// URL del objeto: la lista maestra HLS en video y audio, el archivo en
+	// PDF, imagen y descargables.
+	URL string `json:"url,omitempty"`
+	// CDN indica si la URL viene de una base pública y por tanto no caduca.
+	CDN bool `json:"cdn,omitempty"`
+	// ExpiresIn son los segundos de validez cuando la URL va firmada.
+	ExpiresIn int `json:"expires_in,omitempty"`
+	// Markdown es el contenido de los recursos de texto.
+	Markdown string `json:"markdown,omitempty"`
+	// ExternalURL es el destino de enlaces e iframes.
+	ExternalURL string `json:"external_url,omitempty"`
+	// PositionSeconds es dónde reanudar la reproducción.
+	PositionSeconds int `json:"position_seconds,omitempty"`
+}
+
+// resourceContent entrega lo necesario para presentar un recurso.
 //
-// La autorización ocurre antes de firmar nada: el recurso debe pertenecer a
-// la versión vigente del curso, ser visible y quien lo pide debe estar
-// inscrito (el profesor dueño y la administración pasan sin inscripción).
+// La autorización ocurre antes de resolver ninguna URL: el recurso debe
+// pertenecer a la versión vigente del curso, ser visible y quien lo pide debe
+// estar inscrito (el profesor dueño y la administración pasan sin
+// inscripción).
 //
-// La URL sale del CDN cuando S3_PUBLIC_URL está configurado, y de una firma
-// temporal en caso contrario. Nota de despliegue: el reproductor pide los
-// segmentos con rutas relativas al manifiesto, así que la autorización de
-// esos objetos la resuelve el CDN; sin CDN delante, el prefijo hls/ debe
-// servirse de forma que el reproductor pueda leerlo.
-func (h *handlers) resourcePlayback(w http.ResponseWriter, r *http.Request) {
+// La URL de los objetos sale del CDN cuando S3_PUBLIC_URL está configurado, y
+// de una firma temporal en caso contrario. Nota de despliegue: el reproductor
+// pide los segmentos HLS con rutas relativas al manifiesto, así que la
+// autorización de esos objetos la resuelve el CDN.
+func (h *handlers) resourceContent(w http.ResponseWriter, r *http.Request) {
 	resourceID, err := uuid.Parse(r.PathValue("resourceId"))
 	if err != nil {
 		writeError(w, ErrBadRequest)
@@ -47,21 +68,57 @@ func (h *handlers) resourcePlayback(w http.ResponseWriter, r *http.Request) {
 	}
 	actor, _ := UserFromContext(r.Context())
 
-	clave, err := h.deps.Enrollments.ClaveDeReproduccion(r.Context(), actor, resourceID)
+	contenido, err := h.deps.Enrollments.ContenidoDeRecurso(r.Context(), actor, resourceID)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	url, err := h.deps.Entrega.PresignedGetURL(r.Context(), clave, vigenciaReproduccion, "")
+	out := contentResponse{
+		Type: contenido.Tipo, Title: contenido.Titulo,
+		Downloadable: contenido.Descargable, Markdown: contenido.Markdown,
+		ExternalURL: contenido.URLExterna, PositionSeconds: contenido.PosicionSegundos,
+	}
+	if contenido.ClaveObjeto != "" {
+		url, err := h.deps.Entrega.PresignedGetURL(r.Context(), contenido.ClaveObjeto, vigenciaEntrega, "")
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		out.URL = url
+		out.CDN = h.deps.Entrega.SirveDesdeCDN()
+		if !out.CDN {
+			out.ExpiresIn = int(vigenciaEntrega.Seconds())
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type positionRequest struct {
+	PositionSeconds int `json:"position_seconds"`
+}
+
+// saveResourcePosition registra dónde reanudar la reproducción.
+//
+// Es una comodidad reportada por el cliente y no acredita avance: el progreso
+// lo calcula el servidor por su cuenta a partir de heartbeats y eventos de
+// apertura, así que lo que llegue aquí no puede sostener ninguna decisión
+// académica.
+func (h *handlers) saveResourcePosition(w http.ResponseWriter, r *http.Request) {
+	resourceID, err := uuid.Parse(r.PathValue("resourceId"))
 	if err != nil {
+		writeError(w, ErrBadRequest)
+		return
+	}
+	var req positionRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	actor, _ := UserFromContext(r.Context())
+
+	if err := h.deps.Enrollments.GuardarPosicion(r.Context(), actor, resourceID, req.PositionSeconds); err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"url":        url,
-		"type":       "application/vnd.apple.mpegurl",
-		"expires_in": int(vigenciaReproduccion.Seconds()),
-		"cdn":        h.deps.Entrega.SirveDesdeCDN(),
-	})
+	w.WriteHeader(http.StatusNoContent)
 }

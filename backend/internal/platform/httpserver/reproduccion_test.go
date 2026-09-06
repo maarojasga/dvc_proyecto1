@@ -77,7 +77,7 @@ func TestElEstudianteInscritoObtieneLaURLDelHLS(t *testing.T) {
 	recursoID, cursoID := env.cursoPublicadoConVideo("prof@example.com", "curso-video", "ready")
 	estudiante := env.inscribir("ana@example.com", cursoID)
 
-	res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil)
+	res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil)
 	if res.Estado != http.StatusOK {
 		t.Fatalf("%d %s", res.Estado, res.Crudo)
 	}
@@ -85,8 +85,8 @@ func TestElEstudianteInscritoObtieneLaURLDelHLS(t *testing.T) {
 	if url != "https://cdn.pruebas.local/hls/"+recursoID+"/master.m3u8" {
 		t.Errorf("URL inesperada: %q", url)
 	}
-	if tipo := res.campo(t, "type"); tipo != "application/vnd.apple.mpegurl" {
-		t.Errorf("el tipo debería ser el del manifiesto HLS, llegó %v", tipo)
+	if tipo := res.campo(t, "type"); tipo != "video" {
+		t.Errorf("el tipo debería ser el del recurso, llegó %v", tipo)
 	}
 	if res.campo(t, "cdn") != true {
 		t.Error("con base pública configurada, la entrega debería marcarse como de CDN")
@@ -100,10 +100,10 @@ func TestQuienNoEstaInscritoNoObtieneElHLS(t *testing.T) {
 	env.registrarYVerificar("intruso@example.com")
 	intruso := env.entrar("intruso@example.com", clavePrueba)
 
-	if res := intruso.hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil); res.Estado != http.StatusNotFound {
+	if res := intruso.hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil); res.Estado != http.StatusNotFound {
 		t.Errorf("sin inscripción no debería entregarse, llegó %d: %s", res.Estado, res.Crudo)
 	}
-	if res := env.cliente().hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil); res.Estado != http.StatusUnauthorized {
+	if res := env.cliente().hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil); res.Estado != http.StatusUnauthorized {
 		t.Errorf("sin sesión debería ser 401, llegó %d", res.Estado)
 	}
 }
@@ -113,13 +113,13 @@ func TestRetirarseCortaElAccesoAlContenido(t *testing.T) {
 	recursoID, cursoID := env.cursoPublicadoConVideo("prof@example.com", "curso-video", "ready")
 	estudiante := env.inscribir("ana@example.com", cursoID)
 
-	if res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil); res.Estado != http.StatusOK {
+	if res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil); res.Estado != http.StatusOK {
 		t.Fatalf("antes de retirarse debería funcionar: %d %s", res.Estado, res.Crudo)
 	}
 	if res := estudiante.hacer(http.MethodPost, "/enrollments/"+cursoID+"/withdraw", nil); res.Estado != http.StatusOK {
 		t.Fatalf("retiro: %d %s", res.Estado, res.Crudo)
 	}
-	if res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil); res.Estado != http.StatusNotFound {
+	if res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil); res.Estado != http.StatusNotFound {
 		t.Errorf("tras retirarse no debería entregarse, llegó %d: %s", res.Estado, res.Crudo)
 	}
 }
@@ -129,7 +129,7 @@ func TestElProfesorDuenoAccedeSinInscribirse(t *testing.T) {
 	recursoID, _ := env.cursoPublicadoConVideo("prof@example.com", "curso-video", "ready")
 	profesor := env.entrar("prof@example.com", clavePrueba)
 
-	if res := profesor.hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil); res.Estado != http.StatusOK {
+	if res := profesor.hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil); res.Estado != http.StatusOK {
 		t.Errorf("el profesor dueño debería poder revisar su propio material, llegó %d: %s", res.Estado, res.Crudo)
 	}
 }
@@ -139,7 +139,7 @@ func TestUnRecursoSinTranscodificarNoSeEntrega(t *testing.T) {
 	recursoID, cursoID := env.cursoPublicadoConVideo("prof@example.com", "curso-video", "processing")
 	estudiante := env.inscribir("ana@example.com", cursoID)
 
-	res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil)
+	res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil)
 	if res.Estado != http.StatusConflict {
 		t.Fatalf("%d %s", res.Estado, res.Crudo)
 	}
@@ -160,7 +160,7 @@ func TestUnRecursoOcultoNoSeEntregaAunqueEsteListo(t *testing.T) {
 
 	// Un recurso oculto responde como inexistente: confirmar que existe ya
 	// delataría contenido que el autor no ha querido mostrar.
-	if res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil); res.Estado != http.StatusNotFound {
+	if res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil); res.Estado != http.StatusNotFound {
 		t.Errorf("un recurso oculto no debería entregarse, llegó %d: %s", res.Estado, res.Crudo)
 	}
 }
@@ -176,7 +176,7 @@ func TestUnRecursoDeUnBorradorNoSeEntrega(t *testing.T) {
 	if res := profesor.hacer(http.MethodPost, "/courses/"+cursoID+"/unpublish", nil); res.Estado != http.StatusOK {
 		t.Fatalf("despublicar: %d %s", res.Estado, res.Crudo)
 	}
-	if res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/playback", nil); res.Estado != http.StatusNotFound {
+	if res := estudiante.hacer(http.MethodGet, "/resources/"+recursoID+"/content", nil); res.Estado != http.StatusNotFound {
 		t.Errorf("un recurso despublicado no debería entregarse, llegó %d: %s", res.Estado, res.Crudo)
 	}
 }

@@ -77,6 +77,18 @@ export interface Session {
   current: boolean;
 }
 
+export interface ResourceContent {
+  type: string;
+  title: string;
+  downloadable: boolean;
+  url?: string;
+  cdn?: boolean;
+  expires_in?: number;
+  markdown?: string;
+  external_url?: string;
+  position_seconds?: number;
+}
+
 export interface AuditEntry {
   id: string;
   actor_id?: string;
@@ -113,6 +125,13 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   logout: () => request<{ status: string }>("/api/v1/auth/logout", { method: "POST" }),
+  resourceContent: (resourceId: string) =>
+    request<ResourceContent>(`/api/v1/resources/${resourceId}/content`),
+  saveResourcePosition: (resourceId: string, position_seconds: number) =>
+    request<void>(`/api/v1/resources/${resourceId}/position`, {
+      method: "PUT",
+      body: JSON.stringify({ position_seconds }),
+    }),
   listAudit: (params: { action?: string; limit?: number } = {}) => {
     const q = new URLSearchParams();
     if (params.action) q.set("action", params.action);

@@ -4,10 +4,11 @@ Interfaz de la plataforma web de cursos masivos abiertos en línea. Contiene la
 estructura de rutas, el modelo de dominio en TypeScript, la capa de transporte
 hacia la API y el empaquetado en Docker.
 
-**Implementado**: el flujo de identidad (registro, verificación de correo,
-inicio y cierre de sesión, recuperación de clave y gestión de sesiones
-revocables). El resto de las pantallas siguen siendo marcadores navegables que
-declaran qué debe implementarse y a qué criterio de evaluación aportan.
+**Implementado**: identidad (registro, verificación de correo, inicio y cierre
+de sesión, recuperación de clave y gestión de sesiones revocables), catálogo e
+inscripción, autoría con previsualización, administración de cuentas y
+auditoría, y el consumo de contenido: reproductor HLS adaptativo que reanuda
+donde se dejó, visor PDF y lectura de recursos de texto.
 
 El README de la raíz describe el monorepo completo y cómo levantar todo el
 entorno con Docker Compose.
