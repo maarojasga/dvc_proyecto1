@@ -1,9 +1,15 @@
 # Migraciones
 
-Aquí vivirán las migraciones SQL de PostgreSQL (esquema de usuarios, cursos,
-módulos, unidades, recursos, inscripciones, quizzes, progreso e insignias).
+Migraciones SQL de PostgreSQL para usuarios, sesiones, auditoría, cursos,
+módulos, unidades, recursos, multimedia, inscripciones, progreso, quizzes e
+insignias.
 
-Herramienta sugerida: [golang-migrate](https://github.com/golang-migrate/migrate).
 Convención de nombres: `NNNN_descripcion.up.sql` / `NNNN_descripcion.down.sql`.
 
-El diseño del esquema se abordará en una siguiente iteración.
+Los archivos `.sql` de este directorio se embeben en el binario de la API
+mediante `//go:embed` (ver `embed.go`) y se aplican automáticamente al
+arrancar (`internal/platform/postgres.Migrate`), registrando cada migración
+aplicada en la tabla `schema_migrations`. No se requiere una herramienta de
+migración externa, pero el nombre de archivo es compatible con
+[golang-migrate](https://github.com/golang-migrate/migrate) si en el futuro
+se prefiere ejecutarlas fuera del binario.

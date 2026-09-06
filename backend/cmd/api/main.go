@@ -4,118 +4,136 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/admin"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/config"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
-	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/passwords"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/redisclient"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/security"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
+
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/migrations"
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(log)
-
-	if err := ejecutar(log); err != nil {
-		log.Error("la api termino con error", "error", err)
-		os.Exit(1)
-	}
-}
-
-func ejecutar(log *slog.Logger) error {
 	cfg := config.Load()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	// El arranque tiene su propio plazo: si la base o Redis no responden, es
-	// mejor fallar rapido y que el orquestador reintente.
-	ctxArranque, cancelar := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelar()
-
-	pool, err := postgres.Abrir(ctxArranque, cfg.DatabaseURL)
+	pool, err := postgres.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
-		return err
+		log.Fatalf("api: postgres: %v", err)
 	}
 	defer pool.Close()
 
-	if err := postgres.Migrar(ctxArranque, pool, log); err != nil {
-		return err
+	if err := postgres.Migrate(ctx, pool, migrations.FS); err != nil {
+		log.Fatalf("api: migraciones: %v", err)
 	}
 
-	redis, err := redisclient.Abrir(ctxArranque, cfg.RedisAddr)
+	rdb, err := redisclient.Connect(ctx, cfg.RedisAddr)
 	if err != nil {
-		return err
+		log.Fatalf("api: redis: %v", err)
 	}
-	defer func() { _ = redis.Close() }()
+	defer rdb.Close()
 
-	var notificador user.Notificador = mailer.Nuevo(mailer.Config{
-		Direccion:   cfg.SMTPDireccion,
-		Remitente:   cfg.SMTPRemitente,
-		Usuario:     cfg.SMTPUsuario,
-		Clave:       cfg.SMTPClave,
-		URLFrontend: cfg.URLFrontend,
-	}, log)
-	if cfg.SMTPDireccion == "" {
-		notificador = mailer.NuevoRegistro(log)
-	}
-
-	servicio, err := user.NuevoServicio(user.Dependencias{
-		Usuarios:  postgres.NuevoRepositorioUsuarios(pool),
-		Sesiones:  postgres.NuevoRepositorioSesiones(pool),
-		Tokens:    postgres.NuevoRepositorioTokens(pool),
-		Auditoria: postgres.NuevoAuditor(pool, log),
-		Claves:    passwords.Nuevo(passwords.ParametrosPorDefecto()),
-		Correos:   notificador,
-		Cache:     redisclient.NuevaCacheSesiones(redis, log),
+	storageClient, err := storage.New(ctx, storage.Config{
+		Endpoint: cfg.S3Endpoint, AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey,
+		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, PublicURL: cfg.S3PublicURL,
 	})
 	if err != nil {
-		return err
+		log.Fatalf("api: storage: %v", err)
 	}
 
-	api := httpserver.Nuevo(httpserver.Opciones{
-		Usuarios:     servicio,
-		Log:          log,
-		Limitador:    redisclient.NuevoLimitadorTasa(redis),
-		Idempotencia: redisclient.NuevoAlmacenIdempotencia(redis),
-		CookieSegura: cfg.CookieSegura,
+	m := mailer.New(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPFrom)
+	queueClient := queue.NewClient(cfg.RedisAddr)
+	defer queueClient.Close()
+
+	userRepo := postgres.NewUserRepo(pool)
+	courseRepo := postgres.NewCourseRepo(pool)
+	enrollmentRepo := postgres.NewEnrollmentRepo(pool)
+	mediaRepo := postgres.NewMediaRepo(pool)
+
+	authSvc := auth.NewService(userRepo, m, cfg.PublicBaseURL, cfg.SessionTTL)
+	adminSvc := admin.NewService(userRepo)
+	coursesSvc := courses.NewService(courseRepo)
+	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo)
+
+	if err := bootstrapAdmin(ctx, userRepo); err != nil {
+		log.Printf("api: no se pudo crear el administrador inicial: %v", err)
+	}
+
+	router := httpserver.NewRouter(httpserver.Deps{
+		Auth: authSvc, Admin: adminSvc, Courses: coursesSvc, Enrollments: enrollmentsSvc,
+		Media: mediaRepo, Storage: storageClient, Redis: rdb, Queue: queueClient,
+		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
 	})
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
-		Handler:           api.Handler(),
+		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       2 * time.Minute,
 	}
 
-	// Apagado ordenado: al recibir la senal se dejan de aceptar conexiones y
-	// se espera a que terminen las que estan en curso, para que reemplazar
-	// una instancia no corte peticiones a medias.
-	ctxSenal, detener := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer detener()
-
-	errores := make(chan error, 1)
 	go func() {
-		log.Info("api escuchando", "puerto", cfg.HTTPPort, "env", cfg.Env)
+		log.Printf("api escuchando en :%s (env=%s)", cfg.HTTPPort, cfg.Env)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errores <- err
+			log.Fatalf("api: %v", err)
 		}
 	}()
 
-	select {
-	case err := <-errores:
-		return err
-	case <-ctxSenal.Done():
-		log.Info("apagando la api")
-		ctxApagado, cancelar := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancelar()
-		return srv.Shutdown(ctxApagado)
+	<-ctx.Done()
+	log.Println("api: apagando...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("api: error durante el apagado: %v", err)
 	}
+}
+
+// bootstrapAdmin crea el primer administrador a partir de ADMIN_EMAIL /
+// ADMIN_PASSWORD si no existe ningún administrador aún. Solo aplica en el
+// primer arranque del entorno; en producción las variables deben retirarse
+// después de usarse.
+func bootstrapAdmin(ctx context.Context, users *postgres.UserRepo) error {
+	email := os.Getenv("ADMIN_EMAIL")
+	password := os.Getenv("ADMIN_PASSWORD")
+	if email == "" || password == "" {
+		return nil
+	}
+	if _, err := users.GetByEmail(ctx, email); err == nil {
+		return nil // ya existe
+	} else if !errors.Is(err, postgres.ErrNotFound) {
+		return err
+	}
+
+	hash, err := security.HashPassword(password)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	admin := &user.User{
+		ID: uuid.New(), Email: email, PasswordHash: hash, FullName: "Administrador",
+		Role: user.RoleAdmin, Status: user.StatusActive, EmailVerifiedAt: &now,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := users.Create(ctx, admin); err != nil {
+		return err
+	}
+	log.Printf("api: administrador inicial creado (%s)", email)
+	return nil
 }

@@ -1,306 +1,230 @@
 package httpserver
 
 import (
-	"bytes"
-	"crypto/subtle"
+	"context"
 	"errors"
-	"net"
+	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
-	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/redisclient"
 )
 
-// middleware envuelve un handler.
-type middleware func(http.Handler) http.Handler
+var (
+	ErrUnauthenticated = errors.New("httpserver: se requiere autenticación")
+	ErrForbidden       = errors.New("httpserver: no tienes permiso para esta operación")
+	ErrBadRequest      = errors.New("httpserver: solicitud inválida")
+)
 
-// encadenar aplica los middlewares en el orden en que se listan: el primero
-// es el mas externo.
-func encadenar(h http.Handler, ms ...middleware) http.Handler {
-	for i := len(ms) - 1; i >= 0; i-- {
-		h = ms[i](h)
-	}
-	return h
+type ctxKey int
+
+const (
+	ctxUser ctxKey = iota
+	ctxRequestID
+)
+
+// SessionCookieName es el nombre de la cookie httpOnly que transporta el
+// token de sesión opaco cuando el cliente es un navegador.
+const SessionCookieName = "mooc_session"
+
+func withUser(ctx context.Context, u *user.User) context.Context {
+	return context.WithValue(ctx, ctxUser, u)
 }
 
-// respuestaObservada captura el estado y el cuerpo para el log, la
-// idempotencia y las metricas.
-type respuestaObservada struct {
-	http.ResponseWriter
-	estado   int
-	bytes    int
-	capturar bool
-	cuerpo   bytes.Buffer
+// UserFromContext expone el usuario autenticado a los handlers.
+func UserFromContext(ctx context.Context) (*user.User, bool) {
+	u, ok := ctx.Value(ctxUser).(*user.User)
+	return u, ok
 }
 
-func (w *respuestaObservada) WriteHeader(estado int) {
-	if w.estado == 0 {
-		w.estado = estado
-		w.ResponseWriter.WriteHeader(estado)
+func requestIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(ctxRequestID).(string); ok {
+		return v
 	}
+	return ""
 }
 
-func (w *respuestaObservada) Write(p []byte) (int, error) {
-	if w.estado == 0 {
-		w.WriteHeader(http.StatusOK)
+func extractToken(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimPrefix(h, "Bearer ")
 	}
-	if w.capturar {
-		w.cuerpo.Write(p)
+	if c, err := r.Cookie(SessionCookieName); err == nil {
+		return c.Value
 	}
-	n, err := w.ResponseWriter.Write(p)
-	w.bytes += n
-	return n, err
+	return ""
 }
 
-// conIdentificador asigna a cada peticion un identificador de correlacion y lo
-// devuelve en la cabecera, para poder cruzar logs y trazas.
-func conIdentificador(siguiente http.Handler) http.Handler {
+// RequestID asigna un identificador único por solicitud, propagado en la
+// respuesta para correlacionar logs, trazas y evidencia de aceptación.
+func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Request-Id")
-		if id == "" {
-			id = uuid.NewString()
-		}
+		id := uuid.New().String()
 		w.Header().Set("X-Request-Id", id)
-		siguiente.ServeHTTP(w, r.WithContext(conIDPeticion(r.Context(), id)))
+		ctx := context.WithValue(r.Context(), ctxRequestID, id)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// conRegistro deja una linea estructurada por peticion.
-func (s *Servidor) conRegistro(siguiente http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		inicio := time.Now()
-		obs := &respuestaObservada{ResponseWriter: w}
-		siguiente.ServeHTTP(obs, r)
-		if obs.estado == 0 {
-			obs.estado = http.StatusOK
-		}
-		s.log.InfoContext(r.Context(), "peticion",
-			"metodo", r.Method,
-			"ruta", r.URL.Path,
-			"estado", obs.estado,
-			"duracion_ms", time.Since(inicio).Milliseconds(),
-			"peticion", IDPeticion(r.Context()),
-			"ip", ipCliente(r),
-		)
-	})
-}
-
-// conRecuperacion evita que un panic tumbe el proceso y responde 500.
-func (s *Servidor) conRecuperacion(siguiente http.Handler) http.Handler {
+// Recover convierte pánicos en una respuesta 500 uniforme en lugar de tumbar
+// el proceso o filtrar trazas internas al cliente.
+func Recover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			if p := recover(); p != nil {
-				s.log.ErrorContext(r.Context(), "panic atendiendo la peticion",
-					"panic", p, "ruta", r.URL.Path, "peticion", IDPeticion(r.Context()))
-				responderProblema(w, r, Problema{
-					Type: TipoProblemaBase + "interno", Status: http.StatusInternalServerError,
-					Title: "Error interno del servidor",
-				})
+			if rec := recover(); rec != nil {
+				log.Printf("panic recuperado [%s]: %v", requestIDFromContext(r.Context()), rec)
+				writeError(w, errors.New("internal"))
 			}
 		}()
-		siguiente.ServeHTTP(w, r)
+		next.ServeHTTP(w, r)
 	})
 }
 
-// conCabecerasSeguridad fija las cabeceras defensivas de toda respuesta.
-func (s *Servidor) conCabecerasSeguridad(siguiente http.Handler) http.Handler {
+// Logging deja un registro estructurado mínimo por solicitud (método, ruta,
+// estado, duración) correlacionado por request id.
+func Logging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sw, r)
+		log.Printf("request_id=%s method=%s path=%s status=%d duration_ms=%d",
+			requestIDFromContext(r.Context()), r.Method, r.URL.Path, sw.status, time.Since(start).Milliseconds())
+	})
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+// SecurityHeaders aplica cabeceras mínimas de protección (XSS/clickjacking/
+// sniffing), complementarias a CSRF (SameSite en cookies) y a la política
+// exigida de TLS/cifrado en el borde (terminado por el proxy en producción).
+func SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
-		h.Set("Referrer-Policy", "no-referrer")
-		// La API solo devuelve JSON: nada que ejecutar ni que incrustar.
-		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-		h.Set("Cache-Control", "no-store")
-		if s.cookieSegura {
-			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		}
-		siguiente.ServeHTTP(w, r)
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
 	})
 }
 
-// conLimiteTasa acota las peticiones por IP en una ventana.
-//
-// Se aplica sobre todo a los endpoints de credenciales, donde frena el
-// rociado de claves y el abuso del envio de correos.
-func (s *Servidor) conLimiteTasa(nombre string, maximo int, ventana time.Duration) middleware {
-	return func(siguiente http.Handler) http.Handler {
+// CORS habilita el origen del frontend configurado, con credenciales
+// (cookie de sesión) permitidas.
+func CORS(allowedOrigin string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if s.limitador == nil {
-				siguiente.ServeHTTP(w, r)
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", allowedOrigin)
+			h.Set("Access-Control-Allow-Credentials", "true")
+			h.Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Content-Type,Authorization,Idempotency-Key,If-Match")
+			h.Set("Access-Control-Expose-Headers", "ETag,X-Request-Id")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			res := s.limitador.Permitir(r.Context(), nombre+":"+ipCliente(r), maximo, ventana)
-			if !res.Permitido {
-				w.Header().Set("Retry-After", strconv.Itoa(int(res.Reintento.Seconds())))
-				responderProblema(w, r, Problema{
-					Type: TipoProblemaBase + "limite-de-tasa", Status: http.StatusTooManyRequests,
-					Title:  "Demasiadas peticiones",
-					Detail: "Espera unos momentos antes de volver a intentarlo.",
-				})
-				return
-			}
-			siguiente.ServeHTTP(w, r)
+			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-// metodosSeguros son los que no cambian estado y por tanto no exigen CSRF.
-func metodoSeguro(m string) bool {
-	switch m {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return true
-	}
-	return false
-}
+// RateLimit aplica un límite de tasa fijo por ventana (por IP + ruta) usando
+// Redis, protegiendo endpoints sensibles (login, registro, reset) de fuerza
+// bruta y abuso.
+func RateLimit(rdb *redis.Client, keyPrefix string, limit int, window time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := clientIP(r)
+			key := "ratelimit:" + keyPrefix + ":" + ip
+			ctx := r.Context()
 
-// conCSRF aplica la defensa de doble envio de cookie.
-//
-// La cookie de sesion es SameSite=Lax, lo que ya bloquea la mayoria de los
-// envios entre sitios. Esta comprobacion cubre el resto: toda peticion que
-// modifique estado usando la cookie debe repetir en la cabecera el valor de
-// la cookie CSRF, que un sitio atacante no puede leer.
-func (s *Servidor) conCSRF(siguiente http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if metodoSeguro(r.Method) || tokenDeCookie(r, CookieSesion) == "" {
-			siguiente.ServeHTTP(w, r)
-			return
-		}
-		enCookie := tokenDeCookie(r, CookieCSRF)
-		enCabecera := r.Header.Get(CabeceraCSRF)
-		if enCookie == "" || subtle.ConstantTimeCompare([]byte(enCookie), []byte(enCabecera)) != 1 {
-			responderProblema(w, r, Problema{
-				Type: TipoProblemaBase + "csrf", Status: http.StatusForbidden,
-				Title:  "Falta o no coincide el token anti-CSRF",
-				Detail: "Vuelve a cargar la pagina e intentalo de nuevo.",
-			})
-			return
-		}
-		siguiente.ServeHTTP(w, r)
-	})
-}
-
-// conAutenticacionOpcional resuelve la cookie de sesion si viene, sin exigirla.
-func (s *Servidor) conAutenticacionOpcional(siguiente http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token := tokenDeCookie(r, CookieSesion)
-		if token == "" {
-			siguiente.ServeHTTP(w, r)
-			return
-		}
-		a, err := s.usuarios.Autenticar(r.Context(), token)
-		switch {
-		case errors.Is(err, user.ErrSesionInvalida):
-			// La cookie ya no sirve: se limpia para que el navegador no la
-			// siga enviando en cada peticion.
-			s.borrarCookies(w)
-			siguiente.ServeHTTP(w, r)
-			return
-		case err != nil:
-			problemaDeDominio(w, r, s.log, err)
-			return
-		}
-		siguiente.ServeHTTP(w, r.WithContext(conAutenticacion(r.Context(), a)))
-	})
-}
-
-// requiereSesion corta con 401 si la peticion no viene autenticada.
-func requiereSesion(siguiente http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := autenticacionDe(r.Context()); !ok {
-			responderNoAutenticado(w, r)
-			return
-		}
-		siguiente.ServeHTTP(w, r)
-	})
-}
-
-// conIdempotencia hace repetible una operacion marcada con Idempotency-Key.
-//
-// La primera peticion se ejecuta y su respuesta queda guardada; las repeticiones
-// con la misma clave devuelven esa respuesta sin volver a ejecutar nada. Es la
-// misma garantia que el enunciado exige para el envio de quizzes y la emision
-// de insignias, resuelta aqui una sola vez para toda la API.
-func (s *Servidor) conIdempotencia(siguiente http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		clave := r.Header.Get("Idempotency-Key")
-		if clave == "" || s.idempotencia == nil || metodoSeguro(r.Method) {
-			siguiente.ServeHTTP(w, r)
-			return
-		}
-		if len(clave) > 200 {
-			responderProblema(w, r, Problema{
-				Type: TipoProblemaBase + "validacion", Status: http.StatusBadRequest,
-				Title: "La cabecera Idempotency-Key es demasiado larga",
-			})
-			return
-		}
-		// La clave se combina con metodo y ruta para que la misma cadena no
-		// colisione entre operaciones distintas.
-		alcance := r.Method + " " + r.URL.Path + " " + clave
-
-		previa, err := s.idempotencia.Reservar(r.Context(), alcance)
-		switch {
-		case errors.Is(err, redisclient.ErrEnCurso):
-			responderProblema(w, r, Problema{
-				Type: TipoProblemaBase + "peticion-en-curso", Status: http.StatusConflict,
-				Title:  "Ya hay una peticion identica en curso",
-				Detail: "Espera a que termine antes de reintentar.",
-			})
-			return
-		case err != nil:
-			// Sin idempotencia disponible se sigue adelante: es preferible a
-			// rechazar la operacion por un fallo de la cache.
-			s.log.WarnContext(r.Context(), "idempotencia no disponible", "error", err)
-			siguiente.ServeHTTP(w, r)
-			return
-		case previa != nil:
-			w.Header().Set("Idempotency-Replayed", "true")
-			if previa.Tipo != "" {
-				w.Header().Set("Content-Type", previa.Tipo)
+			count, err := rdb.Incr(ctx, key).Result()
+			if err != nil {
+				// Redis no disponible: no se bloquea la solicitud (fail-open),
+				// pero se registra para observabilidad.
+				log.Printf("rate limit: redis no disponible: %v", err)
+				next.ServeHTTP(w, r)
+				return
 			}
-			w.WriteHeader(previa.Estado)
-			_, _ = w.Write(previa.Cuerpo)
-			return
-		}
-
-		obs := &respuestaObservada{ResponseWriter: w, capturar: true}
-		siguiente.ServeHTTP(obs, r)
-		if obs.estado == 0 {
-			obs.estado = http.StatusOK
-		}
-		// Solo se recuerdan las respuestas definitivas. Un 5xx se libera para
-		// que el cliente pueda reintentar con la misma clave.
-		if obs.estado >= 500 {
-			s.idempotencia.Liberar(r.Context(), alcance)
-			return
-		}
-		if err := s.idempotencia.Guardar(r.Context(), alcance, redisclient.RespuestaGuardada{
-			Estado: obs.estado,
-			Cuerpo: obs.cuerpo.Bytes(),
-			Tipo:   obs.Header().Get("Content-Type"),
-		}); err != nil {
-			s.log.WarnContext(r.Context(), "no se pudo guardar la idempotencia", "error", err)
-		}
-	})
+			if count == 1 {
+				rdb.Expire(ctx, key, window)
+			}
+			if int(count) > limit {
+				writeJSON(w, http.StatusTooManyRequests, errorEnvelope{Error: errorBody{
+					Code: "rate_limited", Message: "demasiadas solicitudes, intenta más tarde",
+				}})
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
-// ipCliente devuelve la IP del cliente, respetando X-Forwarded-For cuando la
-// API corre detras de un proxy.
-func ipCliente(r *http.Request) string {
-	if reenviada := r.Header.Get("X-Forwarded-For"); reenviada != "" {
-		// El primer elemento es el cliente original.
-		primera, _, _ := strings.Cut(reenviada, ",")
-		return strings.TrimSpace(primera)
+func clientIP(r *http.Request) string {
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		return strings.TrimSpace(strings.Split(fwd, ",")[0])
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	return r.RemoteAddr
+}
+
+// RequireAuth exige una sesión activa y expone el usuario en el contexto.
+func RequireAuth(authSvc *auth.Service) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := extractToken(r)
+			if token == "" {
+				writeError(w, ErrUnauthenticated)
+				return
+			}
+			u, _, err := authSvc.Authenticate(r.Context(), token)
+			if err != nil {
+				writeError(w, ErrUnauthenticated)
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(withUser(r.Context(), u)))
+		})
 	}
-	return host
+}
+
+// RequireRole exige que el usuario autenticado tenga uno de los roles
+// indicados; debe usarse después de RequireAuth.
+func RequireRole(roles ...user.Role) func(http.Handler) http.Handler {
+	allowed := make(map[user.Role]bool, len(roles))
+	for _, r := range roles {
+		allowed[r] = true
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u, ok := UserFromContext(r.Context())
+			if !ok {
+				writeError(w, ErrUnauthenticated)
+				return
+			}
+			if !allowed[u.Role] {
+				writeError(w, ErrForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// Chain compone middlewares en orden de ejecución (el primero se ejecuta
+// primero).
+func Chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler {
+	for i := len(mws) - 1; i >= 0; i-- {
+		h = mws[i](h)
+	}
+	return h
 }

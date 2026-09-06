@@ -5,23 +5,15 @@ backend/bin/
 *.out
 
 # Node / Next.js
-node_modules/
-.next/
-out/
-next-env.d.ts
-*.tsbuildinfo
-coverage/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/next-env.d.ts.bak
 
-# Entornos y secretos (el ejemplo si se versiona)
+# Entornos y secretos
 .env
 .env.local
 .env.*.local
-!.env.example
-*.pem
 
 # Sistema operativo / editores
 .DS_Store
