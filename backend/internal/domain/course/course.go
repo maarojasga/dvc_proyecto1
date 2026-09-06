@@ -74,32 +74,32 @@ const (
 
 // Course es el agregado raíz de autoría.
 type Course struct {
-	ID                         uuid.UUID
-	TeacherID                  uuid.UUID
-	Slug                       string
-	CurrentPublishedVersionID  *uuid.UUID
-	CreatedAt                  time.Time
-	UpdatedAt                  time.Time
+	ID                        uuid.UUID
+	TeacherID                 uuid.UUID
+	Slug                      string
+	CurrentPublishedVersionID *uuid.UUID
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
 }
 
 // Version es una versión numerada del curso; solo una puede estar publicada
 // a la vez para un mismo curso.
 type Version struct {
-	ID                            uuid.UUID
-	CourseID                      uuid.UUID
-	VersionNumber                 int
-	Status                        VersionStatus
-	Title                         string
-	Summary                       string
-	DescriptionMD                 string
-	Category                      string
-	Level                         string
-	Language                      string
-	ApprovalMinScore              float64
-	ApprovalRequiredResourcesPct  float64
-	PublishedAt                   *time.Time
-	CreatedAt                     time.Time
-	UpdatedAt                     time.Time
+	ID                           uuid.UUID
+	CourseID                     uuid.UUID
+	VersionNumber                int
+	Status                       VersionStatus
+	Title                        string
+	Summary                      string
+	DescriptionMD                string
+	Category                     string
+	Level                        string
+	Language                     string
+	ApprovalMinScore             float64
+	ApprovalRequiredResourcesPct float64
+	PublishedAt                  *time.Time
+	CreatedAt                    time.Time
+	UpdatedAt                    time.Time
 
 	Modules []Module // opcional: cargado por el repositorio cuando se necesita el árbol completo
 }
@@ -116,29 +116,29 @@ type Module struct {
 
 // Unit agrupa recursos ordenados dentro de un módulo.
 type Unit struct {
-	ID       uuid.UUID
-	ModuleID uuid.UUID
-	StableID uuid.UUID
-	Title    string
-	Position int
+	ID        uuid.UUID
+	ModuleID  uuid.UUID
+	StableID  uuid.UUID
+	Title     string
+	Position  int
 	Resources []Resource
 }
 
 // Resource es la unidad mínima de contenido consumible.
 type Resource struct {
-	ID                uuid.UUID
-	UnitID            uuid.UUID
-	StableID          uuid.UUID
-	Type              ResourceType
-	Title             string
-	Position          int
-	Visible           bool
-	Required          bool
-	Downloadable      bool
-	ProcessingStatus  ProcessingStatus
-	TextContentMD     string
-	ExternalURL       string
-	ObjectKey         string
+	ID               uuid.UUID
+	UnitID           uuid.UUID
+	StableID         uuid.UUID
+	Type             ResourceType
+	Title            string
+	Position         int
+	Visible          bool
+	Required         bool
+	Downloadable     bool
+	ProcessingStatus ProcessingStatus
+	TextContentMD    string
+	ExternalURL      string
+	ObjectKey        string
 }
 
 // IsPublishable evalúa si el recurso está listo para formar parte de una
@@ -155,14 +155,14 @@ func (r *Resource) IsPublishable() bool {
 }
 
 var (
-	ErrTitleRequired          = errors.New("course: el título es obligatorio")
-	ErrSummaryRequired        = errors.New("course: el resumen es obligatorio para publicar")
-	ErrNoModules              = errors.New("course: la versión debe tener al menos un módulo")
-	ErrModuleWithoutUnits     = errors.New("course: todo módulo debe tener al menos una unidad")
-	ErrUnitWithoutResources   = errors.New("course: toda unidad debe tener al menos un recurso visible")
-	ErrResourceNotReady       = errors.New("course: hay recursos visibles que aún no terminan de procesarse")
-	ErrAlreadyPublished       = errors.New("course: la versión ya está publicada")
-	ErrNotDraft               = errors.New("course: solo un borrador puede publicarse")
+	ErrTitleRequired           = errors.New("course: el título es obligatorio")
+	ErrSummaryRequired         = errors.New("course: el resumen es obligatorio para publicar")
+	ErrNoModules               = errors.New("course: la versión debe tener al menos un módulo")
+	ErrModuleWithoutUnits      = errors.New("course: todo módulo debe tener al menos una unidad")
+	ErrUnitWithoutResources    = errors.New("course: toda unidad debe tener al menos un recurso visible")
+	ErrResourceNotReady        = errors.New("course: hay recursos visibles que aún no terminan de procesarse")
+	ErrAlreadyPublished        = errors.New("course: la versión ya está publicada")
+	ErrNotDraft                = errors.New("course: solo un borrador puede publicarse")
 	ErrInvalidApprovalCriteria = errors.New("course: los criterios de aprobación deben estar entre 0 y 100")
 )
 

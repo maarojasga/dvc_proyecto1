@@ -32,9 +32,21 @@ paths:
 
   /auth/register:
     post:
+      tags: [Identidad]
       summary: Registro público de estudiantes
+      description: >
+        Crea una cuenta de estudiante pendiente de verificación y envía el
+        enlace. Los profesores y administradores no se crean por aquí: solo
+        por administración.
+
+
+        Responde 202 aunque el correo ya esté registrado y no devuelve el
+        recurso creado: cualquiera de las dos cosas convertiría el formulario
+        en un oráculo de qué cuentas existen. Si la cuenta existente sigue
+        pendiente, se reenvía el enlace de verificación.
       operationId: registerStudent
-      security: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -44,12 +56,39 @@ paths:
               required: [email, password, full_name]
               properties:
                 email: { type: string, format: email }
-                password: { type: string, minLength: 10 }
+                password: { type: string, minLength: 12 }
                 full_name: { type: string }
       responses:
-        "201": { description: Usuario creado, pendiente de verificación de correo. }
-        "409": { description: El correo ya está registrado. }
-        "422": { description: Contraseña débil. }
+        "202":
+          description: Solicitud aceptada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        "422": { $ref: '#/components/responses/Error' }
+        "429": { $ref: '#/components/responses/Error' }
+
+  /auth/resend-verification:
+    post:
+      tags: [Identidad]
+      summary: Reenviar el enlace de verificación
+      description: Responde 202 exista o no la cuenta.
+      operationId: resendVerification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202":
+          description: Solicitud aceptada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        "429": { $ref: '#/components/responses/Error' }
 
   /auth/verify-email:
     post:
@@ -85,8 +124,26 @@ paths:
                 password: { type: string }
       responses:
         "200":
-          description: Sesión creada (cookie httpOnly mooc_session + token en el cuerpo).
-        "401": { description: Credenciales inválidas o cuenta no activa. }
+          description: >
+            Sesión creada. Emite la cookie httpOnly `mooc_session` y la cookie
+            legible `mooc_csrf`. El token de sesión no viaja en el cuerpo:
+            devolverlo dejaría que cualquier script de la página lo leyera.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  expires_at: { type: string, format: date-time }
+        "401":
+          description: >
+            Credenciales inválidas. La respuesta es idéntica para un correo
+            inexistente y para una clave errada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "429": { $ref: '#/components/responses/Error' }
 
   /auth/logout:
     post:
@@ -102,6 +159,69 @@ paths:
       responses:
         "200": { description: Datos del usuario. }
         "401": { description: No autenticado. }
+
+  /auth/sessions:
+    get:
+      tags: [Identidad]
+      summary: Listar las sesiones activas
+      description: >
+        Cada dispositivo con la sesión abierta. Es la evidencia de que las
+        sesiones son revocables por el propio usuario.
+      operationId: listSessions
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Sesiones activas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+        "401": { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Identidad]
+      summary: Revocar todas las sesiones salvo la actual
+      operationId: revokeOtherSessions
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        "200":
+          description: Sesiones revocadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked: { type: integer }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+
+  /auth/sessions/{sessionId}:
+    delete:
+      tags: [Identidad]
+      summary: Revocar una sesión concreta
+      description: >
+        Solo sesiones propias, y la revocación surte efecto en la siguiente
+        petición del dispositivo afectado. Una sesión ajena responde 404, igual
+        que una inexistente, para no confirmar identificadores de otras
+        cuentas. Revocar la sesión en curso equivale a cerrarla.
+      operationId: revokeSession
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        "204": { description: Sesión revocada. }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
 
   /auth/password/reset-request:
     post:
@@ -473,6 +593,33 @@ paths:
         "200": { description: Inscripción retirada. }
 
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, maxLength: 200 }
+      description: >
+        Hace repetible la operación durante 24 horas: reintentar con la misma
+        clave devuelve la respuesta guardada sin volver a ejecutar nada. La
+        repetición se marca con la cabecera `Idempotency-Replayed: true`.
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: { type: string }
+      description: >
+        Valor de la cookie `mooc_csrf`, que la API emite junto con la sesión.
+        Se exige en toda operación que cambie estado y se autentique por
+        cookie; un sitio atacante no puede leerla para rellenarlo.
+
+  responses:
+    Error:
+      description: Error uniforme.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
   securitySchemes:
     sessionCookie:
       type: apiKey
@@ -482,6 +629,36 @@ components:
       type: http
       scheme: bearer
   schemas:
+    User:
+      type: object
+      required: [id, email, full_name, role, status]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        role:
+          type: string
+          enum: [admin, teacher, student]
+        status:
+          type: string
+          enum: [pending_verification, active, suspended]
+    Message:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+    Session:
+      type: object
+      required: [id, created_at, expires_at, current]
+      properties:
+        id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        ip_address: { type: string }
+        user_agent: { type: string }
+        current:
+          type: boolean
+          description: Indica si es la sesión que hace la petición.
     Error:
       type: object
       properties:

@@ -55,7 +55,12 @@ func classifyError(err error) (status int, code string, details []string) {
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		return http.StatusUnauthorized, "invalid_credentials", nil
 	case errors.Is(err, auth.ErrEmailInUse):
+		// Solo lo produce el alta de profesores por administración, donde el
+		// administrador es de confianza. El registro público nunca lo
+		// devuelve: allí revelaría qué correos existen.
 		return http.StatusConflict, "email_in_use", nil
+	case errors.Is(err, auth.ErrSessionNotFound):
+		return http.StatusNotFound, "session_not_found", nil
 	case errors.Is(err, auth.ErrInvalidOrExpiredToken):
 		return http.StatusBadRequest, "invalid_or_expired_token", nil
 	case errors.Is(err, user.ErrWeakPassword):
@@ -80,6 +85,10 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusForbidden, "forbidden", nil
 	case errors.Is(err, ErrBadRequest):
 		return http.StatusBadRequest, "bad_request", nil
+	case errors.Is(err, ErrCSRF):
+		return http.StatusForbidden, "csrf_token_mismatch", nil
+	case errors.Is(err, ErrIdempotencyInFlight):
+		return http.StatusConflict, "idempotency_in_flight", nil
 	default:
 		return http.StatusInternalServerError, "internal_error", nil
 	}

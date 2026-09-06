@@ -8,7 +8,8 @@ backend/bin/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
-frontend/next-env.d.ts.bak
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
 
 # Entornos y secretos
 .env

@@ -16,13 +16,24 @@ servidor; progreso validado e insignias digitales verificables.
 
 ## Estado
 
-Implementado el primer punto del alcance mínimo: **registro público de
-estudiantes con verificación de correo, sesiones revocables y recuperación de
-clave; los profesores solo se crean por administración**. Está completo de
-punta a punta: migraciones, dominio, API, frontend y pruebas.
+Cobertura del alcance mínimo (sección 5.1 del enunciado):
 
-El resto de las pantallas y módulos siguen siendo marcadores navegables que
-declaran qué debe implementarse y a qué criterio de evaluación aportan.
+| # | Punto | Estado |
+|---|---|---|
+| 1 | Registro, verificación de correo, sesiones revocables y recuperación | Completo, con pruebas de integración |
+| 2 | Gestión administrativa de usuarios | Parcial: usuarios, rol, estado y protección del último administrador. Falta consulta de auditoría y gestión de sesiones desde administración |
+| 3 | Autoría, jerarquía y versiones | Casi completo: jerarquía de cuatro niveles, `stable_id`, validación exhaustiva de publicación, publicar/despublicar. Falta previsualización |
+| 4 | Editor de bloques con autosave y Markdown canónico | No: hoy son campos de texto Markdown sin autosave |
+| 5 | Carga multimedia | Parcial: PUT prefirmado de 24 h. Falta multipart reanudable, checksum, MIME real y antimalware |
+| 6 | Procesamiento asíncrono a HLS | Casi completo: worker asynq con FFmpeg, original conservado, idempotencia por clave de tarea, reintentos y DLQ. Falta CDN |
+| 7 | Visor PDF y reproducción adaptativa | No |
+| 8 | Quizzes | No: el dominio existe con pruebas, pero sin repositorio, API ni interfaz |
+| 9 | Progreso e insignias | No: igual que quizzes |
+| 10 | Catálogo, inscripción, retiro y reinscripción | Casi completo. Falta ampliar filtros más allá de la búsqueda por texto |
+
+De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
+3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
+protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
 
 ## Estructura del repositorio
 
@@ -95,6 +106,12 @@ npm ci && npm run lint && npm run typecheck && npm run build
 Sin `TEST_DATABASE_URL` y `TEST_REDIS_ADDR`, las pruebas de integración se
 omiten en lugar de fallar y solo corren las unitarias.
 
+El backend trae 46 pruebas: las de dominio corren siempre y las 23 de
+integración ejercen la API de identidad contra PostgreSQL y Redis reales,
+porque lo que verifican (unicidad, consumo atómico de tokens, revocación
+inmediata, límites de tasa, inmutabilidad de la auditoría) vive en esos
+adaptadores y un doble de prueba no lo demostraría.
+
 ### Recorrido manual del flujo de identidad
 
 Con el compose levantado, los enlaces de verificación y recuperación llegan a
@@ -108,21 +125,28 @@ respuesta HTTP: hacerlo permitiría activar cuentas ajenas.
 
 ## Pendientes para las siguientes iteraciones
 
-- Los puntos 2 a 10 del alcance mínimo: administración de usuarios,
-  autoría y publicación, editor de bloques, carga multimedia, procesamiento
-  asíncrono, visores, quizzes, progreso e insignias, y catálogo.
-- Workers: hoy el proceso arranca y espera; falta registrar los consumidores
-  asynq con reintentos, backoff y dead-letter queue.
-- OpenTelemetry: hoy hay logs estructurados y correlación por `X-Request-Id`,
-  faltan métricas y trazas.
-- Reverse proxy (nginx/traefik) para poder escalar la API a varias instancias:
+Ordenados por lo que más falta para la demostración de aceptación:
+
+- **Quizzes, progreso e insignias** (puntos 8 y 9). El dominio ya está escrito
+  y probado; falta el repositorio, la API y la interfaz que lo usen.
+- **Consumo de contenido** (punto 7): visor PDF y reproductor HLS con
+  reanudación desde la última posición reportada.
+- **Editor de bloques** (punto 4) con autosave y Markdown extendido canónico.
+- **Carga multimedia** (punto 5): multipart reanudable, verificación de
+  checksum, MIME real y escaneo antimalware. Los ayudantes multipart ya están
+  en `internal/platform/storage`, pero ningún endpoint los usa todavía.
+- **Cursores y ETag** en las colecciones, que exige la sección 7.
+- **OpenTelemetry**: hoy hay logs estructurados y correlación por
+  `X-Request-Id`; faltan métricas y trazas.
+- **Reverse proxy** (nginx/traefik) para escalar la API a varias instancias:
   hoy publica el puerto 8080 fijo en el host, lo que impide `--scale api=N`.
-- Pipeline de CI: build, lint, análisis de seguridad, migraciones y pruebas.
-- Pruebas E2E de los nueve flujos críticos y auditoría de accesibilidad.
+  Los workers sí escalan.
+- **Pipeline de CI**: build, lint, análisis de seguridad, migraciones y pruebas.
+- **Pruebas E2E** de los nueve flujos críticos y auditoría de accesibilidad.
 
 ## Versionado de datos
 
-Se conserva la configuración de [DVC](https://dvc.org) heredada del repositorio
-original (`.dvc/`, `.dvcignore`, `data/`) para versionar conjuntos de datos
-fuera de git. Si el proyecto no va a manejar datasets, puede eliminarse sin
-afectar a la aplicación.
+Queda `data/` con su `.gitignore` heredado del repositorio original, que
+reservaba el directorio para conjuntos de datos versionados con
+[DVC](https://dvc.org). La configuración de DVC ya no está, así que hoy es solo
+un directorio reservado: puede eliminarse sin afectar a la aplicación.

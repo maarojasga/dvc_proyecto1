@@ -19,6 +19,11 @@ var (
 	ErrUnauthenticated = errors.New("httpserver: se requiere autenticación")
 	ErrForbidden       = errors.New("httpserver: no tienes permiso para esta operación")
 	ErrBadRequest      = errors.New("httpserver: solicitud inválida")
+	ErrCSRF            = errors.New("httpserver: falta o no coincide el token anti-CSRF")
+
+	// ErrIdempotencyInFlight indica que otra petición con la misma
+	// Idempotency-Key sigue ejecutándose.
+	ErrIdempotencyInFlight = errors.New("httpserver: ya hay una petición idéntica en curso")
 )
 
 type ctxKey int
@@ -26,6 +31,7 @@ type ctxKey int
 const (
 	ctxUser ctxKey = iota
 	ctxRequestID
+	ctxKeySession
 )
 
 // SessionCookieName es el nombre de la cookie httpOnly que transporta el
@@ -34,6 +40,18 @@ const SessionCookieName = "mooc_session"
 
 func withUser(ctx context.Context, u *user.User) context.Context {
 	return context.WithValue(ctx, ctxUser, u)
+}
+
+func withSession(ctx context.Context, s *user.Session) context.Context {
+	return context.WithValue(ctx, ctxKeySession, s)
+}
+
+// SessionFromContext expone la sesión en curso a los handlers, que la
+// necesitan para saber cuál de las sesiones listadas es la actual y para no
+// cerrarla al revocar las demás.
+func SessionFromContext(ctx context.Context) (*user.Session, bool) {
+	s, ok := ctx.Value(ctxKeySession).(*user.Session)
+	return s, ok
 }
 
 // UserFromContext expone el usuario autenticado a los handlers.
@@ -187,12 +205,13 @@ func RequireAuth(authSvc *auth.Service) func(http.Handler) http.Handler {
 				writeError(w, ErrUnauthenticated)
 				return
 			}
-			u, _, err := authSvc.Authenticate(r.Context(), token)
+			u, sess, err := authSvc.Authenticate(r.Context(), token)
 			if err != nil {
 				writeError(w, ErrUnauthenticated)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(withUser(r.Context(), u)))
+			ctx := withSession(withUser(r.Context(), u), sess)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

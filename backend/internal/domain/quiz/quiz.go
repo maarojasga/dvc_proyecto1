@@ -44,25 +44,25 @@ var (
 
 // Quiz es la configuración de una evaluación asociada a un recurso.
 type Quiz struct {
-	ID                uuid.UUID
-	ResourceID        uuid.UUID
-	Title             string
-	TimeLimitSeconds  *int
-	MaxAttempts       *int
-	PassScore         float64
-	FeedbackPolicy    FeedbackPolicy
-	ShuffleQuestions  bool
-	Questions         []Question
+	ID               uuid.UUID
+	ResourceID       uuid.UUID
+	Title            string
+	TimeLimitSeconds *int
+	MaxAttempts      *int
+	PassScore        float64
+	FeedbackPolicy   FeedbackPolicy
+	ShuffleQuestions bool
+	Questions        []Question
 }
 
 type Question struct {
-	ID        uuid.UUID
-	StableID  uuid.UUID
-	Position  int
-	PromptMD  string
-	Type      QuestionType
-	Points    float64
-	Options   []Option
+	ID       uuid.UUID
+	StableID uuid.UUID
+	Position int
+	PromptMD string
+	Type     QuestionType
+	Points   float64
+	Options  []Option
 }
 
 type Option struct {
@@ -94,17 +94,17 @@ func (q *Question) ToPublic() []PublicOption {
 // para que la calificación sea reproducible aunque el autor edite el quiz
 // después.
 type Attempt struct {
-	ID              uuid.UUID
-	QuizID          uuid.UUID
-	EnrollmentID    uuid.UUID
-	AttemptNumber   int
-	Status          AttemptStatus
-	Snapshot        Snapshot
-	StartedAt       time.Time
-	SubmittedAt     *time.Time
-	ExpiresAt       *time.Time
-	Score           *float64
-	Passed          *bool
+	ID                   uuid.UUID
+	QuizID               uuid.UUID
+	EnrollmentID         uuid.UUID
+	AttemptNumber        int
+	Status               AttemptStatus
+	Snapshot             Snapshot
+	StartedAt            time.Time
+	SubmittedAt          *time.Time
+	ExpiresAt            *time.Time
+	Score                *float64
+	Passed               *bool
 	SubmitIdempotencyKey string
 }
 
@@ -112,11 +112,11 @@ type Attempt struct {
 // parte servida al cliente, pero el servidor conserva por separado el mapa
 // de respuestas correctas para calificar).
 type Snapshot struct {
-	QuestionOrder []uuid.UUID            // stable_id de preguntas, en el orden mostrado
-	OptionOrder   map[uuid.UUID][]uuid.UUID // stable_id pregunta -> stable_id opciones en orden mostrado
+	QuestionOrder  []uuid.UUID               // stable_id de preguntas, en el orden mostrado
+	OptionOrder    map[uuid.UUID][]uuid.UUID // stable_id pregunta -> stable_id opciones en orden mostrado
 	CorrectAnswers map[uuid.UUID][]uuid.UUID // solo en el servidor: stable_id pregunta -> stable_id opciones correctas
-	Points        map[uuid.UUID]float64
-	QuestionType  map[uuid.UUID]QuestionType
+	Points         map[uuid.UUID]float64
+	QuestionType   map[uuid.UUID]QuestionType
 }
 
 // NewAttempt valida el número de intentos disponibles y construye un nuevo

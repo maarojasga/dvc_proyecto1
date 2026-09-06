@@ -27,7 +27,7 @@ const (
 const (
 	MinHeartbeatInterval = 5 * time.Second
 	MaxHeartbeatInterval = 90 * time.Second
-	MaxCreditPerEvent     = 60 * time.Second
+	MaxCreditPerEvent    = 60 * time.Second
 )
 
 var ErrEventRejected = errors.New("progress: la señal de progreso fue rechazada por implausible")

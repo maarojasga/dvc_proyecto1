@@ -13,14 +13,38 @@ export class ApiError extends Error {
   }
 }
 
+const CSRF_COOKIE = "mooc_csrf";
+const CSRF_HEADER = "X-CSRF-Token";
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * Lee el token anti-CSRF que la API emite junto con la sesión.
+ *
+ * La cookie de sesión es httpOnly y no se puede leer; esta sí, a propósito:
+ * repetirla en la cabecera es lo que un sitio atacante no puede hacer, porque
+ * no tiene acceso a las cookies de este origen.
+ */
+function csrfToken(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  const entry = document.cookie.split("; ").find((c) => c.startsWith(`${CSRF_COOKIE}=`));
+  return entry ? decodeURIComponent(entry.slice(CSRF_COOKIE.length + 1)) : undefined;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string>) ?? {}),
+  };
+  if (!SAFE_METHODS.has(method)) {
+    const token = csrfToken();
+    if (token) headers[CSRF_HEADER] = token;
+  }
+
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    headers,
   });
 
   if (res.status === 204) {
@@ -44,14 +68,35 @@ export interface User {
   status: "pending_verification" | "active" | "suspended";
 }
 
+export interface Session {
+  id: string;
+  created_at: string;
+  expires_at: string;
+  ip_address?: string;
+  user_agent?: string;
+  current: boolean;
+}
+
 export const api = {
   me: () => request<User>("/api/v1/auth/me"),
+  // Responde igual exista o no el correo, así que no devuelve el usuario.
   register: (data: { email: string; password: string; full_name: string }) =>
-    request<User>("/api/v1/auth/register", { method: "POST", body: JSON.stringify(data) }),
+    request<{ message: string }>("/api/v1/auth/register", { method: "POST", body: JSON.stringify(data) }),
+  resendVerification: (email: string) =>
+    request<{ message: string }>("/api/v1/auth/resend-verification", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  listSessions: () => request<{ items: Session[] }>("/api/v1/auth/sessions"),
+  revokeSession: (id: string) =>
+    request<void>(`/api/v1/auth/sessions/${id}`, { method: "DELETE" }),
+  revokeOtherSessions: () =>
+    request<{ revoked: number }>("/api/v1/auth/sessions", { method: "DELETE" }),
   verifyEmail: (token: string) =>
     request<{ status: string }>("/api/v1/auth/verify-email", { method: "POST", body: JSON.stringify({ token }) }),
+  // La respuesta no trae el token de sesión: vive solo en la cookie httpOnly.
   login: (email: string, password: string) =>
-    request<{ token: string; user: User }>("/api/v1/auth/login", {
+    request<{ user: User; expires_at: string }>("/api/v1/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
