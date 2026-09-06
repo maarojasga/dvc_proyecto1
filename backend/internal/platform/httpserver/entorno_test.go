@@ -18,6 +18,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/admin"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
