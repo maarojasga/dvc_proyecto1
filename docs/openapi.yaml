@@ -323,6 +323,90 @@ paths:
       responses:
         "201": { description: Profesor creado; se envía enlace para establecer contraseña. }
 
+  /admin/audit:
+    get:
+      tags: [Administración]
+      summary: Consultar la bitácora
+      description: >
+        Registro inmutable de acciones, el más reciente primero. La base
+        rechaza modificarlo o borrarlo mediante un disparador, así que lo que
+        se lee aquí es lo que ocurrió.
+      operationId: listAudit
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: action
+          in: query
+          schema: { type: string }
+          description: Filtra por acción exacta, por ejemplo `user.status_updated`.
+        - name: actor_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Entradas de la bitácora.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEntry' }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+
+  /admin/users/{id}/sessions:
+    get:
+      tags: [Administración]
+      summary: Sesiones activas de una cuenta
+      operationId: listUserSessions
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Sesiones activas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Administración]
+      summary: Cerrar todas las sesiones de una cuenta
+      description: >
+        Expulsa a la persona de todos sus dispositivos sin cambiar el estado de
+        la cuenta: es la respuesta a un acceso comprometido cuando la cuenta en
+        sí no está en falta. Suspenderla también las cierra.
+      operationId: revokeUserSessions
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        "204": { description: Sesiones cerradas. }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+
   /courses:
     post:
       summary: Crea un curso nuevo con su primera versión en borrador
@@ -647,6 +731,21 @@ components:
       required: [message]
       properties:
         message: { type: string }
+    AuditEntry:
+      type: object
+      required: [id, action, entity_type, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        actor_id: { type: string, format: uuid }
+        actor_email:
+          type: string
+          description: Vacío si la cuenta que actuó fue eliminada; el hecho auditado sobrevive a su autor.
+        action: { type: string }
+        entity_type: { type: string }
+        entity_id: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        ip_address: { type: string }
+        created_at: { type: string, format: date-time }
     Session:
       type: object
       required: [id, created_at, expires_at, current]

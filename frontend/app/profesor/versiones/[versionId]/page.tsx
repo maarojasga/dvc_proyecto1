@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Version, type Module, type Unit, ApiError } from "@/lib/api";
 
@@ -70,8 +71,18 @@ export default function VersionEditorPage() {
 
   return (
     <div>
-      <h1>{version.Title || "(sin título)"}</h1>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+        <h1>{version.Title || "(sin título)"}</h1>
+        <Link href={`/profesor/versiones/${versionId}/previsualizacion`}>Previsualizar</Link>
+      </div>
       <p className="badge">Versión {version.VersionNumber} · {version.Status}</p>
+
+      {!isDraft && (
+        <p className="warning-banner" role="status">
+          Esta versión está publicada y es inmutable. Para editarla hay que
+          despublicar el curso primero.
+        </p>
+      )}
 
       {notice && <p className="success-banner">{notice}</p>}
       {publishErrors.length > 0 && (

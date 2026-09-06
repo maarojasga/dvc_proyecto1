@@ -77,6 +77,18 @@ export interface Session {
   current: boolean;
 }
 
+export interface AuditEntry {
+  id: string;
+  actor_id?: string;
+  actor_email?: string;
+  action: string;
+  entity_type: string;
+  entity_id?: string;
+  metadata: Record<string, unknown>;
+  ip_address?: string;
+  created_at: string;
+}
+
 export const api = {
   me: () => request<User>("/api/v1/auth/me"),
   // Responde igual exista o no el correo, así que no devuelve el usuario.
@@ -101,6 +113,17 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   logout: () => request<{ status: string }>("/api/v1/auth/logout", { method: "POST" }),
+  listAudit: (params: { action?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.action) q.set("action", params.action);
+    if (params.limit) q.set("limit", String(params.limit));
+    const cadena = q.toString();
+    return request<{ items: AuditEntry[] }>(`/api/v1/admin/audit${cadena ? `?${cadena}` : ""}`);
+  },
+  listUserSessions: (userId: string) =>
+    request<{ items: Session[] }>(`/api/v1/admin/users/${userId}/sessions`),
+  revokeUserSessions: (userId: string) =>
+    request<void>(`/api/v1/admin/users/${userId}/sessions`, { method: "DELETE" }),
   requestPasswordReset: (email: string) =>
     request<{ status: string }>("/api/v1/auth/password/reset-request", {
       method: "POST",
