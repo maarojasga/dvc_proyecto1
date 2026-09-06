@@ -388,14 +388,18 @@ function ResourceRow({
   async function handleFile(file: File) {
     setUploading(true);
     setError("");
+    let uploadUrl = "";
     try {
       const { upload_url } = await api.requestUploadUrl(versionId, r.ID, file.type || "application/octet-stream");
+      uploadUrl = upload_url;
       const putRes = await fetch(upload_url, { method: "PUT", body: file });
-      if (!putRes.ok) throw new Error("La subida al almacenamiento falló");
+      if (!putRes.ok) {
+        throw new Error(`La subida al almacenamiento falló (HTTP ${putRes.status}).`);
+      }
       await api.confirmUpload(versionId, r.ID);
       onChange();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo subir el archivo");
+      setError(mensajeDeSubida(e, uploadUrl));
     } finally {
       setUploading(false);
     }
@@ -521,4 +525,27 @@ function AddResourceForm({
       <button type="submit">Agregar recurso</button>
     </form>
   );
+}
+
+/**
+ * El navegador sube el archivo directamente al almacén de objetos, no a la
+ * API, así que un fallo ahí llega como un escueto "Failed to fetch" sin
+ * cabeceras ni estado. La causa casi siempre es de configuración —la URL
+ * prefirmada apunta a un host que solo existe dentro de la red de
+ * contenedores, o el almacén no permite el origen del navegador—, y el
+ * profesor no tiene por qué deducirla del devtools. La URL que se intentó
+ * abrir es el dato que lo distingue, así que se muestra.
+ */
+function mensajeDeSubida(e: unknown, uploadUrl: string): string {
+  if (e instanceof TypeError && uploadUrl) {
+    const host = (() => {
+      try {
+        return new URL(uploadUrl).host;
+      } catch {
+        return uploadUrl;
+      }
+    })();
+    return `No se pudo contactar con el almacenamiento en ${host}. Revisa que ese host sea alcanzable desde el navegador (S3_PUBLIC_ENDPOINT) y que permita peticiones desde este origen.`;
+  }
+  return e instanceof Error ? e.message : "No se pudo subir el archivo";
 }

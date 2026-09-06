@@ -35,6 +35,30 @@ De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
 3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
 protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
 
+### El host del almacén: interno frente al del navegador
+
+La API habla con MinIO por el nombre de la red del compose (`minio:9000`), pero
+las URLs prefirmadas —la de subida y la de descarga— las abre el **navegador**,
+que no resuelve ese nombre. Firmar contra el host interno produce exactamente
+esto:
+
+```
+PUT http://minio:9000/mooc/resources/.../original?X-Amz-Signature=...
+net::ERR_NAME_NOT_RESOLVED
+```
+
+No se arregla reescribiendo la URL después de firmarla: la firma SigV4 cubre la
+cabecera `Host`, así que cambiar el host invalida la firma. Por eso hay dos
+clientes: uno interno, que transfiere bytes, y otro que solo firma, apuntando a
+`S3_PUBLIC_ENDPOINT` (por defecto `localhost:${MINIO_API_PORT}`). El cliente de
+firma lleva la región fijada a propósito, porque si no minio-go la descubriría
+con una petición real contra un host que desde el contenedor no resuelve.
+
+Un fallo de subida arrastra al de publicación: sin objeto, el recurso se queda
+en `processing_status != ready`, y publicar responde `422` con el motivo
+`hay recursos visibles que aún no terminan de procesarse`. Si aparece ese 422,
+la causa suele estar una pantalla más atrás, en la subida.
+
 ### Entrega del contenido multimedia
 
 `S3_PUBLIC_URL` fija la base pública desde la que se sirven los objetos, que en
