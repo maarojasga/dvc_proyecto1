@@ -15,7 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/admin"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
@@ -105,7 +107,7 @@ func nuevoEntorno(t *testing.T) *entorno {
 	}
 	// Cada prueba parte de una base limpia. audit_logs se vacía aparte porque
 	// su disparador de inmutabilidad rechaza DELETE pero no TRUNCATE.
-	if _, err := pool.Exec(ctx, `TRUNCATE audit_logs, users CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE audit_logs, users, courses CASCADE`); err != nil {
 		t.Fatalf("limpieza: %v", err)
 	}
 
@@ -125,6 +127,8 @@ func nuevoEntorno(t *testing.T) *entorno {
 
 	handler := httpserver.NewRouter(httpserver.Deps{
 		Auth:         authSvc,
+		Admin:        admin.NewService(users),
+		Courses:      courses.NewService(postgres.NewCourseRepo(pool)),
 		Redis:        rdb,
 		CORSOrigin:   "http://localhost:3000",
 		CookieSecure: false,
@@ -239,6 +243,48 @@ func (e *entorno) entrar(correo, clave string) *cliente {
 		e.t.Fatalf("login: %d %s", res.Estado, res.Crudo)
 	}
 	return c
+}
+
+// asciendeA cambia el rol de una cuenta directamente en base. Es el atajo
+// para tener un administrador o un profesor, que por diseño no se crean por
+// registro público.
+func (e *entorno) asciendeA(correo string, rol string) {
+	e.t.Helper()
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE users SET role=$2 WHERE email=$1`, correo, rol); err != nil {
+		e.t.Fatalf("no se pudo asignar el rol %s a %s: %v", rol, correo, err)
+	}
+}
+
+// profesorConCurso deja una cuenta de profesor con un curso en borrador, y
+// devuelve el cliente autenticado junto con el identificador de la versión.
+func (e *entorno) profesorConCurso(correo, slug string) (*cliente, string) {
+	e.t.Helper()
+	e.registrarYVerificar(correo)
+	e.asciendeA(correo, "teacher")
+	c := e.entrar(correo, clavePrueba)
+
+	res := c.hacer(http.MethodPost, "/courses", map[string]string{
+		"slug": slug, "title": "Curso de prueba",
+	})
+	if res.Estado != http.StatusCreated {
+		e.t.Fatalf("crear curso: %d %s", res.Estado, res.Crudo)
+	}
+	versionID, _ := res.campo(e.t, "version_id").(string)
+	if versionID == "" {
+		e.t.Fatalf("no se pudo leer el id de la versión: %s", res.Crudo)
+	}
+	return c, versionID
+}
+
+// consultarTexto devuelve un único valor de texto.
+func (e *entorno) consultarTexto(consulta string, args ...any) string {
+	e.t.Helper()
+	var v string
+	if err := e.pool.QueryRow(context.Background(), consulta, args...).Scan(&v); err != nil {
+		e.t.Fatalf("consulta %q: %v", consulta, err)
+	}
+	return v
 }
 
 func (e *entorno) contar(consulta string, args ...any) int {

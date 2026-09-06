@@ -260,6 +260,62 @@ type AuditEntry struct {
 	IPAddress   string
 }
 
+// ListAuditFilter acota la consulta de la bitácora.
+type ListAuditFilter struct {
+	Action  string
+	ActorID *uuid.UUID
+	Limit   int
+	Offset  int
+}
+
+// AuditRecord es una entrada de la bitácora tal como se consulta.
+type AuditRecord struct {
+	ID         uuid.UUID
+	ActorID    *uuid.UUID
+	ActorEmail string
+	Action     string
+	EntityType string
+	EntityID   string
+	Metadata   []byte
+	IPAddress  string
+	CreatedAt  time.Time
+}
+
+// ListAudit devuelve la bitácora más reciente primero.
+//
+// El correo del actor se resuelve con LEFT JOIN porque la referencia queda a
+// NULL si la cuenta se borra: el hecho auditado debe sobrevivir a su autor.
+func (r *UserRepo) ListAudit(ctx context.Context, f ListAuditFilter) ([]*AuditRecord, error) {
+	limit := f.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT a.id, a.actor_user_id, coalesce(u.email, ''), a.action, a.entity_type,
+		       coalesce(a.entity_id, ''), a.metadata, coalesce(a.ip_address, ''), a.created_at
+		  FROM audit_logs a
+		  LEFT JOIN users u ON u.id = a.actor_user_id
+		 WHERE ($1 = '' OR a.action = $1)
+		   AND ($2::uuid IS NULL OR a.actor_user_id = $2)
+		 ORDER BY a.created_at DESC, a.id DESC
+		 LIMIT $3 OFFSET $4`, f.Action, f.ActorID, limit, f.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*AuditRecord
+	for rows.Next() {
+		var a AuditRecord
+		if err := rows.Scan(&a.ID, &a.ActorID, &a.ActorEmail, &a.Action, &a.EntityType,
+			&a.EntityID, &a.Metadata, &a.IPAddress, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, &a)
+	}
+	return out, rows.Err()
+}
+
 func (r *UserRepo) InsertAudit(ctx context.Context, e AuditEntry) error {
 	meta := e.Metadata
 	if meta == nil {

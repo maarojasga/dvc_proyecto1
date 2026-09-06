@@ -21,8 +21,8 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 | # | Punto | Estado |
 |---|---|---|
 | 1 | Registro, verificación de correo, sesiones revocables y recuperación | Completo, con pruebas de integración |
-| 2 | Gestión administrativa de usuarios | Parcial: usuarios, rol, estado y protección del último administrador. Falta consulta de auditoría y gestión de sesiones desde administración |
-| 3 | Autoría, jerarquía y versiones | Casi completo: jerarquía de cuatro niveles, `stable_id`, validación exhaustiva de publicación, publicar/despublicar. Falta previsualización |
+| 2 | Gestión administrativa de usuarios | Completo: usuarios, roles, estados, sesiones (ver y cerrar), consulta de la bitácora inmutable y protección del último administrador activo |
+| 3 | Autoría, jerarquía y versiones | Completo: jerarquía de cuatro niveles con `stable_id`, ordenamiento, previsualización, validación exhaustiva de publicación y versiones publicadas inmutables |
 | 4 | Editor de bloques con autosave y Markdown canónico | No: hoy son campos de texto Markdown sin autosave |
 | 5 | Carga multimedia | Parcial: PUT prefirmado de 24 h. Falta multipart reanudable, checksum, MIME real y antimalware |
 | 6 | Procesamiento asíncrono a HLS | Casi completo: worker asynq con FFmpeg, original conservado, idempotencia por clave de tarea, reintentos y DLQ. Falta CDN |
@@ -106,11 +106,12 @@ npm ci && npm run lint && npm run typecheck && npm run build
 Sin `TEST_DATABASE_URL` y `TEST_REDIS_ADDR`, las pruebas de integración se
 omiten en lugar de fallar y solo corren las unitarias.
 
-El backend trae 46 pruebas: las de dominio corren siempre y las 23 de
-integración ejercen la API de identidad contra PostgreSQL y Redis reales,
-porque lo que verifican (unicidad, consumo atómico de tokens, revocación
-inmediata, límites de tasa, inmutabilidad de la auditoría) vive en esos
-adaptadores y un doble de prueba no lo demostraría.
+El backend trae 68 pruebas: las de dominio corren siempre y las de integración
+ejercen la API contra PostgreSQL y Redis reales, porque lo que verifican
+—unicidad, consumo atómico de tokens, revocación inmediata, inmutabilidad de
+una versión publicada, alcance de cada mutación a su propia versión, límites de
+tasa e inmutabilidad de la auditoría— vive en esos adaptadores y un doble de
+prueba no lo demostraría.
 
 ### Recorrido manual del flujo de identidad
 
@@ -123,15 +124,21 @@ respuesta HTTP: hacerlo permitiría activar cuentas ajenas.
 3. Entrar en http://localhost:3000/login
 4. Revisar y revocar sesiones en http://localhost:3000/cuenta/sesiones
 
+Para la autoría y la administración hace falta un profesor o un administrador,
+que por diseño no se crean por registro público: un administrador invita
+profesores desde http://localhost:3000/admin, y el primer administrador se
+siembra con `ADMIN_EMAIL` y `ADMIN_PASSWORD` en el `.env`.
+
 ## Pendientes para las siguientes iteraciones
 
 Ordenados por lo que más falta para la demostración de aceptación:
 
 - **Quizzes, progreso e insignias** (puntos 8 y 9). El dominio ya está escrito
   y probado; falta el repositorio, la API y la interfaz que lo usen.
+- **Editor de bloques** (punto 4): hoy la autoría usa campos de texto Markdown
+  sin autosave ni AST canónico.
 - **Consumo de contenido** (punto 7): visor PDF y reproductor HLS con
   reanudación desde la última posición reportada.
-- **Editor de bloques** (punto 4) con autosave y Markdown extendido canónico.
 - **Carga multimedia** (punto 5): multipart reanudable, verificación de
   checksum, MIME real y escaneo antimalware. Los ayudantes multipart ya están
   en `internal/platform/storage`, pero ningún endpoint los usa todavía.

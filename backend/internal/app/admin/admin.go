@@ -25,6 +25,35 @@ func (s *Service) ListUsers(ctx context.Context, f postgres.ListUsersFilter) ([]
 	return s.users.List(ctx, f)
 }
 
+// ListAudit consulta la bitácora inmutable.
+func (s *Service) ListAudit(ctx context.Context, f postgres.ListAuditFilter) ([]*postgres.AuditRecord, error) {
+	return s.users.ListAudit(ctx, f)
+}
+
+// ListUserSessions muestra las sesiones activas de una cuenta, para que la
+// administración pueda ver desde dónde está abierta antes de cerrarla.
+func (s *Service) ListUserSessions(ctx context.Context, targetID uuid.UUID) ([]*user.Session, error) {
+	if _, err := s.users.GetByID(ctx, targetID); err != nil {
+		return nil, err
+	}
+	return s.users.ListActiveSessions(ctx, targetID, time.Now().UTC())
+}
+
+// RevokeUserSessions cierra todas las sesiones de una cuenta sin cambiar su
+// estado. Es la expulsión inmediata que se necesita ante un acceso
+// comprometido, sin llegar a suspender la cuenta.
+func (s *Service) RevokeUserSessions(ctx context.Context, actor *user.User, targetID uuid.UUID) error {
+	target, err := s.users.GetByID(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if err := s.users.RevokeAllSessionsForUser(ctx, target.ID, now); err != nil {
+		return err
+	}
+	return s.audit(ctx, actor, "user.sessions_revoked", target.ID, nil)
+}
+
 // UpdateRole cambia el rol de un usuario, rechazando la operación si dejaría
 // al sistema sin administradores activos.
 func (s *Service) UpdateRole(ctx context.Context, actor *user.User, targetID uuid.UUID, newRole user.Role) error {

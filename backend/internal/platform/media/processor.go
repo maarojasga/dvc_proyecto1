@@ -67,14 +67,14 @@ func (p *Processor) HandleProcessMedia(ctx context.Context, t *asynq.Task) error
 	hlsKey, err := p.transcode(ctx, payload)
 	if err != nil {
 		_ = p.Assets.MarkFailed(ctx, asset.ID, err.Error())
-		_ = p.Courses.SetResourceProcessingStatus(ctx, payload.ResourceID, coursedomain.ProcessingFailed)
+		_ = p.Courses.SetResourceProcessingStatusInternal(ctx, payload.ResourceID, coursedomain.ProcessingFailed)
 		return err // asynq reintentará con backoff hasta queue.MaxRetry, luego DLQ.
 	}
 
 	if err := p.Assets.MarkReady(ctx, asset.ID, hlsKey); err != nil {
 		return err
 	}
-	return p.Courses.SetResourceProcessingStatus(ctx, payload.ResourceID, coursedomain.ProcessingReady)
+	return p.Courses.SetResourceProcessingStatusInternal(ctx, payload.ResourceID, coursedomain.ProcessingReady)
 }
 
 func (p *Processor) transcode(ctx context.Context, payload queue.MediaProcessPayload) (hlsMasterKey string, err error) {
