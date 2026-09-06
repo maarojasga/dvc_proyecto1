@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	ErrForbidden      = errors.New("courses: no tienes permiso sobre este curso")
+	ErrForbidden       = errors.New("courses: no tienes permiso sobre este curso")
 	ErrVersionNotDraft = errors.New("courses: la versión no es un borrador editable")
 )
 
@@ -43,12 +43,12 @@ func (s *Service) CreateDraft(ctx context.Context, teacher *user.User, slug, tit
 	}
 
 	v := &domain.Version{
-		ID:            uuid.New(),
-		CourseID:      c.ID,
-		VersionNumber: 1,
-		Status:        domain.VersionDraft,
-		Title:         title,
-		Language:      "es",
+		ID:                           uuid.New(),
+		CourseID:                     c.ID,
+		VersionNumber:                1,
+		Status:                       domain.VersionDraft,
+		Title:                        title,
+		Language:                     "es",
 		ApprovalMinScore:             60,
 		ApprovalRequiredResourcesPct: 100,
 		CreatedAt:                    now,

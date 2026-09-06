@@ -20,8 +20,8 @@ const (
 )
 
 var (
-	ErrAlreadyEnrolled  = errors.New("enrollment: el estudiante ya está inscrito y activo en este curso")
-	ErrNotEnrolled      = errors.New("enrollment: el estudiante no está inscrito en este curso")
+	ErrAlreadyEnrolled    = errors.New("enrollment: el estudiante ya está inscrito y activo en este curso")
+	ErrNotEnrolled        = errors.New("enrollment: el estudiante no está inscrito en este curso")
 	ErrCourseNotPublished = errors.New("enrollment: el curso no tiene una versión publicada")
 )
 

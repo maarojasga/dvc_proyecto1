@@ -31,8 +31,9 @@ export default function RegisterPage() {
       <div style={{ maxWidth: 480 }}>
         <h1>Revisa tu correo</h1>
         <p className="success-banner">
-          Te enviamos un enlace de verificación a <strong>{email}</strong>. Confírmalo para poder iniciar sesión.
-          En desarrollo, revisa Mailpit en http://localhost:8025.
+          Si <strong>{email}</strong> está disponible, enviamos un enlace de verificación.
+          Confírmalo para poder iniciar sesión. En desarrollo, revisa Mailpit en
+          http://localhost:8025.
         </p>
         <Link href="/login">Ir a iniciar sesión</Link>
       </div>

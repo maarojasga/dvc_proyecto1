@@ -11,17 +11,17 @@ import (
 )
 
 type MediaAsset struct {
-	ID                 uuid.UUID
-	ResourceID         uuid.UUID
-	OriginalObjectKey  string
-	MimeType           string
-	SizeBytes          int64
-	ChecksumSHA256     string
-	Status             string
-	HLSMasterKey       string
-	FailureReason      string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                uuid.UUID
+	ResourceID        uuid.UUID
+	OriginalObjectKey string
+	MimeType          string
+	SizeBytes         int64
+	ChecksumSHA256    string
+	Status            string
+	HLSMasterKey      string
+	FailureReason     string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type MediaRepo struct{ pool *pgxpool.Pool }

@@ -29,6 +29,7 @@ export function NavBar() {
         {!loading && user && (
           <span className="row">
             <span className="badge">{user.full_name} · {user.role}</span>
+            <Link href="/cuenta/sesiones">Sesiones</Link>
             <button className="secondary" onClick={handleLogout}>
               Cerrar sesión
             </button>

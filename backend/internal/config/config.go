@@ -25,9 +25,9 @@ type Config struct {
 	SMTPPort string
 	SMTPFrom string
 
-	SessionTTL       time.Duration
-	PublicBaseURL    string // URL pública del frontend, para links de verificación/reseteo
-	CookieSecure     bool
+	SessionTTL    time.Duration
+	PublicBaseURL string // URL pública del frontend, para links de verificación/reseteo
+	CookieSecure  bool
 }
 
 // Load construye la configuración a partir de variables de entorno, con valores

@@ -19,15 +19,15 @@ import (
 )
 
 type Deps struct {
-	Auth        *auth.Service
-	Admin       *admin.Service
-	Courses     *courses.Service
-	Enrollments *enrollments.Service
-	Media       *postgres.MediaRepo
-	Storage     *storage.Client
-	Redis       *redis.Client
-	Queue       *asynq.Client
-	CORSOrigin  string
+	Auth         *auth.Service
+	Admin        *admin.Service
+	Courses      *courses.Service
+	Enrollments  *enrollments.Service
+	Media        *postgres.MediaRepo
+	Storage      *storage.Client
+	Redis        *redis.Client
+	Queue        *asynq.Client
+	CORSOrigin   string
 	CookieSecure bool
 }
 
@@ -47,6 +47,8 @@ func NewRouter(d Deps) http.Handler {
 		Logging,
 		SecurityHeaders,
 		CORS(d.CORSOrigin),
+		CSRF,
+		Idempotency(d.Redis),
 	)
 }
 
