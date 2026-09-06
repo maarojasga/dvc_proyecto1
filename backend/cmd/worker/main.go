@@ -37,7 +37,8 @@ func main() {
 
 	storageClient, err := storage.New(ctx, storage.Config{
 		Endpoint: cfg.S3Endpoint, AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey,
-		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, PublicURL: cfg.S3PublicURL,
+		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, Region: cfg.S3Region, PublicURL: cfg.S3PublicURL,
+		PublicEndpoint: cfg.S3PublicEndpoint, PublicUseSSL: cfg.S3PublicUseSSL,
 	})
 	if err != nil {
 		log.Error("worker: storage", "error", err)
