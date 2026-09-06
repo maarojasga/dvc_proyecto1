@@ -407,6 +407,74 @@ paths:
         "403": { $ref: '#/components/responses/Error' }
         "404": { $ref: '#/components/responses/Error' }
 
+  /admin/queues:
+    get:
+      tags: [Administración]
+      summary: Estado de las colas y de la dead-letter queue
+      description: >
+        Evidencia de que el backoff y la dead-letter queue operan: `archived`
+        cuenta los trabajos que agotaron sus reintentos, los mismos que
+        dispararon la alerta del worker.
+      operationId: listQueues
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Colas y tareas archivadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queues:
+                    type: array
+                    items: { $ref: '#/components/schemas/QueueInfo' }
+                  dead_letter:
+                    type: array
+                    items: { $ref: '#/components/schemas/DeadTask' }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "503":
+          description: La instancia no tiene inspección de cola configurada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/queues/{queue}/dead/{taskId}/retry:
+    post:
+      tags: [Administración]
+      summary: Reencolar una tarea archivada
+      description: >
+        Conserva el identificador de la tarea, que es su clave de
+        idempotencia: el reintento no puede producir una segunda salida de
+        algo que ya se completó.
+      operationId: retryDeadTask
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: queue
+          in: path
+          required: true
+          schema: { type: string }
+        - name: taskId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        "200":
+          description: Tarea reencolada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: requeued }
+                  task_id: { type: string }
+                  queue: { type: string }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+        "503": { $ref: '#/components/responses/Error' }
+
   /courses:
     post:
       summary: Crea un curso nuevo con su primera versión en borrador
@@ -645,6 +713,58 @@ paths:
         "200": { description: Versión publicada con su árbol de contenido. }
         "404": { description: El curso no tiene versión publicada. }
 
+  /resources/{resourceId}/playback:
+    get:
+      tags: [Multimedia]
+      summary: URL de reproducción HLS de un recurso
+      description: >
+        Devuelve la lista maestra HLS del recurso. La autorización ocurre antes
+        de resolver ninguna URL: el recurso debe pertenecer a la versión
+        vigente del curso, ser visible, y quien lo pide debe estar inscrito
+        (el profesor dueño y la administración pasan sin inscripción). Un
+        recurso oculto, de un borrador o de una versión retirada responde como
+        inexistente.
+
+
+        La URL procede del CDN cuando `S3_PUBLIC_URL` está configurado, y de
+        una firma temporal en caso contrario. El reproductor pide los segmentos
+        con rutas relativas al manifiesto, así que su autorización la resuelve
+        el CDN.
+      operationId: resourcePlayback
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: URL de reproducción.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, format: uri }
+                  type: { type: string, example: application/vnd.apple.mpegurl }
+                  expires_in:
+                    type: integer
+                    description: Segundos de validez cuando la URL va firmada.
+                  cdn:
+                    type: boolean
+                    description: Indica si la entrega se hace por CDN, en cuyo caso la URL no caduca.
+        "401": { $ref: '#/components/responses/Error' }
+        "404":
+          description: El recurso no existe, está oculto o quien lo pide no está inscrito.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "409":
+          description: El recurso existe pero su transcodificación no ha terminado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
   /enrollments:
     post:
       summary: Inscribe al estudiante autenticado en un curso publicado
@@ -746,6 +866,27 @@ components:
         metadata: { type: object, additionalProperties: true }
         ip_address: { type: string }
         created_at: { type: string, format: date-time }
+    QueueInfo:
+      type: object
+      properties:
+        queue: { type: string }
+        pending: { type: integer }
+        active: { type: integer }
+        retry: { type: integer }
+        archived:
+          type: integer
+          description: Trabajos que agotaron sus reintentos y están en la dead-letter queue.
+        completed: { type: integer }
+        failed: { type: integer }
+    DeadTask:
+      type: object
+      properties:
+        id: { type: string }
+        queue: { type: string }
+        type: { type: string }
+        last_error: { type: string }
+        last_failed_at: { type: string, format: date-time }
+        retried: { type: integer }
     Session:
       type: object
       required: [id, created_at, expires_at, current]

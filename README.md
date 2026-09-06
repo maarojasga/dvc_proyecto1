@@ -25,7 +25,7 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 | 3 | Autoría, jerarquía y versiones | Completo: jerarquía de cuatro niveles con `stable_id`, ordenamiento, previsualización, validación exhaustiva de publicación y versiones publicadas inmutables |
 | 4 | Editor de bloques con autosave y Markdown canónico | No: hoy son campos de texto Markdown sin autosave |
 | 5 | Carga multimedia | Parcial: PUT prefirmado de 24 h. Falta multipart reanudable, checksum, MIME real y antimalware |
-| 6 | Procesamiento asíncrono a HLS | Casi completo: worker asynq con FFmpeg, original conservado, idempotencia por clave de tarea, reintentos y DLQ. Falta CDN |
+| 6 | Procesamiento asíncrono a HLS | Completo: worker asynq con FFmpeg sin upscaling, original conservado, toma exclusiva del trabajo, reintentos con backoff, dead-letter queue con alerta y entrega autorizada por CDN |
 | 7 | Visor PDF y reproducción adaptativa | No |
 | 8 | Quizzes | No: el dominio existe con pruebas, pero sin repositorio, API ni interfaz |
 | 9 | Progreso e insignias | No: igual que quizzes |
@@ -34,6 +34,18 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
 3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
 protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
+
+### Entrega del contenido multimedia
+
+`S3_PUBLIC_URL` fija la base pública desde la que se sirven los objetos, que en
+producción es el CDN. Con ella configurada, `GET /resources/{id}/playback`
+devuelve la URL del manifiesto en el CDN; sin ella, devuelve una URL firmada de
+15 minutos.
+
+El reproductor pide los segmentos con rutas relativas al manifiesto, así que su
+autorización la resuelve el CDN. Sin CDN delante, el prefijo `hls/` del bucket
+debe ser legible por el reproductor: firmar solo el manifiesto no alcanza para
+los segmentos.
 
 ## Estructura del repositorio
 
@@ -106,12 +118,18 @@ npm ci && npm run lint && npm run typecheck && npm run build
 Sin `TEST_DATABASE_URL` y `TEST_REDIS_ADDR`, las pruebas de integración se
 omiten en lugar de fallar y solo corren las unitarias.
 
-El backend trae 68 pruebas: las de dominio corren siempre y las de integración
+El backend trae 93 pruebas: las de dominio corren siempre y las de integración
 ejercen la API contra PostgreSQL y Redis reales, porque lo que verifican
 —unicidad, consumo atómico de tokens, revocación inmediata, inmutabilidad de
-una versión publicada, alcance de cada mutación a su propia versión, límites de
-tasa e inmutabilidad de la auditoría— vive en esos adaptadores y un doble de
-prueba no lo demostraría.
+una versión publicada, alcance de cada mutación a su propia versión, toma
+exclusiva de un trabajo de transcodificación, límites de tasa e inmutabilidad
+de la auditoría— vive en esos adaptadores y un doble de prueba no lo
+demostraría.
+
+La transcodificación en sí no se ejercita en las pruebas: exige FFmpeg y
+almacenamiento de objetos. Lo que sí se prueba es todo lo que la rodea, que es
+donde estaban los fallos: la exclusión mutua entre entregas, la conservación
+del original, la lista maestra HLS y la alerta al agotar los reintentos.
 
 ### Recorrido manual del flujo de identidad
 
@@ -138,7 +156,8 @@ Ordenados por lo que más falta para la demostración de aceptación:
 - **Editor de bloques** (punto 4): hoy la autoría usa campos de texto Markdown
   sin autosave ni AST canónico.
 - **Consumo de contenido** (punto 7): visor PDF y reproductor HLS con
-  reanudación desde la última posición reportada.
+  reanudación desde la última posición reportada. La URL de reproducción ya la
+  entrega la API; falta el reproductor.
 - **Carga multimedia** (punto 5): multipart reanudable, verificación de
   checksum, MIME real y escaneo antimalware. Los ayudantes multipart ya están
   en `internal/platform/storage`, pero ningún endpoint los usa todavía.

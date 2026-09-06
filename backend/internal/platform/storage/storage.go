@@ -52,6 +52,11 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	return &Client{mc: mc, bucket: cfg.Bucket, publicURL: cfg.PublicURL}, nil
 }
 
+// SirveDesdeCDN informa si los objetos se entregan por una base pública en
+// lugar de firmarse uno a uno. Lo expone la API para que el cliente sepa si
+// la URL que recibe caduca.
+func (c *Client) SirveDesdeCDN() bool { return c.publicURL != "" }
+
 // PresignedPutURL emite una URL prefirmada de subida directa (carga
 // multipart directa a objetos, sin pasar por la API).
 func (c *Client) PresignedPutURL(ctx context.Context, objectKey string, expiry time.Duration) (string, error) {

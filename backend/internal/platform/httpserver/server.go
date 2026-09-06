@@ -19,14 +19,18 @@ import (
 )
 
 type Deps struct {
-	Auth         *auth.Service
-	Admin        *admin.Service
-	Courses      *courses.Service
-	Enrollments  *enrollments.Service
-	Media        *postgres.MediaRepo
-	Storage      *storage.Client
+	Auth        *auth.Service
+	Admin       *admin.Service
+	Courses     *courses.Service
+	Enrollments *enrollments.Service
+	Media       *postgres.MediaRepo
+	Storage     *storage.Client
+	// Entrega resuelve las URL de lectura. En producción es el mismo cliente
+	// de Storage; se declara aparte porque la reproducción solo necesita eso.
+	Entrega      EntregaDeObjetos
 	Redis        *redis.Client
 	Queue        *asynq.Client
+	Inspector    *asynq.Inspector
 	CORSOrigin   string
 	CookieSecure bool
 }
@@ -40,6 +44,8 @@ func NewRouter(d Deps) http.Handler {
 	h.registerAdmin(mux)
 	h.registerCourses(mux)
 	h.registerEnrollments(mux)
+	h.registerMedia(mux)
+	h.registerOperacion(mux)
 
 	return Chain(mux,
 		RequestID,

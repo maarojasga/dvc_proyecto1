@@ -79,7 +79,9 @@ func main() {
 
 	router := httpserver.NewRouter(httpserver.Deps{
 		Auth: authSvc, Admin: adminSvc, Courses: coursesSvc, Enrollments: enrollmentsSvc,
-		Media: mediaRepo, Storage: storageClient, Redis: rdb, Queue: queueClient,
+		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
+		Redis: rdb, Queue: queueClient,
+		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
 	})
 
