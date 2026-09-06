@@ -8,6 +8,7 @@ import (
 
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
@@ -77,6 +78,8 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusConflict, "already_enrolled", nil
 	case errors.Is(err, enrollment.ErrNotEnrolled):
 		return http.StatusNotFound, "not_enrolled", nil
+	case errors.Is(err, enrollments.ErrMediaNoLista):
+		return http.StatusConflict, "media_not_ready", nil
 	case errors.Is(err, enrollment.ErrCourseNotPublished):
 		return http.StatusConflict, "course_not_published", nil
 	case errors.Is(err, ErrUnauthenticated):
@@ -89,6 +92,8 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusForbidden, "csrf_token_mismatch", nil
 	case errors.Is(err, ErrIdempotencyInFlight):
 		return http.StatusConflict, "idempotency_in_flight", nil
+	case errors.Is(err, ErrColaNoDisponible):
+		return http.StatusServiceUnavailable, "queue_unavailable", nil
 	default:
 		return http.StatusInternalServerError, "internal_error", nil
 	}

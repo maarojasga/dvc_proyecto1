@@ -290,6 +290,45 @@ func (r *CourseRepo) GetResource(ctx context.Context, versionID, id uuid.UUID) (
 // Es para los workers: su autoridad viene del trabajo encolado por la API, no
 // de una sesión de usuario, así que no hay una versión autorizada contra la
 // que acotar. No debe usarse desde un handler HTTP.
+// RecursoPublicadoConMedia describe un recurso de la versión vigente de su
+// curso junto con el estado de su activo multimedia.
+type RecursoPublicadoConMedia struct {
+	CourseID     uuid.UUID
+	TeacherID    uuid.UUID
+	Type         string
+	Visible      bool
+	AssetStatus  string
+	HLSMasterKey string
+}
+
+// GetRecursoPublicadoConMedia resuelve un recurso solo si pertenece a la
+// versión vigente del curso.
+//
+// La condición sobre current_published_version_id va en la consulta: así un
+// recurso de un borrador o de una versión retirada no se puede reproducir
+// aunque se conozca su identificador.
+func (r *CourseRepo) GetRecursoPublicadoConMedia(ctx context.Context, resourceID uuid.UUID) (*RecursoPublicadoConMedia, error) {
+	var out RecursoPublicadoConMedia
+	err := r.pool.QueryRow(ctx, `
+		SELECT c.id, c.teacher_id, res.type, res.visible,
+		       coalesce(ma.status, ''), coalesce(ma.hls_master_key, '')
+		  FROM resources res
+		  JOIN units u   ON u.id = res.unit_id
+		  JOIN modules m ON m.id = u.module_id
+		  JOIN course_versions v ON v.id = m.course_version_id
+		  JOIN courses c ON c.id = v.course_id AND c.current_published_version_id = v.id
+		  LEFT JOIN media_assets ma ON ma.resource_id = res.id
+		 WHERE res.id = $1`, resourceID).
+		Scan(&out.CourseID, &out.TeacherID, &out.Type, &out.Visible, &out.AssetStatus, &out.HLSMasterKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (r *CourseRepo) SetResourceProcessingStatusInternal(ctx context.Context, id uuid.UUID, status course.ProcessingStatus) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE resources SET processing_status=$2, updated_at=now() WHERE id=$1`, id, status)

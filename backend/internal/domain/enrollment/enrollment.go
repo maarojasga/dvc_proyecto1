@@ -41,6 +41,13 @@ type Enrollment struct {
 }
 
 // Withdraw retira al estudiante conservando el historial de progreso.
+// DaAccesoAlContenido informa si la inscripción habilita a consultar el
+// curso. Retirarse lo corta; completar o aprobar no: quien terminó un curso
+// conserva el acceso a su material.
+func (e *Enrollment) DaAccesoAlContenido() bool {
+	return e.Status != StatusWithdrawn
+}
+
 func (e *Enrollment) Withdraw(now time.Time) error {
 	if e.Status == StatusWithdrawn {
 		return nil

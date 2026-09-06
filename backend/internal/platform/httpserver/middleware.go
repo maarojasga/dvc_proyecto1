@@ -24,6 +24,10 @@ var (
 	// ErrIdempotencyInFlight indica que otra petición con la misma
 	// Idempotency-Key sigue ejecutándose.
 	ErrIdempotencyInFlight = errors.New("httpserver: ya hay una petición idéntica en curso")
+
+	// ErrColaNoDisponible indica que la instancia no tiene inspector de cola
+	// configurado, así que no puede informar de su estado.
+	ErrColaNoDisponible = errors.New("httpserver: la inspección de la cola no está disponible")
 )
 
 type ctxKey int

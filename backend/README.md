@@ -40,6 +40,8 @@ por duplicado.
 | La propiedad se comprueba dentro del `UPDATE` al revocar | No hay ventana entre comprobar y actuar, y una sesión ajena responde igual que una inexistente. |
 | Auditoría con disparador que rechaza `UPDATE` y `DELETE` | La bitácora es inmutable en la propia base, no por convención. |
 | Límite de tasa en Redis, no en memoria | El cupo es del servicio, así que escalar a N réplicas no multiplica por N el margen del atacante. |
+| Tomar un trabajo de transcodificación es un `UPDATE` condicional | Dos entregas del mismo trabajo se resuelven en la base: solo una transcodifica, así que una entrega duplicada no produce salidas repetidas. |
+| El arrendamiento del trabajo vence | Si el worker que lo tomó muere, otro lo recoge en vez de dejar el recurso atascado en `processing` para siempre. |
 
 ## Puesta en marcha
 
@@ -83,6 +85,7 @@ omiten en lugar de fallar.
 | `DATABASE_URL` | `postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable` | Fuente de verdad transaccional. |
 | `REDIS_ADDR` | `localhost:6379` | Límites de tasa, idempotencia y cola asynq. |
 | `S3_ENDPOINT`, `S3_BUCKET` | `localhost:9000`, `mooc` | Almacenamiento de objetos. |
+| `S3_PUBLIC_URL` | — | Base pública (CDN) desde la que se sirven los objetos. Vacío: se firman uno a uno. |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_USE_SSL` | — | Credenciales del almacenamiento. |
 | `PUBLIC_BASE_URL` | `http://localhost:3000` | Base de los enlaces de los correos y origen permitido por CORS. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | `localhost`, `1025`, `no-reply@mooc.local` | Servidor de correo saliente. |

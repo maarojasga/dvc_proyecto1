@@ -164,3 +164,32 @@ func TestElAltaDeProfesorEsSoloPorAdministracion(t *testing.T) {
 		t.Errorf("un alta duplicada debería informar al administrador, llegó %d", repetida.Estado)
 	}
 }
+
+func TestSoloElAdministradorInspeccionaLasColas(t *testing.T) {
+	env := nuevoEntorno(t)
+	env.registrarYVerificar("estudiante@example.com")
+	estudiante := env.entrar("estudiante@example.com", clavePrueba)
+
+	if res := estudiante.hacer(http.MethodGet, "/admin/queues", nil); res.Estado != http.StatusForbidden {
+		t.Errorf("un estudiante debería recibir 403, llegó %d", res.Estado)
+	}
+	if res := env.cliente().hacer(http.MethodGet, "/admin/queues", nil); res.Estado != http.StatusUnauthorized {
+		t.Errorf("sin sesión debería ser 401, llegó %d", res.Estado)
+	}
+}
+
+func TestSinInspectorLaOperacionResponde503(t *testing.T) {
+	env := nuevoEntorno(t)
+	admin := env.admin("admin@example.com")
+
+	// El entorno de pruebas no monta inspector. La API debe decir que la
+	// función no está disponible, no fingir que las colas están vacías: un
+	// cuadro de mando en blanco se lee como "todo bien".
+	res := admin.hacer(http.MethodGet, "/admin/queues", nil)
+	if res.Estado != http.StatusServiceUnavailable {
+		t.Fatalf("%d %s", res.Estado, res.Crudo)
+	}
+	if codigo := res.campo(t, "error", "code"); codigo != "queue_unavailable" {
+		t.Errorf("código inesperado: %v", codigo)
+	}
+}

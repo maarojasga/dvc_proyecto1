@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -18,7 +19,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/admin"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
-	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
@@ -79,6 +80,17 @@ func (b *buzon) tokenPara(t *testing.T, destino string) string {
 	return ""
 }
 
+// entregaPorCDN hace de almacenamiento servido tras un CDN. Las pruebas de
+// reproducción verifican la autorización, no la firma de objetos, así que no
+// necesitan MinIO levantado.
+type entregaPorCDN struct{ base string }
+
+func (e entregaPorCDN) PresignedGetURL(_ context.Context, objectKey string, _ time.Duration, _ string) (string, error) {
+	return e.base + "/" + objectKey, nil
+}
+
+func (e entregaPorCDN) SirveDesdeCDN() bool { return true }
+
 type entorno struct {
 	t       *testing.T
 	handler http.Handler
@@ -126,10 +138,13 @@ func nuevoEntorno(t *testing.T) *entorno {
 	authSvc := auth.NewService(users, mailer.NewWithSender(correos, "pruebas@mooc.local"),
 		"http://localhost:3000", user.DefaultSessionTTL)
 
+	cursos := postgres.NewCourseRepo(pool)
 	handler := httpserver.NewRouter(httpserver.Deps{
 		Auth:         authSvc,
 		Admin:        admin.NewService(users),
-		Courses:      courses.NewService(postgres.NewCourseRepo(pool)),
+		Courses:      courses.NewService(cursos),
+		Enrollments:  enrollments.NewService(postgres.NewEnrollmentRepo(pool), cursos),
+		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
 		Redis:        rdb,
 		CORSOrigin:   "http://localhost:3000",
 		CookieSecure: false,
