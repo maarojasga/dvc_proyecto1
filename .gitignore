@@ -41,3 +41,10 @@ Thumbs.db
 # verificar (lo escribe en su directorio de trabajo, que suele ser backend/).
 # Es un artefacto de la maquina, no del proyecto.
 dump.rdb
+
+# Artefactos de las pruebas de navegador. El informe y las trazas se generan en
+# cada ejecución y en CI se suben como evidencia; en el repositorio solo
+# ensucian.
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
