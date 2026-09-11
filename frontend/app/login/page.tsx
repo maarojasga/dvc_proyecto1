@@ -59,7 +59,17 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              style={{ background: "transparent", border: "none", color: "#3b82f6", cursor: "pointer", fontSize: "0.8rem", padding: "0 4px", textDecoration: "underline" }}
+              // El token del sistema, no un azul a mano: #3b82f6 a este tamaño daba
+              // 3.67:1 sobre blanco, por debajo del 4.5:1 que exige WCAG AA.
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--color-primary)",
+                cursor: "pointer",
+                fontSize: "0.8rem",
+                padding: "0 4px",
+                textDecoration: "underline",
+              }}
             >
               {showPassword ? "Ocultar" : "Mostrar"}
             </button>

@@ -433,7 +433,11 @@ function ResourceRow({
         </span>
         {editable && BINARY_TYPES.has(r.Type) && (
           <label className="row" style={{ marginBottom: 0 }}>
-            <span className="badge" style={{ cursor: uploading ? "not-allowed" : "pointer", background: uploading ? "#3b82f6" : undefined, color: uploading ? "white" : undefined }}>
+            <span className="badge" style={{
+                cursor: uploading ? "not-allowed" : "pointer",
+                background: uploading ? "var(--color-primary)" : undefined,
+                color: uploading ? "var(--color-primary-contrast)" : undefined,
+              }}>
               {etiqueta}
             </span>
             <input
@@ -503,12 +507,12 @@ function ResourceRow({
           aria-valuenow={porcentaje}
           aria-valuemin={0}
           aria-valuemax={100}
-          style={{ width: "100%", background: "#e5e7eb", borderRadius: "999px", height: "6px", overflow: "hidden" }}
+          style={{ width: "100%", background: "var(--color-border)", borderRadius: "999px", height: "6px", overflow: "hidden" }}
         >
           <div
             style={{
               width: `${porcentaje}%`,
-              background: "#3b82f6",
+              background: "var(--color-primary)",
               height: "100%",
               transition: "width 0.3s ease-in-out",
             }}

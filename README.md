@@ -14,6 +14,13 @@ Administradores, profesores y estudiantes; jerarquía Curso → Módulo → Unid
 Recurso; multimedia con procesamiento asíncrono a HLS; quizzes calificados en
 servidor; progreso validado e insignias digitales verificables.
 
+## Documentación
+
+- `docs/arquitectura.md` — decisiones de arquitectura.
+- `docs/openapi.yaml` — contrato de la API (OpenAPI 3.1), al día con el código.
+- `docs/operacion.md` — copias de seguridad, restauración y prueba de
+  recuperación, con los objetivos de RPO y RTO.
+
 ## Estado
 
 Cobertura del alcance mínimo (sección 5.1 del enunciado):
@@ -107,6 +114,32 @@ Dos detalles que se pagan al desplegar:
   con `APP_ENV=production` el arranque falla en lugar de aceptar cargas sin
   escanear de verdad. Un escáner que aprueba todo es peor que ninguno, porque
   nadie lo revisa.
+
+### Pruebas y CI
+
+| Qué | Cuántas | Dónde |
+|---|---|---|
+| Unitarias y de integración del backend | Toda la suite, con Postgres y Redis reales | `go test ./... -p 1` |
+| Unitarias del frontend | 45 | `npm test` |
+| Flujos críticos y accesibilidad, extremo a extremo | 19 | `npm run e2e` |
+
+`-p 1` en el backend no es un detalle: las pruebas de integración truncan las
+mismas tablas, así que en paralelo se destruyen entre ellas.
+
+Las E2E cubren los nueve segmentos de la demostración del enunciado y necesitan
+la pila levantada. La auditoría de accesibilidad falla con lo grave (`critical`
+y `serious`) e informa de lo menor: poner el umbral en «cualquier aviso» hace
+que nadie mire el informe, que es peor que no tenerlo.
+
+Una auditoría automática no sustituye una revisión manual. Detecta contraste,
+etiquetas, roles y orden de encabezados; no detecta si el texto de un enlace
+tiene sentido. Lo que acredita es que no hay incumplimientos automáticamente
+detectables.
+
+**El límite de tasa de identidad es configurable** (`LOGIN_RATE_LIMIT`) porque
+una suite E2E o una prueba de carga salen de una sola dirección y con el valor
+de producción —10 por minuto— se bloquearían a sí mismas. El valor por defecto
+es el de producción, y hay una prueba que comprueba que el límite funciona.
 
 ### Paginación por cursor y ETag
 

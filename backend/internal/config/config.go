@@ -50,6 +50,14 @@ type Config struct {
 	// del socket y no de una cabecera que cualquiera puede escribir.
 	TrustedProxies string
 
+	// LoginRateLimit y LoginRateWindow acotan los intentos por IP en los
+	// endpoints de identidad. Son configurables porque el valor correcto
+	// depende del despliegue: una suite E2E o una prueba de carga salen toda
+	// de una sola dirección, y con el valor de producción se bloquearían a sí
+	// mismas. El valor por defecto es el de producción.
+	LoginRateLimit  int
+	LoginRateWindow time.Duration
+
 	AntimalwareAddr string
 
 	SMTPHost string
@@ -89,6 +97,9 @@ func Load() Config {
 
 		TrustedProxies: getEnv("TRUSTED_PROXIES", ""),
 
+		LoginRateLimit:  getInt("LOGIN_RATE_LIMIT", 10),
+		LoginRateWindow: getDuration("LOGIN_RATE_WINDOW", time.Minute),
+
 		AntimalwareAddr: getEnv("ANTIMALWARE_ADDR", ""),
 
 		SMTPHost: getEnv("SMTP_HOST", "localhost"),
@@ -118,6 +129,18 @@ func getBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func getInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 func getFloat(key string, fallback float64) float64 {

@@ -50,6 +50,11 @@ type Deps struct {
 	// tasa de todos. Vacío significa que no se cree a nadie, que es el lado
 	// seguro por defecto.
 	ProxiesDeConfianza string
+
+	// LimiteIdentidad y VentanaIdentidad acotan los intentos por IP en los
+	// endpoints de identidad. Cero deja el valor por defecto.
+	LimiteIdentidad  int
+	VentanaIdentidad time.Duration
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -122,6 +127,21 @@ func (h *handlers) auth() func(http.Handler) http.Handler {
 	return RequireAuth(h.deps.Auth)
 }
 
-func loginRateLimit(rdb *redis.Client) func(http.Handler) http.Handler {
-	return RateLimit(rdb, "auth", 10, time.Minute)
+// limiteIdentidadPorDefecto y ventanaIdentidadPorDefecto son los valores de
+// producción: 10 intentos por minuto y por IP.
+const (
+	limiteIdentidadPorDefecto  = 10
+	ventanaIdentidadPorDefecto = time.Minute
+)
+
+func (h *handlers) loginRateLimit(rdb *redis.Client) func(http.Handler) http.Handler {
+	limite := h.deps.LimiteIdentidad
+	if limite <= 0 {
+		limite = limiteIdentidadPorDefecto
+	}
+	ventana := h.deps.VentanaIdentidad
+	if ventana <= 0 {
+		ventana = ventanaIdentidadPorDefecto
+	}
+	return RateLimit(rdb, "auth", limite, ventana)
 }

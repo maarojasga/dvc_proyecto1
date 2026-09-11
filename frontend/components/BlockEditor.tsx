@@ -347,12 +347,16 @@ export function BlockEditor({
   };
 
   return (
-    <div className="stack" style={{ background: "var(--color-bg-subtle, #f8f9fa)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--color-border, #e5e7eb)" }}>
+    <div className="stack" style={{ background: "var(--color-surface)", padding: "1rem", borderRadius: "var(--radius)", border: "1px solid var(--color-border)" }}>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
         <strong style={{ fontSize: "0.9rem" }}>Editor de bloques (Markdown canónico)</strong>
         {/* role="status" para que un lector de pantalla anuncie el guardado
             sin robar el foco al profesor mientras escribe. */}
-        <span className="badge" role="status" aria-live="polite" style={{ fontSize: "0.75rem", opacity: 0.8 }}>
+        {/* Sin opacity: el color del badge cumple 4.5:1 por poco, y bajarlo un
+            20 % lo deja en 4.48 y suspende la auditoría. Para atenuar hay que
+            elegir un color con contraste suficiente, no rebajar uno que ya iba
+            al límite. */}
+        <span className="badge" role="status" aria-live="polite" style={{ fontSize: "0.75rem" }}>
           {textoDeEstado(estado, Boolean(onAutosave))}
         </span>
       </div>
@@ -386,11 +390,13 @@ export function BlockEditor({
           <div
             key={block.id}
             style={{
-              background: "white",
+              // Token, no "white": con un blanco fijo el texto claro del modo
+              // oscuro quedaba sobre fondo blanco, ilegible.
+              background: "var(--color-bg)",
               padding: "0.75rem",
               borderRadius: "6px",
               boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
-              border: "1px solid var(--color-border, #e5e7eb)",
+              border: "1px solid var(--color-border)",
             }}
           >
             <div className="row" style={{ justifyContent: "space-between", marginBottom: "0.4rem" }}>
@@ -400,6 +406,11 @@ export function BlockEditor({
                 </span>
                 {block.type === "heading" && (
                   <select
+                    // Sin nombre accesible, un lector de pantalla anuncia
+                    // "lista, H2" sin decir de qué. Va aria-label y no una
+                    // etiqueta visible porque el control vive en una barra de
+                    // bloque donde el texto sobraría.
+                    aria-label={`Nivel del encabezado del bloque ${index + 1}`}
                     value={block.level || 2}
                     onChange={(e) => updateBlock(block.id, { level: Number(e.target.value) as 1 | 2 | 3 })}
                     style={{ fontSize: "0.75rem", padding: "2px 4px" }}
@@ -476,7 +487,7 @@ export function BlockEditor({
                 value={block.content}
                 placeholder="Nota importante o advertencia..."
                 onChange={(e) => updateBlock(block.id, { content: e.target.value })}
-                style={{ width: "100%", borderLeft: "4px solid #3b82f6", background: "#eff6ff" }}
+                style={{ width: "100%", borderLeft: "4px solid var(--color-primary)", background: "var(--color-surface-raised)" }}
               />
             ) : (
               <textarea
@@ -507,7 +518,7 @@ export function BlockEditor({
         <button type="button" onClick={() => addBlock("list")}>
           + Lista
         </button>
-        <button type="button" onClick={clearDraft} style={{ marginLeft: "auto", fontSize: "0.75rem", opacity: 0.7 }}>
+        <button type="button" onClick={clearDraft} style={{ marginLeft: "auto", fontSize: "0.75rem" }}>
           Limpiar borrador
         </button>
       </div>

@@ -24,16 +24,16 @@ type userResponse struct {
 }
 
 func (h *handlers) registerAuth(mux *http.ServeMux) {
-	mux.Handle("POST /api/v1/auth/register", loginRateLimit(h.deps.Redis)(http.HandlerFunc(h.register)))
+	mux.Handle("POST /api/v1/auth/register", h.loginRateLimit(h.deps.Redis)(http.HandlerFunc(h.register)))
 	mux.HandleFunc("POST /api/v1/auth/verify-email", h.verifyEmail)
-	mux.Handle("POST /api/v1/auth/resend-verification", loginRateLimit(h.deps.Redis)(http.HandlerFunc(h.resendVerification)))
-	mux.Handle("POST /api/v1/auth/login", loginRateLimit(h.deps.Redis)(http.HandlerFunc(h.login)))
+	mux.Handle("POST /api/v1/auth/resend-verification", h.loginRateLimit(h.deps.Redis)(http.HandlerFunc(h.resendVerification)))
+	mux.Handle("POST /api/v1/auth/login", h.loginRateLimit(h.deps.Redis)(http.HandlerFunc(h.login)))
 	mux.Handle("POST /api/v1/auth/logout", h.auth()(http.HandlerFunc(h.logout)))
 	mux.Handle("GET /api/v1/auth/me", h.auth()(http.HandlerFunc(h.me)))
 	mux.Handle("GET /api/v1/auth/sessions", h.auth()(http.HandlerFunc(h.listSessions)))
 	mux.Handle("DELETE /api/v1/auth/sessions", h.auth()(http.HandlerFunc(h.revokeOtherSessions)))
 	mux.Handle("DELETE /api/v1/auth/sessions/{sessionId}", h.auth()(http.HandlerFunc(h.revokeSession)))
-	mux.Handle("POST /api/v1/auth/password/reset-request", loginRateLimit(h.deps.Redis)(http.HandlerFunc(h.requestPasswordReset)))
+	mux.Handle("POST /api/v1/auth/password/reset-request", h.loginRateLimit(h.deps.Redis)(http.HandlerFunc(h.requestPasswordReset)))
 	mux.HandleFunc("POST /api/v1/auth/password/reset-confirm", h.confirmPasswordReset)
 }
 

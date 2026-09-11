@@ -1,0 +1,244 @@
+# Integración continua.
+#
+# El §10.1 exige que el pipeline complete build, lint, análisis de seguridad,
+# migraciones y pruebas antes de la demostración. Este archivo es eso, y el
+# orden no es casual: lo rápido primero, para que un error de formato no se
+# entere veinte minutos después de que arrancó una base de datos.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Una ejecución por rama: empujar dos veces seguidas no debe dejar dos
+# ejecuciones compitiendo por el mismo resultado.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "20"
+
+jobs:
+  backend:
+    name: Backend (lint, vet, pruebas)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mooc
+          POSTGRES_PASSWORD: mooc
+          POSTGRES_DB: mooc
+        ports: ["5432:5432"]
+        # Sin healthcheck, las pruebas arrancan antes que la base y fallan por
+        # una razón que no tiene nada que ver con el código.
+        options: >-
+          --health-cmd "pg_isready -U mooc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      # gofmt antes que nada: es lo más rápido y lo que más a menudo se olvida.
+      - name: Formato
+        working-directory: backend
+        run: |
+          sin_formato=$(gofmt -l .)
+          if [ -n "$sin_formato" ]; then
+            echo "Estos archivos no pasan gofmt:"
+            echo "$sin_formato"
+            exit 1
+          fi
+
+      - name: Compilar
+        working-directory: backend
+        run: go build ./...
+
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
+
+      # Las migraciones se ejercen aparte de las pruebas: una migración que no
+      # aplica tiene que fallar con ese nombre y no escondida dentro de un test.
+      - name: Migraciones
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable
+        run: go run ./cmd/migrate up
+
+      # -p 1 a propósito: las pruebas de integración truncan las mismas tablas,
+      # así que en paralelo se destruyen entre ellas.
+      - name: Pruebas
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable
+          TEST_REDIS_ADDR: localhost:6379
+        run: go test ./... -count=1 -p 1 -race
+
+  seguridad:
+    name: Análisis de seguridad
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      # Dependencias con vulnerabilidad conocida. Es el análisis que más
+      # encuentra por unidad de esfuerzo, porque no depende de heurísticas.
+      - name: Vulnerabilidades de dependencias
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Análisis estático de seguridad
+        uses: securego/gosec@master
+        with:
+          args: -exclude-dir=.git -severity medium ./backend/...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Dependencias del frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          # Solo lo alto y crítico: el ruido de los avisos bajos hace que nadie
+          # mire el informe, que es peor que no tenerlo.
+          npm audit --audit-level=high
+
+  frontend:
+    name: Frontend (lint, tipos, pruebas, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar
+        working-directory: frontend
+        run: npm ci
+
+      - name: Tipos
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Pruebas
+        working-directory: frontend
+        run: npm test
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  e2e:
+    name: Flujos críticos y accesibilidad
+    runs-on: ubuntu-latest
+    # Depende de los otros dos: si el backend no compila, levantar la pila para
+    # un E2E solo añade un fallo ruidoso sobre el que ya se conoce.
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Levantar la pila
+        run: |
+          cp .env.example .env
+          # Administrador inicial, que la siembra de las E2E necesita para
+          # invitar profesores.
+          echo "ADMIN_EMAIL=admin@mooc.local" >> .env
+          echo "ADMIN_PASSWORD=Administrador123!" >> .env
+          # La suite E2E sale toda de una dirección: con el límite de
+          # producción se bloquearía a sí misma. Hay una prueba aparte que
+          # comprueba que el límite funciona.
+          echo "LOGIN_RATE_LIMIT=1000" >> .env
+          docker compose up -d --build postgres redis minio mailpit api
+          # Esperar a que la API responda antes de lanzar el navegador.
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/api/v1/health >/dev/null 2>&1; then
+              echo "api lista"; break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:8080/api/v1/health
+
+      - name: Instalar el frontend y el navegador
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Construir y arrancar el frontend
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8080
+        run: |
+          npm run build
+          npm start &
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/ >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+
+      # Los nueve flujos críticos del §10.2 y la auditoría de accesibilidad.
+      - name: E2E y accesibilidad
+        working-directory: frontend
+        env:
+          E2E_API_URL: http://localhost:8080
+          E2E_BASE_URL: http://localhost:3000
+          E2E_MAILPIT_URL: http://localhost:8025
+          E2E_ADMIN_EMAIL: admin@mooc.local
+          E2E_ADMIN_PASSWORD: Administrador123!
+        run: npx playwright test
+
+      - name: Guardar la evidencia
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidencia-e2e
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 14
+
+      - name: Logs de la pila si algo falló
+        if: failure()
+        run: docker compose logs --tail=200

@@ -96,6 +96,43 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsFS fs.FS) error 
 	return nil
 }
 
+// EstadoDeMigraciones lista lo aplicado y lo pendiente sin cambiar nada.
+//
+// Existe para poder comprobar el estado antes de desplegar y tras restaurar
+// una copia, que son los dos momentos en que "creo que está al día" no basta.
+func EstadoDeMigraciones(ctx context.Context, pool *pgxpool.Pool, migrationsFS fs.FS) (aplicadas, pendientes []string, err error) {
+	if _, err := pool.Exec(ctx, migrationsTable); err != nil {
+		return nil, nil, fmt.Errorf("migrate: no se pudo crear schema_migrations: %w", err)
+	}
+	yaEstan, err := appliedVersions(ctx, pool)
+	if err != nil {
+		return nil, nil, err
+	}
+	entradas, err := fs.ReadDir(migrationsFS, ".")
+	if err != nil {
+		return nil, nil, fmt.Errorf("migrate: no se pudo leer el directorio de migraciones: %w", err)
+	}
+	var versiones []string
+	for _, e := range entradas {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".up.sql") {
+			continue
+		}
+		versiones = append(versiones, e.Name())
+	}
+	sort.Strings(versiones)
+	for _, archivo := range versiones {
+		// La versión registrada es el nombre sin el sufijo, igual que en
+		// Migrate. Comparar con el sufijo daría todo por pendiente.
+		version := strings.TrimSuffix(archivo, ".up.sql")
+		if yaEstan[version] {
+			aplicadas = append(aplicadas, version)
+		} else {
+			pendientes = append(pendientes, version)
+		}
+	}
+	return aplicadas, pendientes, nil
+}
+
 func appliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[string]bool, error) {
 	rows, err := pool.Query(ctx, `SELECT version FROM schema_migrations`)
 	if err != nil {

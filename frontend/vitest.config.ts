@@ -9,7 +9,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Solo *.test.ts: las pruebas de extremo a extremo son *.spec.ts y las
+    // ejecuta Playwright, que necesita la pila levantada.
     include: ["**/*.test.ts"],
-    exclude: ["node_modules/**", ".next/**"],
+    exclude: ["node_modules/**", ".next/**", "e2e/**"],
   },
 });
