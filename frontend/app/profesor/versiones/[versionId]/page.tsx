@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Version, type Module, type Unit, ApiError } from "@/lib/api";
 import { BlockEditor } from "@/components/BlockEditor";
+import { EditorDeQuiz } from "@/components/EditorDeQuiz";
 import { subirMaterial, type ProgresoSubida } from "@/lib/subida";
 
 const RESOURCE_TYPES = [
@@ -382,6 +383,7 @@ function ResourceRow({
   const [progreso, setProgreso] = useState<ProgresoSubida | null>(null);
   const [error, setError] = useState("");
   const [editandoTexto, setEditandoTexto] = useState(false);
+  const [editandoQuiz, setEditandoQuiz] = useState(false);
 
   async function handleDelete() {
     if (!confirm(`¿Eliminar el recurso "${r.Title}"?`)) return;
@@ -450,12 +452,26 @@ function ResourceRow({
             {editandoTexto ? "Cerrar editor" : "Editar contenido"}
           </button>
         )}
+        {editable && r.Type === "quiz" && (
+          <button type="button" onClick={() => setEditandoQuiz((v) => !v)}>
+            {editandoQuiz ? "Cerrar evaluación" : "Definir evaluación"}
+          </button>
+        )}
         {editable && (
           <button className="danger" onClick={handleDelete} disabled={uploading}>
             Eliminar
           </button>
         )}
       </div>
+
+      {editandoQuiz && (
+        <EditorDeQuiz
+          versionId={versionId}
+          resourceId={r.ID}
+          tituloRecurso={r.Title}
+          onGuardado={onChange}
+        />
+      )}
 
       {editandoTexto && (
         <BlockEditor

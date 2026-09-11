@@ -99,6 +99,32 @@ func (e entregaPorCDN) PresignedGetURL(_ context.Context, objectKey string, _ ti
 
 func (e entregaPorCDN) SirveDesdeCDN() bool { return true }
 
+// almacenDeInsignias hace de almacén para la imagen de la insignia. Guarda lo
+// justo para poder comprobar que se generó y que la URL sale con la clave
+// esperada, sin necesitar MinIO.
+type almacenDeInsignias struct{}
+
+var imagenesDeInsignia sync.Map // clave -> bytes del SVG
+
+func (almacenDeInsignias) SubirBytes(_ context.Context, objectKey string, contenido []byte, _ string) error {
+	imagenesDeInsignia.Store(objectKey, contenido)
+	return nil
+}
+
+func (almacenDeInsignias) PresignedGetURL(_ context.Context, objectKey string, _ time.Duration, _ string) (string, error) {
+	return "https://cdn.pruebas.local/" + objectKey, nil
+}
+
+// svgDeInsigniaGuardado devuelve la imagen que se subió para esa clave.
+func svgDeInsigniaGuardado(objectKey string) (string, bool) {
+	v, ok := imagenesDeInsignia.Load(objectKey)
+	if !ok {
+		return "", false
+	}
+	b, _ := v.([]byte)
+	return string(b), true
+}
+
 // almacenEnMemoria hace de almacén de objetos para las pruebas de carga. El
 // cliente real contacta a MinIO al construirse, así que sin un doble no hay
 // forma de probar el ciclo de vida de una carga multipart —ni de notar que un
@@ -320,7 +346,7 @@ func nuevoEntorno(t *testing.T) *entorno {
 	insignias := postgres.NewBadgeRepo(pool)
 
 	almacen := nuevoAlmacenEnMemoria()
-	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, users)
+	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, users, almacenDeInsignias{})
 	handler := httpserver.NewRouter(httpserver.Deps{
 		Auth:         authSvc,
 		Admin:        admin.NewService(users),

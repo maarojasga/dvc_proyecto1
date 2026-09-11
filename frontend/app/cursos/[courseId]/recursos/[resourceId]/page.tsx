@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { api, ApiError, type ResourceContent } from "@/lib/api";
 import { ReproductorHLS } from "@/components/ReproductorHLS";
 import { VisorPDF } from "@/components/VisorPDF";
+import { Cuestionario } from "@/components/Cuestionario";
+import { useLatidosDeProgreso } from "@/lib/progreso";
 
 /**
  * Consumo de un recurso por parte del estudiante.
@@ -55,6 +57,11 @@ export default function RecursoPage() {
     },
     [resourceId],
   );
+
+  // Los latidos son la evidencia de avance: el servidor decide con ellos, y el
+  // cliente no manda porcentajes. Solo se emiten cuando hay contenido cargado,
+  // porque antes no hay nada que se esté consumiendo.
+  const { resumen, refrescar } = useLatidosDeProgreso(courseId, resourceId, Boolean(contenido) && !error && !aviso);
 
   if (error) {
     return (
@@ -150,6 +157,16 @@ export default function RecursoPage() {
           <a href={contenido.url} target="_blank" rel="noopener noreferrer">
             Abrir el archivo
           </a>
+        </p>
+      )}
+
+      {contenido.type === "quiz" && <Cuestionario resourceId={resourceId} onCerrado={refrescar} />}
+
+      {resumen && (
+        <p className="muted" role="status">
+          Avance del curso: {Math.round(resumen.required_percent)}% de los recursos
+          obligatorios ({resumen.required_completed} de {resumen.required_total})
+          {resumen.quizzes_pending > 0 && ` · ${resumen.quizzes_pending} evaluación(es) pendiente(s)`}
         </p>
       )}
     </div>

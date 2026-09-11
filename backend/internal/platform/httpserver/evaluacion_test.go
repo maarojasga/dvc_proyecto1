@@ -283,6 +283,40 @@ func TestAprobarElQuizEmiteUnaInsigniaUnicaYVerificable(t *testing.T) {
 	if contiene(publico.Crudo, "ana@example.com") || contiene(publico.Crudo, "student_id") {
 		t.Errorf("la verificación pública expone datos personales: %s", publico.Crudo)
 	}
+
+	// El alcance mínimo pide insignia "con imagen y URL verificable". La
+	// imagen se genera al emitir y vive en el almacén de objetos, no en
+	// Postgres.
+	urlImagen, _ := publico.campo(t, "image_url").(string)
+	if urlImagen == "" {
+		t.Fatalf("la verificación no trae la imagen de la insignia: %s", publico.Crudo)
+	}
+	svg, ok := svgDeInsigniaGuardado("badges/" + codigo + ".svg")
+	if !ok {
+		t.Fatalf("no se guardó ninguna imagen para la insignia %s", codigo)
+	}
+	if !contiene(svg, "<svg") {
+		t.Errorf("lo guardado no parece un SVG: %.120s", svg)
+	}
+	// La imagen se comparte, así que tampoco puede llevar datos personales.
+	if contiene(svg, "ana@example.com") || contiene(svg, "Ana") {
+		t.Errorf("la imagen de la insignia expone datos personales: %s", svg)
+	}
+	if !contiene(svg, codigo) {
+		t.Error("la imagen no lleva el código de verificación, así que no se puede comprobar")
+	}
+	if n := env.contar(`SELECT count(*) FROM badges WHERE image_object_key IS NOT NULL AND image_object_key <> ''`); n != 1 {
+		t.Errorf("la insignia quedó sin clave de imagen en la base")
+	}
+
+	// Y el estudiante la ve en su listado, con el título del curso resuelto.
+	mias := estudiante.hacer(http.MethodGet, "/insignias/mias", nil)
+	if mias.Estado != http.StatusOK {
+		t.Fatalf("mis insignias: %d %s", mias.Estado, mias.Crudo)
+	}
+	if !contiene(mias.Crudo, codigo) || !contiene(mias.Crudo, "course_title") {
+		t.Errorf("el listado propio no trae la insignia con su curso: %s", mias.Crudo)
+	}
 }
 
 func TestUnCursoSinObligatoriosNoRepartInsigniasGratis(t *testing.T) {

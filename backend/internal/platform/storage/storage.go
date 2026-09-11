@@ -5,6 +5,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -181,6 +182,17 @@ func (c *Client) DownloadToFile(ctx context.Context, objectKey, destPath string)
 // UploadFile sube un archivo local (p.ej. un segmento HLS) a la clave dada.
 func (c *Client) UploadFile(ctx context.Context, objectKey, srcPath, contentType string) error {
 	_, err := c.mc.FPutObject(ctx, c.bucket, objectKey, srcPath, minio.PutObjectOptions{ContentType: contentType})
+	if err != nil {
+		return fmt.Errorf("storage: no se pudo subir %s: %w", objectKey, err)
+	}
+	return nil
+}
+
+// SubirBytes sube contenido que ya está en memoria, sin pasar por un archivo
+// temporal. Lo usa la emisión de insignias, que genera la imagen al vuelo.
+func (c *Client) SubirBytes(ctx context.Context, objectKey string, contenido []byte, contentType string) error {
+	_, err := c.mc.PutObject(ctx, c.bucket, objectKey, bytes.NewReader(contenido), int64(len(contenido)),
+		minio.PutObjectOptions{ContentType: contentType})
 	if err != nil {
 		return fmt.Errorf("storage: no se pudo subir %s: %w", objectKey, err)
 	}

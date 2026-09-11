@@ -65,6 +65,7 @@ type Service struct {
 	quizzes     *postgres.QuizRepo
 	insignias   *postgres.BadgeRepo
 	auditor     Auditor
+	almacen     AlmacenDeInsignias
 	ahora       func() time.Time
 }
 
@@ -75,10 +76,12 @@ func NewService(
 	q *postgres.QuizRepo,
 	b *postgres.BadgeRepo,
 	auditor Auditor,
+	almacen AlmacenDeInsignias,
 ) *Service {
 	return &Service{
 		progreso: p, enrollments: e, courses: c, quizzes: q, insignias: b,
-		auditor: auditor, ahora: func() time.Time { return time.Now().UTC() },
+		auditor: auditor, almacen: almacen,
+		ahora: func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -348,7 +351,57 @@ func (s *Service) emitirInsignia(ctx context.Context, insc *enrollment.Enrollmen
 	if err != nil {
 		return nil, err
 	}
-	return s.insignias.Emitir(ctx, nueva)
+	nueva.ImageObjectKey = claveDeImagen(nueva.VerificationCode)
+	emitida, err := s.insignias.Emitir(ctx, nueva)
+	if err != nil {
+		return nil, err
+	}
+	s.generarImagen(ctx, emitida)
+	return emitida, nil
+}
+
+// generarImagen dibuja y guarda la imagen de la insignia.
+//
+// Un fallo aqui no deshace la emision: la insignia es el logro academico y la
+// imagen es su representacion. Perder el dibujo por un almacen caido y con
+// ello quitarle al estudiante el curso aprobado seria desproporcionado. Queda
+// anotado en la bitacora y la imagen se puede regenerar.
+func (s *Service) generarImagen(ctx context.Context, b *badge.Badge) {
+	if s.almacen == nil || b.ImageObjectKey == "" {
+		return
+	}
+	titulo := s.tituloDelCurso(ctx, b.CourseID)
+	svg := svgDeInsignia(titulo, b.VerificationCode, b.IssuedAt)
+	if err := s.almacen.SubirBytes(ctx, b.ImageObjectKey, svg, "image/svg+xml"); err != nil {
+		s.auditar(ctx, b.StudentID, "badge.image_failed", "badge", b.ID, err.Error())
+	}
+}
+
+// tituloDelCurso busca el titulo de la version publicada para ponerlo en la
+// imagen. Si no se puede, la insignia sale con un titulo genérico antes que no
+// salir.
+func (s *Service) tituloDelCurso(ctx context.Context, courseID uuid.UUID) string {
+	c, err := s.courses.GetCourse(ctx, courseID)
+	if err != nil || c.CurrentPublishedVersionID == nil {
+		return "Curso"
+	}
+	v, err := s.courses.GetVersion(ctx, *c.CurrentPublishedVersionID)
+	if err != nil || v.Title == "" {
+		return "Curso"
+	}
+	return v.Title
+}
+
+// URLDeImagen resuelve la URL de la imagen de una insignia.
+func (s *Service) URLDeImagen(ctx context.Context, b *badge.Badge) string {
+	if s.almacen == nil || b.ImageObjectKey == "" {
+		return ""
+	}
+	url, err := s.almacen.PresignedGetURL(ctx, b.ImageObjectKey, vigenciaImagen, "insignia.svg")
+	if err != nil {
+		return ""
+	}
+	return url
 }
 
 // Verificacion es la vista publica de una insignia.
@@ -356,11 +409,15 @@ func (s *Service) emitirInsignia(ctx context.Context, insc *enrollment.Enrollmen
 // No lleva el correo ni el nombre del estudiante: la condicion "Emision de
 // insignia" pide que la URL publica no exponga datos personales.
 type Verificacion struct {
-	Code      string     `json:"code"`
-	CourseID  uuid.UUID  `json:"course_id"`
-	Valid     bool       `json:"valid"`
-	IssuedAt  time.Time  `json:"issued_at"`
-	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	Code     string    `json:"code"`
+	CourseID uuid.UUID `json:"course_id"`
+	// CourseTitle va porque una verificacion que no dice de que curso es no
+	// verifica nada util. El titulo del curso es publico: esta en el catalogo.
+	CourseTitle string     `json:"course_title"`
+	Valid       bool       `json:"valid"`
+	IssuedAt    time.Time  `json:"issued_at"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	ImageURL    string     `json:"image_url,omitempty"`
 }
 
 // Verificar resuelve la URL publica de verificacion. No exige autenticacion,
@@ -372,13 +429,43 @@ func (s *Service) Verificar(ctx context.Context, codigo string) (*Verificacion, 
 	}
 	return &Verificacion{
 		Code: b.VerificationCode, CourseID: b.CourseID,
-		Valid: b.Verified(), IssuedAt: b.IssuedAt, RevokedAt: b.RevokedAt,
+		CourseTitle: s.tituloDelCurso(ctx, b.CourseID),
+		Valid:       b.Verified(), IssuedAt: b.IssuedAt, RevokedAt: b.RevokedAt,
+		ImageURL: s.URLDeImagen(ctx, b),
 	}, nil
 }
 
+// InsigniaPropia es una insignia tal como se le presenta a su dueño: con el
+// título del curso y la URL de la imagen ya resueltos, que es lo que la
+// interfaz necesita y el modelo no guarda.
+type InsigniaPropia struct {
+	Code          string     `json:"code"`
+	CourseID      uuid.UUID  `json:"course_id"`
+	CourseTitle   string     `json:"course_title"`
+	Valid         bool       `json:"valid"`
+	IssuedAt      time.Time  `json:"issued_at"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
+	RevokedReason string     `json:"revoked_reason,omitempty"`
+	ImageURL      string     `json:"image_url,omitempty"`
+}
+
 // MisInsignias lista las insignias del estudiante autenticado.
-func (s *Service) MisInsignias(ctx context.Context, actor *user.User) ([]*badge.Badge, error) {
-	return s.insignias.ListarPorEstudiante(ctx, actor.ID)
+func (s *Service) MisInsignias(ctx context.Context, actor *user.User) ([]InsigniaPropia, error) {
+	lista, err := s.insignias.ListarPorEstudiante(ctx, actor.ID)
+	if err != nil {
+		return nil, err
+	}
+	salida := make([]InsigniaPropia, 0, len(lista))
+	for _, b := range lista {
+		salida = append(salida, InsigniaPropia{
+			Code: b.VerificationCode, CourseID: b.CourseID,
+			CourseTitle: s.tituloDelCurso(ctx, b.CourseID),
+			Valid:       b.Verified(), IssuedAt: b.IssuedAt,
+			RevokedAt: b.RevokedAt, RevokedReason: b.RevokedReason,
+			ImageURL: s.URLDeImagen(ctx, b),
+		})
+	}
+	return salida, nil
 }
 
 // Revocar invalida una insignia. Solo la administracion puede hacerlo y queda

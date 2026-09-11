@@ -1177,7 +1177,11 @@ paths:
       parameters:
         - { name: codigo, in: path, required: true, schema: { type: string } }
       responses:
-        "200": { description: Estado de la insignia. }
+        "200":
+          description: Estado de la insignia.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerificacionDeInsignia" }
         "404": { $ref: "#/components/responses/Problema" }
 
   /insignias/{codigo}/revocar:
@@ -1255,6 +1259,27 @@ components:
       type: http
       scheme: bearer
   schemas:
+    VerificacionDeInsignia:
+      type: object
+      description: >
+        Vista publica de una insignia. Lleva el curso, la fecha, el codigo y la
+        URL de la imagen, y no lleva nada del estudiante: la condicion de
+        emision pide que la URL publica no exponga datos personales.
+      properties:
+        code: { type: string }
+        course_id: { type: string, format: uuid }
+        course_title: { type: string }
+        valid:
+          type: boolean
+          description: false cuando la insignia fue revocada.
+        issued_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        image_url:
+          type: string
+          format: uri
+          description: >
+            SVG generado al emitir la insignia y guardado en el almacen de
+            objetos. Firmado o de CDN segun el entorno.
     ConfirmacionDeCarga:
       type: object
       required: [checksum_sha256]

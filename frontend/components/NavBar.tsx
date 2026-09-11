@@ -21,6 +21,7 @@ export function NavBar() {
       <nav aria-label="Principal">
         <Link href="/">Catálogo</Link>
         {!loading && user?.role === "student" && <Link href="/mis-cursos">Mis cursos</Link>}
+        {!loading && user?.role === "student" && <Link href="/mis-insignias">Mis insignias</Link>}
         {!loading && (user?.role === "teacher" || user?.role === "admin") && (
           <Link href="/profesor">Autoría</Link>
         )}

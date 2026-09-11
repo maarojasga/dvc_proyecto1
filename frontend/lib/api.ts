@@ -89,6 +89,96 @@ export interface ResourceContent {
   position_seconds?: number;
 }
 
+// --- Evaluación y progreso ---
+
+/**
+ * DefinicionQuiz es lo que el profesor envía al definir la evaluación.
+ *
+ * Es el único sitio donde is_correct viaja por la red, y solo en esta
+ * dirección: el servidor nunca lo devuelve, ni al profesor.
+ */
+export interface DefinicionQuiz {
+  title: string;
+  time_limit_seconds: number | null;
+  max_attempts: number | null;
+  pass_score: number;
+  feedback_policy: string;
+  shuffle_questions: boolean;
+  questions: {
+    prompt_md: string;
+    type: "single" | "multiple";
+    points: number;
+    options: { text_md: string; is_correct: boolean }[];
+  }[];
+}
+
+export interface OpcionVisible {
+  stable_id: string;
+  text_md: string;
+}
+
+export interface PreguntaVisible {
+  stable_id: string;
+  prompt_md: string;
+  type: "single" | "multiple" | string;
+  points: number;
+  options: OpcionVisible[];
+}
+
+/**
+ * VistaIntento es lo que el servidor deja ver de un intento.
+ *
+ * Nótese lo que NO trae: cuál es la opción correcta. La clave vive solo en el
+ * servidor, y por eso la nota llega calculada y no se puede recomponer aquí.
+ */
+export interface VistaIntento {
+  attempt_id: string;
+  quiz_id: string;
+  title: string;
+  attempt_number: number;
+  status: string;
+  started_at: string;
+  expires_at?: string;
+  questions: PreguntaVisible[];
+  answers: Record<string, string[]>;
+  score?: number;
+  passed?: boolean;
+}
+
+export interface ResumenProgreso {
+  enrollment_id: string;
+  course_id: string;
+  status: string;
+  required_percent: number;
+  required_total: number;
+  required_completed: number;
+  quizzes_pending: number;
+  completed_at?: string;
+  approved_at?: string;
+  badge_code?: string;
+}
+
+export interface InsigniaPropia {
+  code: string;
+  course_id: string;
+  course_title: string;
+  valid: boolean;
+  issued_at: string;
+  revoked_at?: string;
+  revoked_reason?: string;
+  image_url?: string;
+}
+
+export interface VerificacionInsignia {
+  code: string;
+  course_id: string;
+  course_title: string;
+  valid: boolean;
+  issued_at: string;
+  revoked_at?: string;
+  image_url?: string;
+}
+
 export interface AuditEntry {
   id: string;
   actor_id?: string;
@@ -127,6 +217,74 @@ export const api = {
   logout: () => request<{ status: string }>("/api/v1/auth/logout", { method: "POST" }),
   resourceContent: (resourceId: string) =>
     request<ResourceContent>(`/api/v1/resources/${resourceId}/content`),
+  // --- Autoría de evaluaciones ---
+
+  definirQuiz: (versionId: string, resourceId: string, def: DefinicionQuiz) =>
+    request<{ quiz_id: string; questions: number }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/quiz`,
+      { method: "PUT", body: JSON.stringify(def) },
+    ),
+
+  // --- Evaluación ---
+
+  iniciarIntento: (resourceId: string) =>
+    request<VistaIntento>(`/api/v1/recursos/${resourceId}/quiz/intentos`, { method: "POST" }),
+
+  verIntento: (attemptId: string) => request<VistaIntento>(`/api/v1/quiz/intentos/${attemptId}`),
+
+  guardarRespuesta: (attemptId: string, questionStableId: string, selectedOptionStableIds: string[]) =>
+    request<{ status: string }>(`/api/v1/quiz/intentos/${attemptId}/respuestas`, {
+      method: "PUT",
+      body: JSON.stringify({
+        question_stable_id: questionStableId,
+        selected_option_stable_ids: selectedOptionStableIds,
+      }),
+    }),
+
+  /**
+   * enviarIntento cierra el intento. La clave de idempotencia la genera el
+   * cliente y se reutiliza en los reintentos: así un corte de red al enviar no
+   * gasta otro intento ni cambia la nota.
+   */
+  enviarIntento: (attemptId: string, idempotencyKey: string) =>
+    request<VistaIntento>(`/api/v1/quiz/intentos/${attemptId}/enviar`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+    }),
+
+  // --- Progreso e insignias ---
+
+  /**
+   * registrarProgreso manda una señal de avance. El porcentaje lo calcula el
+   * servidor: aquí solo se reportan hechos (abrí, sigo aquí, cerré).
+   */
+  /**
+   * registrarProgreso manda una señal de avance. El porcentaje lo calcula el
+   * servidor: aquí solo se reportan hechos (abrí, sigo aquí, cerré).
+   *
+   * `keepalive` importa para el cierre: sin él, el navegador cancela la
+   * petición cuando la página se va, y el recurso se queda sin acreditar. Con
+   * él, la petición sobrevive a la descarga de la página.
+   */
+  registrarProgreso: (
+    resourceId: string,
+    type: "open" | "heartbeat" | "close",
+    complete = false,
+    keepalive = false,
+  ) =>
+    request<ResumenProgreso>(`/api/v1/recursos/${resourceId}/progreso`, {
+      method: "POST",
+      body: JSON.stringify({ type, complete }),
+      keepalive,
+    }),
+
+  progresoDeCurso: (courseId: string) => request<ResumenProgreso>(`/api/v1/cursos/${courseId}/progreso`),
+
+  misInsignias: () => request<{ items: InsigniaPropia[] }>(`/api/v1/insignias/mias`),
+
+  verificarInsignia: (codigo: string) =>
+    request<VerificacionInsignia>(`/api/v1/insignias/${encodeURIComponent(codigo)}`),
+
   saveResourcePosition: (resourceId: string, position_seconds: number) =>
     request<void>(`/api/v1/resources/${resourceId}/position`, {
       method: "PUT",

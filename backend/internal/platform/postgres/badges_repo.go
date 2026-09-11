@@ -26,10 +26,11 @@ const camposInsignia = `id, enrollment_id, course_id, student_id, verification_c
 // terminan devolviendo la misma insignia. Por eso el conflicto no es un error.
 func (r *BadgeRepo) Emitir(ctx context.Context, b *badge.Badge) (*badge.Badge, error) {
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO badges (id, enrollment_id, course_id, student_id, verification_code, issued_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO badges (id, enrollment_id, course_id, student_id, verification_code, image_object_key, issued_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (enrollment_id) DO NOTHING`,
-		b.ID, b.EnrollmentID, b.CourseID, b.StudentID, b.VerificationCode, b.IssuedAt)
+		b.ID, b.EnrollmentID, b.CourseID, b.StudentID, b.VerificationCode,
+		nullIfEmpty(b.ImageObjectKey), b.IssuedAt)
 	if err != nil {
 		return nil, err
 	}

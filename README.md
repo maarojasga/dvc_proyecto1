@@ -27,13 +27,39 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 | 5 | Carga multimedia | Completo: multipart directa y reanudable 24 h, SHA-256 obligatorio verificado en servidor, MIME real del contenido y escaneo antimalware con ClamAV |
 | 6 | Procesamiento asíncrono a HLS | Completo: worker asynq con FFmpeg sin upscaling, original conservado, toma exclusiva del trabajo, reintentos con backoff, dead-letter queue con alerta y entrega autorizada por CDN |
 | 7 | Visor PDF y reproducción adaptativa | Completo: reproductor HLS adaptativo que reanuda desde la última posición reportada, visor PDF y entrega autorizada de cada tipo de recurso |
-| 8 | Quizzes | Backend completo: snapshot por intento, clave solo en servidor, guardado parcial, envío idempotente, expiración y nota calculada en servidor. Falta la interfaz |
-| 9 | Progreso e insignias | Backend completo: heartbeats con permanencia, rechazo auditado de porcentajes del cliente, insignia única y verificación pública sin correo. Faltan la imagen de la insignia y la interfaz |
+| 8 | Quizzes | Completo: autoría con clave, presentación del intento, guardado parcial, envío idempotente, expiración y nota calculada en servidor |
+| 9 | Progreso e insignias | Completo: latidos con permanencia, rechazo auditado de porcentajes del cliente, insignia única con imagen y verificación pública sin datos personales |
 | 10 | Catálogo, inscripción, retiro y reinscripción | Completo: búsqueda por texto, filtros por categoría y nivel, y la reinscripción reutiliza la inscripción, así que conserva progreso y resultados |
 
 De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
 3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
 protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
+
+### Evaluación y progreso
+
+La clave correcta no sale del servidor nunca. Viaja una sola vez, del profesor
+al servidor, al definir la evaluación; a partir de ahí el intento que ve el
+estudiante lleva enunciados y opciones y nada más, y la nota llega calculada.
+El cliente no tiene con qué recomponerla, que es la única forma de que no se
+pueda.
+
+El avance también lo calcula el servidor, a partir de los latidos y de los
+eventos de apertura y cierre. El cliente reporta hechos —abrí, sigo aquí,
+cerré— y nunca porcentajes: un porcentaje enviado se rechaza y se audita.
+
+Dos detalles que se pagan y no son evidentes:
+
+- **El cierre del recurso se manda con `keepalive`.** Es la señal que acredita
+  el material que no se mide por tiempo (texto, imagen, enlace), y una petición
+  normal lanzada mientras la página se descarga la cancela el navegador. Sin
+  eso, un recurso leído nunca cuenta como visto y el curso no se puede
+  terminar. Se manda también en `pagehide` y al ocultarse la pestaña, porque la
+  limpieza de un efecto no corre cuando alguien cierra la pestaña.
+- **La imagen de la insignia es un SVG generado al emitirla** y guardado en el
+  almacén de objetos, no en Postgres. Lleva el curso, la fecha y el código, y
+  no lleva nada del estudiante: la imagen se comparte, y lo público no puede
+  exponer datos personales. El título del curso va escapado, porque lo escribe
+  un profesor.
 
 ### Autoría del contenido de texto
 
