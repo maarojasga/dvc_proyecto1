@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type User, ApiError } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { api, ApiError, type AuditEntry, type Session, type User } from "@/lib/api";
 
 const ROLES: User["role"][] = ["student", "teacher", "admin"];
 const STATUSES: User["status"][] = ["pending_verification", "active", "suspended"];
@@ -49,7 +49,13 @@ export default function AdminDashboardPage() {
 
   return (
     <div>
-      <h1>Administración</h1>
+      <header className="page-header">
+        <div>
+          <h1>Administración</h1>
+          <p>Cuentas, roles, sesiones y la bitácora inmutable de la plataforma.</p>
+        </div>
+      </header>
+
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -60,16 +66,19 @@ export default function AdminDashboardPage() {
       <InviteTeacherForm onInvited={() => { setNotice("Profesor creado. Se le envió un correo para establecer su contraseña."); load(q); }} />
 
       <section className="card">
-        <h2 style={{ marginTop: 0 }}>Usuarios</h2>
+        <header>
+          <h2>Usuarios</h2>
+          <p>Cambia el rol o el estado de una cuenta, y revisa sus sesiones abiertas.</p>
+        </header>
         <form
           role="search"
-          className="row"
+          className="barra-busqueda"
           onSubmit={(e) => {
             e.preventDefault();
             load(q);
           }}
         >
-          <div className="form-field" style={{ marginBottom: 0, flex: 1 }}>
+          <div className="form-field">
             <label htmlFor="q">Buscar por nombre o correo</label>
             <input id="q" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
@@ -86,6 +95,7 @@ export default function AdminDashboardPage() {
                   <th>Correo</th>
                   <th>Rol</th>
                   <th>Estado</th>
+                  <th>Sesiones</th>
                 </tr>
               </thead>
               <tbody>
@@ -117,6 +127,9 @@ export default function AdminDashboardPage() {
                         ))}
                       </select>
                     </td>
+                    <td>
+                      <SesionesDeUsuario usuario={u} onError={setError} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -124,7 +137,148 @@ export default function AdminDashboardPage() {
           </div>
         )}
       </section>
+
+      <Auditoria onError={setError} />
     </div>
+  );
+}
+
+/**
+ * Sesiones abiertas de una cuenta, con revocación.
+ *
+ * Cerrarlas expulsa a la persona de todos sus dispositivos sin suspender la
+ * cuenta: es la respuesta a un acceso comprometido cuando la cuenta en sí no
+ * está en falta.
+ */
+function SesionesDeUsuario({ usuario, onError }: { usuario: User; onError: (m: string) => void }) {
+  const [sesiones, setSesiones] = useState<Session[] | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+
+  async function cargar() {
+    setOcupado(true);
+    try {
+      const { items } = await api.listUserSessions(usuario.id);
+      setSesiones(items ?? []);
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "No se pudieron cargar las sesiones");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function revocar() {
+    setOcupado(true);
+    try {
+      await api.revokeUserSessions(usuario.id);
+      await cargar();
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "No se pudieron revocar las sesiones");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  if (sesiones === null) {
+    return (
+      <button className="secondary" disabled={ocupado} onClick={cargar}>
+        Ver
+      </button>
+    );
+  }
+
+  return (
+    <span className="row">
+      <span className="badge">{sesiones.length} activas</span>
+      {sesiones.length > 0 && (
+        <button className="secondary" disabled={ocupado} onClick={revocar}>
+          Cerrar todas
+        </button>
+      )}
+    </span>
+  );
+}
+
+/** Bitácora inmutable de acciones administrativas y de identidad. */
+function Auditoria({ onError }: { onError: (m: string) => void }) {
+  const [entradas, setEntradas] = useState<AuditEntry[] | null>(null);
+  const [accion, setAccion] = useState("");
+
+  const cargar = useCallback(
+    async (filtro: string) => {
+      try {
+        const { items } = await api.listAudit(filtro ? { action: filtro, limit: 50 } : { limit: 50 });
+        setEntradas(items ?? []);
+      } catch (e) {
+        onError(e instanceof ApiError ? e.message : "No se pudo cargar la auditoría");
+      }
+    },
+    [onError],
+  );
+
+  useEffect(() => {
+    void cargar("");
+  }, [cargar]);
+
+  return (
+    <section className="card">
+      <header>
+        <h2>Auditoría</h2>
+        <p>Registro inmutable: la base rechaza modificarlo o borrarlo.</p>
+      </header>
+
+      <form
+        role="search"
+        className="barra-busqueda"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void cargar(accion);
+        }}
+      >
+        <div className="form-field">
+          <label htmlFor="audit-action">Filtrar por acción</label>
+          <input
+            id="audit-action"
+            value={accion}
+            onChange={(e) => setAccion(e.target.value)}
+            placeholder="user.status_updated"
+          />
+        </div>
+        <button type="submit">Filtrar</button>
+      </form>
+
+      {entradas === null && <p>Cargando…</p>}
+      {entradas && entradas.length === 0 && (
+        <div className="estado-vacio">
+          <p>Sin entradas para ese filtro.</p>
+        </div>
+      )}
+      {entradas && entradas.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Cuándo</th>
+                <th>Acción</th>
+                <th>Actor</th>
+                <th>Entidad</th>
+                <th>IP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entradas.map((e) => (
+                <tr key={e.id}>
+                  <td>{new Date(e.created_at).toLocaleString("es-CO")}</td>
+                  <td><code>{e.action}</code></td>
+                  <td>{e.actor_email || "—"}</td>
+                  <td>{e.entity_type}</td>
+                  <td>{e.ip_address || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -152,7 +306,10 @@ function InviteTeacherForm({ onInvited }: { onInvited: () => void }) {
 
   return (
     <form onSubmit={handleSubmit} className="card stack">
-      <h2 style={{ marginTop: 0 }}>Invitar profesor</h2>
+      <header>
+        <h2>Invitar profesor</h2>
+        <p>Los profesores no se autorregistran: reciben un enlace para fijar su clave.</p>
+      </header>
       {error && <p className="error-banner">{error}</p>}
       <div className="row">
         <div className="form-field" style={{ flex: 1 }}>

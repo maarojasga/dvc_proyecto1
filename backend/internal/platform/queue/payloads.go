@@ -7,11 +7,11 @@ import "github.com/google/uuid"
 // salida para este TaskID antes de procesar, para que una doble entrega no
 // genere salidas repetidas.
 type MediaProcessPayload struct {
-	TaskID         uuid.UUID `json:"task_id"`
-	MediaAssetID   uuid.UUID `json:"media_asset_id"`
-	ResourceID     uuid.UUID `json:"resource_id"`
-	SourceObjectKey string   `json:"source_object_key"`
-	Kind           string    `json:"kind"` // "video" | "audio"
+	TaskID          uuid.UUID `json:"task_id"`
+	MediaAssetID    uuid.UUID `json:"media_asset_id"`
+	ResourceID      uuid.UUID `json:"resource_id"`
+	SourceObjectKey string    `json:"source_object_key"`
+	Kind            string    `json:"kind"` // "video" | "audio"
 }
 
 // BadgeIssuePayload dispara la emisión idempotente de una insignia cuando

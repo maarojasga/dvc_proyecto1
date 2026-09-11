@@ -1,0 +1,392 @@
+﻿"use client";
+
+import { useState, useEffect, useRef, useCallback } from "react";
+
+export interface Block {
+  id: string;
+  type: "heading" | "paragraph" | "code" | "callout" | "list";
+  level?: 1 | 2 | 3;
+  content: string;
+  language?: string;
+}
+
+interface BlockEditorProps {
+  initialMarkdown?: string;
+  draftKey?: string;
+  onChange: (canonicalMarkdown: string) => void;
+}
+
+export function markdownToBlocks(md: string): Block[] {
+  if (!md || !md.trim()) {
+    return [{ id: "b-1", type: "paragraph", content: "" }];
+  }
+
+  const lines = md.split("\n");
+  const blocks: Block[] = [];
+  let currentParagraph = "";
+  let inCode = false;
+  let codeContent: string[] = [];
+  let codeLang = "";
+
+  const flushParagraph = () => {
+    if (currentParagraph.trim()) {
+      blocks.push({
+        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        type: "paragraph",
+        content: currentParagraph.trim(),
+      });
+      currentParagraph = "";
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.startsWith("```")) {
+      if (inCode) {
+        blocks.push({
+          id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+          type: "code",
+          content: codeContent.join("\n"),
+          language: codeLang,
+        });
+        inCode = false;
+        codeContent = [];
+        codeLang = "";
+      } else {
+        flushParagraph();
+        inCode = true;
+        codeLang = line.slice(3).trim();
+      }
+      continue;
+    }
+
+    if (inCode) {
+      codeContent.push(line);
+      continue;
+    }
+
+    if (line.startsWith("# ")) {
+      flushParagraph();
+      blocks.push({
+        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        type: "heading",
+        level: 1,
+        content: line.slice(2).trim(),
+      });
+    } else if (line.startsWith("## ")) {
+      flushParagraph();
+      blocks.push({
+        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        type: "heading",
+        level: 2,
+        content: line.slice(3).trim(),
+      });
+    } else if (line.startsWith("### ")) {
+      flushParagraph();
+      blocks.push({
+        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        type: "heading",
+        level: 3,
+        content: line.slice(4).trim(),
+      });
+    } else if (line.startsWith("> ")) {
+      flushParagraph();
+      blocks.push({
+        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        type: "callout",
+        content: line.slice(2).trim(),
+      });
+    } else if (line.startsWith("- ") || line.startsWith("* ")) {
+      flushParagraph();
+      blocks.push({
+        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        type: "list",
+        content: line.slice(2).trim(),
+      });
+    } else if (line.trim() === "") {
+      flushParagraph();
+    } else {
+      currentParagraph += (currentParagraph ? "\n" : "") + line;
+    }
+  }
+
+  flushParagraph();
+  if (inCode) {
+    blocks.push({
+      id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      type: "code",
+      content: codeContent.join("\n"),
+      language: codeLang,
+    });
+  }
+
+  return blocks.length ? blocks : [{ id: "b-1", type: "paragraph", content: "" }];
+}
+
+export function blocksToMarkdown(blocks: Block[]): string {
+  return blocks
+    .map((b) => {
+      switch (b.type) {
+        case "heading": {
+          const prefix = "#".repeat(b.level || 2);
+          return `${prefix} ${b.content.trim()}`;
+        }
+        case "paragraph":
+          return b.content.trim();
+        case "code":
+          return `\`\`\`${b.language || ""}\n${b.content}\n\`\`\``;
+        case "callout":
+          return `> ${b.content.trim()}`;
+        case "list":
+          return `- ${b.content.trim()}`;
+        default:
+          return b.content;
+      }
+    })
+    .filter((s) => s.length > 0)
+    .join("\n\n");
+}
+
+export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft", onChange }: BlockEditorProps) {
+  const [blocks, setBlocks] = useState<Block[]>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(draftKey);
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch {}
+      }
+    }
+    return markdownToBlocks(initialMarkdown);
+  });
+
+  const [autosaveStatus, setAutosaveStatus] = useState<string>("Borrador guardado");
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerAutosave = useCallback(
+    (newBlocks: Block[]) => {
+      setAutosaveStatus("Guardando...");
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+      saveTimeoutRef.current = setTimeout(() => {
+        try {
+          if (typeof window !== "undefined") {
+            localStorage.setItem(draftKey, JSON.stringify(newBlocks));
+          }
+          const md = blocksToMarkdown(newBlocks);
+          onChange(md);
+          const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          setAutosaveStatus(`Autoguardado a las ${timeStr}`);
+        } catch {
+          setAutosaveStatus("Error al autoguardar");
+        }
+      }, 800);
+    },
+    [draftKey, onChange],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, []);
+
+  const updateBlock = (id: string, updates: Partial<Block>) => {
+    const updated = blocks.map((b) => (b.id === id ? { ...b, ...updates } : b));
+    setBlocks(updated);
+    triggerAutosave(updated);
+  };
+
+  const addBlock = (type: Block["type"], afterId?: string) => {
+    const newBlock: Block = {
+      id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      type,
+      level: type === "heading" ? 2 : undefined,
+      content: "",
+      language: type === "code" ? "javascript" : undefined,
+    };
+
+    let updated: Block[];
+    if (afterId) {
+      const idx = blocks.findIndex((b) => b.id === afterId);
+      updated = [...blocks.slice(0, idx + 1), newBlock, ...blocks.slice(idx + 1)];
+    } else {
+      updated = [...blocks, newBlock];
+    }
+    setBlocks(updated);
+    triggerAutosave(updated);
+  };
+
+  const removeBlock = (id: string) => {
+    if (blocks.length <= 1) {
+      updateBlock(id, { content: "" });
+      return;
+    }
+    const updated = blocks.filter((b) => b.id !== id);
+    setBlocks(updated);
+    triggerAutosave(updated);
+  };
+
+  const moveBlock = (index: number, direction: "up" | "down") => {
+    const targetIdx = direction === "up" ? index - 1 : index + 1;
+    if (targetIdx < 0 || targetIdx >= blocks.length) return;
+    const updated = [...blocks];
+    const temp = updated[index];
+    updated[index] = updated[targetIdx];
+    updated[targetIdx] = temp;
+    setBlocks(updated);
+    triggerAutosave(updated);
+  };
+
+  const clearDraft = () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(draftKey);
+    }
+    const reset = markdownToBlocks(initialMarkdown);
+    setBlocks(reset);
+    triggerAutosave(reset);
+  };
+
+  return (
+    <div className="stack" style={{ background: "var(--color-bg-subtle, #f8f9fa)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--color-border, #e5e7eb)" }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+        <strong style={{ fontSize: "0.9rem" }}>Editor de Bloques (Markdown Canónico)</strong>
+        <span className="badge" style={{ fontSize: "0.75rem", opacity: 0.8 }}>
+          {autosaveStatus}
+        </span>
+      </div>
+
+      <div className="stack" style={{ gap: "0.75rem" }}>
+        {blocks.map((block, index) => (
+          <div
+            key={block.id}
+            style={{
+              background: "white",
+              padding: "0.75rem",
+              borderRadius: "6px",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+              border: "1px solid var(--color-border, #e5e7eb)",
+            }}
+          >
+            <div className="row" style={{ justifyContent: "space-between", marginBottom: "0.4rem" }}>
+              <div className="row" style={{ gap: "0.3rem", alignItems: "center" }}>
+                <span className="badge" style={{ textTransform: "capitalize", fontSize: "0.75rem" }}>
+                  {block.type} {block.type === "heading" ? `H${block.level}` : ""}
+                </span>
+                {block.type === "heading" && (
+                  <select
+                    value={block.level || 2}
+                    onChange={(e) => updateBlock(block.id, { level: Number(e.target.value) as 1 | 2 | 3 })}
+                    style={{ fontSize: "0.75rem", padding: "2px 4px" }}
+                  >
+                    <option value={1}>H1</option>
+                    <option value={2}>H2</option>
+                    <option value={3}>H3</option>
+                  </select>
+                )}
+                {block.type === "code" && (
+                  <input
+                    type="text"
+                    placeholder="lenguaje (ej: python, go)"
+                    value={block.language || ""}
+                    onChange={(e) => updateBlock(block.id, { language: e.target.value })}
+                    style={{ fontSize: "0.75rem", padding: "2px 6px", width: "120px" }}
+                  />
+                )}
+              </div>
+
+              <div className="row" style={{ gap: "0.2rem" }}>
+                <button
+                  type="button"
+                  onClick={() => moveBlock(index, "up")}
+                  disabled={index === 0}
+                  style={{ padding: "2px 6px", fontSize: "0.75rem" }}
+                  title="Mover arriba"
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveBlock(index, "down")}
+                  disabled={index === blocks.length - 1}
+                  style={{ padding: "2px 6px", fontSize: "0.75rem" }}
+                  title="Mover abajo"
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeBlock(block.id)}
+                  style={{ padding: "2px 6px", fontSize: "0.75rem", color: "#dc2626" }}
+                  title="Eliminar bloque"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {block.type === "heading" ? (
+              <input
+                type="text"
+                value={block.content}
+                placeholder="Texto del encabezado..."
+                onChange={(e) => updateBlock(block.id, { content: e.target.value })}
+                style={{
+                  width: "100%",
+                  fontWeight: "bold",
+                  fontSize: block.level === 1 ? "1.25rem" : block.level === 2 ? "1.1rem" : "1rem",
+                }}
+              />
+            ) : block.type === "code" ? (
+              <textarea
+                rows={4}
+                value={block.content}
+                placeholder="// Código aquí..."
+                onChange={(e) => updateBlock(block.id, { content: e.target.value })}
+                style={{ width: "100%", fontFamily: "monospace", fontSize: "0.85rem", background: "#1e1e1e", color: "#f8f8f2", borderRadius: "4px" }}
+              />
+            ) : block.type === "callout" ? (
+              <textarea
+                rows={2}
+                value={block.content}
+                placeholder="Nota importante o advertencia..."
+                onChange={(e) => updateBlock(block.id, { content: e.target.value })}
+                style={{ width: "100%", borderLeft: "4px solid #3b82f6", background: "#eff6ff" }}
+              />
+            ) : (
+              <textarea
+                rows={3}
+                value={block.content}
+                placeholder={block.type === "list" ? "Elemento de lista..." : "Escribe el contenido del párrafo..."}
+                onChange={(e) => updateBlock(block.id, { content: e.target.value })}
+                style={{ width: "100%" }}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="row" style={{ gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
+        <button type="button" onClick={() => addBlock("paragraph")}>
+          + Párrafo
+        </button>
+        <button type="button" onClick={() => addBlock("heading")}>
+          + Encabezado
+        </button>
+        <button type="button" onClick={() => addBlock("code")}>
+          + Código
+        </button>
+        <button type="button" onClick={() => addBlock("callout")}>
+          + Nota / Cita
+        </button>
+        <button type="button" onClick={() => addBlock("list")}>
+          + Lista
+        </button>
+        <button type="button" onClick={clearDraft} style={{ marginLeft: "auto", fontSize: "0.75rem", opacity: 0.7 }}>
+          Limpiar borrador
+        </button>
+      </div>
+    </div>
+  );
+}

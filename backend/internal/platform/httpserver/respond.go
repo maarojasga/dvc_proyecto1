@@ -8,7 +8,11 @@ import (
 
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/quiz"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 )
@@ -55,7 +59,12 @@ func classifyError(err error) (status int, code string, details []string) {
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		return http.StatusUnauthorized, "invalid_credentials", nil
 	case errors.Is(err, auth.ErrEmailInUse):
+		// Solo lo produce el alta de profesores por administración, donde el
+		// administrador es de confianza. El registro público nunca lo
+		// devuelve: allí revelaría qué correos existen.
 		return http.StatusConflict, "email_in_use", nil
+	case errors.Is(err, auth.ErrSessionNotFound):
+		return http.StatusNotFound, "session_not_found", nil
 	case errors.Is(err, auth.ErrInvalidOrExpiredToken):
 		return http.StatusBadRequest, "invalid_or_expired_token", nil
 	case errors.Is(err, user.ErrWeakPassword):
@@ -72,14 +81,40 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusConflict, "already_enrolled", nil
 	case errors.Is(err, enrollment.ErrNotEnrolled):
 		return http.StatusNotFound, "not_enrolled", nil
+	case errors.Is(err, enrollments.ErrMediaNoLista):
+		return http.StatusConflict, "media_not_ready", nil
+	case errors.Is(err, enrollments.ErrPosicionInvalida):
+		return http.StatusUnprocessableEntity, "invalid_position", nil
 	case errors.Is(err, enrollment.ErrCourseNotPublished):
 		return http.StatusConflict, "course_not_published", nil
+	case errors.Is(err, quiz.ErrMaxAttemptsReached):
+		return http.StatusConflict, "max_attempts_reached", nil
+	case errors.Is(err, quiz.ErrAttemptExpired):
+		return http.StatusConflict, "attempt_expired", nil
+	case errors.Is(err, quiz.ErrAttemptNotOpen):
+		return http.StatusConflict, "attempt_not_open", nil
+	case errors.Is(err, quiz.ErrAlreadySubmitted):
+		return http.StatusConflict, "attempt_already_submitted", nil
+	case errors.Is(err, quizzes.ErrRespuestaInvalida):
+		return http.StatusUnprocessableEntity, "invalid_answer", nil
+	case errors.Is(err, quizzes.ErrIntentoAjeno):
+		// Se responde como inexistente y no como prohibido: confirmar que el
+		// intento existe ya seria filtrar informacion de otro estudiante.
+		return http.StatusNotFound, "not_found", nil
+	case errors.Is(err, progreso.ErrTipoDeEventoInvalido):
+		return http.StatusUnprocessableEntity, "invalid_event_type", nil
 	case errors.Is(err, ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", nil
 	case errors.Is(err, ErrForbidden):
 		return http.StatusForbidden, "forbidden", nil
 	case errors.Is(err, ErrBadRequest):
 		return http.StatusBadRequest, "bad_request", nil
+	case errors.Is(err, ErrCSRF):
+		return http.StatusForbidden, "csrf_token_mismatch", nil
+	case errors.Is(err, ErrIdempotencyInFlight):
+		return http.StatusConflict, "idempotency_in_flight", nil
+	case errors.Is(err, ErrColaNoDisponible):
+		return http.StatusServiceUnavailable, "queue_unavailable", nil
 	default:
 		return http.StatusInternalServerError, "internal_error", nil
 	}

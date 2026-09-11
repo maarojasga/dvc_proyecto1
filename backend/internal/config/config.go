@@ -19,15 +19,26 @@ type Config struct {
 	S3AccessKey string
 	S3SecretKey string
 	S3UseSSL    bool
+	S3Region    string
 	S3PublicURL string // base URL pública/CDN para servir objetos (opcional)
+
+	// S3PublicEndpoint es el host por el que el NAVEGADOR alcanza el
+	// almacén de objetos. Dentro de Docker, S3Endpoint es "minio:9000",
+	// un nombre que sólo resuelve en la red del compose; una URL
+	// prefirmada contra ese host llega al navegador y muere en
+	// ERR_NAME_NOT_RESOLVED. La firma SigV4 cubre el Host, así que no
+	// basta con reescribir la URL después: hay que firmar contra el host
+	// público desde el principio.
+	S3PublicEndpoint string
+	S3PublicUseSSL   bool
 
 	SMTPHost string
 	SMTPPort string
 	SMTPFrom string
 
-	SessionTTL       time.Duration
-	PublicBaseURL    string // URL pública del frontend, para links de verificación/reseteo
-	CookieSecure     bool
+	SessionTTL    time.Duration
+	PublicBaseURL string // URL pública del frontend, para links de verificación/reseteo
+	CookieSecure  bool
 }
 
 // Load construye la configuración a partir de variables de entorno, con valores
@@ -44,7 +55,11 @@ func Load() Config {
 		S3AccessKey: getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey: getEnv("S3_SECRET_KEY", "minioadmin"),
 		S3UseSSL:    getBool("S3_USE_SSL", false),
+		S3Region:    getEnv("S3_REGION", "us-east-1"),
 		S3PublicURL: getEnv("S3_PUBLIC_URL", ""),
+
+		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
+		S3PublicUseSSL:   getBool("S3_PUBLIC_USE_SSL", getBool("S3_USE_SSL", false)),
 
 		SMTPHost: getEnv("SMTP_HOST", "localhost"),
 		SMTPPort: getEnv("SMTP_PORT", "1025"),

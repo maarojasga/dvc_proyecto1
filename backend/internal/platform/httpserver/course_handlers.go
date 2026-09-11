@@ -13,6 +13,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
+	"github.com/minio/minio-go/v7"
 )
 
 func (h *handlers) registerCourses(mux *http.ServeMux) {
@@ -40,6 +41,10 @@ func (h *handlers) registerCourses(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/v1/courses/versions/{versionId}/resources/{resourceId}", h.auth()(teacherOrAdmin(http.HandlerFunc(h.deleteResource))))
 	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/upload-url", h.auth()(teacherOrAdmin(http.HandlerFunc(h.requestResourceUploadURL))))
 	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/confirm-upload", h.auth()(teacherOrAdmin(http.HandlerFunc(h.confirmResourceUpload))))
+	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/multipart/initiate", h.auth()(teacherOrAdmin(http.HandlerFunc(h.initiateMultipartUpload))))
+	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/multipart/part-url", h.auth()(teacherOrAdmin(http.HandlerFunc(h.requestMultipartPartURL))))
+	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/multipart/complete", h.auth()(teacherOrAdmin(http.HandlerFunc(h.completeMultipartUpload))))
+	mux.Handle("GET /api/v1/courses/versions/{versionId}/resources/{resourceId}/multipart/parts", h.auth()(teacherOrAdmin(http.HandlerFunc(h.listMultipartParts))))
 
 	mux.HandleFunc("GET /api/v1/catalog", h.listCatalog)
 	mux.HandleFunc("GET /api/v1/catalog/{courseId}", h.getPublishedCourse)
@@ -502,3 +507,248 @@ func (h *handlers) getPublishedCourse(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, v)
 }
+
+type initiateMultipartRequest struct {
+	ContentType string `json:"content_type"`
+}
+
+func (h *handlers) initiateMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
+	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
+	if err1 != nil || err2 != nil {
+		writeError(w, ErrBadRequest)
+		return
+	}
+	var req initiateMultipartRequest
+	_ = decodeJSON(w, r, &req)
+	if req.ContentType == "" {
+		req.ContentType = "application/octet-stream"
+	}
+
+	actor, _ := UserFromContext(r.Context())
+	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	objectKey := "resources/" + res.ID.String() + "/original"
+	uploadID, err := h.deps.Storage.InitiateMultipartUpload(r.Context(), objectKey, req.ContentType)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if err := h.deps.Courses.SetResourceObjectKey(r.Context(), actor, versionID, resourceID, objectKey, domain.ProcessingPending); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"upload_id":  uploadID,
+		"object_key": objectKey,
+	})
+}
+
+type multipartPartURLRequest struct {
+	UploadID   string `json:"upload_id"`
+	PartNumber int    `json:"part_number"`
+}
+
+func (h *handlers) requestMultipartPartURL(w http.ResponseWriter, r *http.Request) {
+	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
+	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
+	if err1 != nil || err2 != nil {
+		writeError(w, ErrBadRequest)
+		return
+	}
+	var req multipartPartURLRequest
+	if !decodeJSON(w, r, &req) || req.UploadID == "" || req.PartNumber < 1 {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	actor, _ := UserFromContext(r.Context())
+	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if res.ObjectKey == "" {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	partURL, err := h.deps.Storage.PresignedUploadPartURL(r.Context(), res.ObjectKey, req.UploadID, req.PartNumber, 24*time.Hour)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"upload_url":  partURL,
+		"part_number": req.PartNumber,
+	})
+}
+
+type completeMultipartPart struct {
+	PartNumber int    `json:"part_number"`
+	ETag       string `json:"etag"`
+}
+
+type completeMultipartRequest struct {
+	UploadID       string                  `json:"upload_id"`
+	Parts          []completeMultipartPart `json:"parts"`
+	ChecksumSHA256 string                  `json:"checksum_sha256,omitempty"`
+}
+
+func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
+	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
+	if err1 != nil || err2 != nil {
+		writeError(w, ErrBadRequest)
+		return
+	}
+	var req completeMultipartRequest
+	if !decodeJSON(w, r, &req) || req.UploadID == "" || len(req.Parts) == 0 {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	actor, _ := UserFromContext(r.Context())
+	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if res.ObjectKey == "" {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	minioParts := make([]minio.CompletePart, len(req.Parts))
+	for i, p := range req.Parts {
+		minioParts[i] = minio.CompletePart{
+			PartNumber: p.PartNumber,
+			ETag:       p.ETag,
+		}
+	}
+
+	if err := h.deps.Storage.CompleteMultipartUpload(r.Context(), res.ObjectKey, req.UploadID, minioParts); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	info, err := h.deps.Storage.StatObject(r.Context(), res.ObjectKey)
+	if err != nil || info.Size == 0 {
+		writeError(w, errors.New("el objeto cargado no existe o está vacío"))
+		return
+	}
+
+	// Verificación de integridad por Checksum SHA-256 si fue provisto
+	calculatedSHA256, shaErr := h.deps.Storage.CalculateSHA256(r.Context(), res.ObjectKey)
+	if req.ChecksumSHA256 != "" && shaErr == nil {
+		if calculatedSHA256 != req.ChecksumSHA256 {
+			_ = h.deps.Storage.RemoveObject(r.Context(), res.ObjectKey)
+			writeError(w, errors.New("fallo de integridad: el checksum SHA-256 no coincide"))
+			return
+		}
+	}
+
+	realMime, mimeErr := h.deps.Storage.DetectMIME(r.Context(), res.ObjectKey)
+	detectedMime := info.ContentType
+	if mimeErr == nil && realMime != "" {
+		detectedMime = realMime
+	}
+
+	// Filtro de seguridad: bloquear ejecutables binarios
+	if detectedMime == "application/x-dosexec" || detectedMime == "application/x-executable" || detectedMime == "application/x-sharedlib" {
+		_ = h.deps.Storage.RemoveObject(r.Context(), res.ObjectKey)
+		writeError(w, errors.New("el archivo contiene un binario ejecutable no permitido"))
+		return
+	}
+
+	if !res.Type.RequiresAsyncProcessing() {
+		if err := h.deps.Courses.MarkResourceProcessingStatus(r.Context(), actor, versionID, resourceID, domain.ProcessingReady); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":          "ready",
+			"mime_type":       detectedMime,
+			"size_bytes":      info.Size,
+			"checksum_sha256": calculatedSHA256,
+		})
+		return
+	}
+
+	assetID := uuid.New()
+	if err := h.deps.Media.Create(r.Context(), &postgres.MediaAsset{
+		ID: assetID, ResourceID: resourceID, OriginalObjectKey: res.ObjectKey,
+		MimeType: detectedMime, SizeBytes: info.Size, Status: "uploaded",
+	}); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	kind := "video"
+	if res.Type == domain.ResourceAudio {
+		kind = "audio"
+	}
+	task, err := queueTask(queue.TaskProcessMedia, queue.MediaProcessPayload{
+		TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
+		SourceObjectKey: res.ObjectKey, Kind: kind,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if _, err := h.deps.Queue.Enqueue(task, asynq.MaxRetry(queue.MaxRetry), asynq.TaskID(assetID.String())); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if err := h.deps.Courses.MarkResourceProcessingStatus(r.Context(), actor, versionID, resourceID, domain.ProcessingPending); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":          "queued",
+		"media_asset_id":  assetID.String(),
+		"size_bytes":      info.Size,
+		"checksum_sha256": calculatedSHA256,
+	})
+}
+
+func (h *handlers) listMultipartParts(w http.ResponseWriter, r *http.Request) {
+	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
+	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
+	uploadID := r.URL.Query().Get("upload_id")
+	if err1 != nil || err2 != nil || uploadID == "" {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	actor, _ := UserFromContext(r.Context())
+	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if res.ObjectKey == "" {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	partsResult, err := h.deps.Storage.ListObjectParts(r.Context(), res.ObjectKey, uploadID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"upload_id": uploadID,
+		"parts":     partsResult.ObjectParts,
+	})
+}
+

@@ -6,7 +6,10 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -16,8 +19,18 @@ import (
 )
 
 type Client struct {
-	mc        *minio.Client
-	bucket    string
+	mc     *minio.Client
+	bucket string
+
+	// firmante firma las URLs que va a abrir el navegador. Normalmente es
+	// el mismo cliente que mc, pero cuando la API habla con el almacén por
+	// un nombre de red interno ("minio:9000") y el navegador lo alcanza por
+	// otro ("localhost:9100"), son dos clientes distintos: la firma SigV4
+	// incluye el Host, así que una URL firmada contra el host interno es
+	// inservible fuera de la red de contenedores y no se puede reescribir
+	// a posteriori sin invalidar la firma.
+	firmante *minio.Client
+
 	publicURL string // si está vacío, se usan URLs prefirmadas también para GET
 }
 
@@ -27,7 +40,13 @@ type Config struct {
 	SecretKey string
 	UseSSL    bool
 	Bucket    string
+	Region    string
 	PublicURL string
+
+	// PublicEndpoint es el host por el que el navegador alcanza el almacén.
+	// Vacío significa "el mismo que Endpoint".
+	PublicEndpoint string
+	PublicUseSSL   bool
 }
 
 func New(ctx context.Context, cfg Config) (*Client, error) {
@@ -49,13 +68,49 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		}
 	}
 
-	return &Client{mc: mc, bucket: cfg.Bucket, publicURL: cfg.PublicURL}, nil
+	firmante, err := clienteDeFirma(cfg, mc)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{mc: mc, firmante: firmante, bucket: cfg.Bucket, publicURL: cfg.PublicURL}, nil
 }
+
+// clienteDeFirma devuelve el cliente con el que se firman las URLs que abrirá
+// el navegador. Si no hay endpoint público configurado reutiliza el interno,
+// que es lo correcto cuando API y navegador ven el almacén por el mismo host.
+func clienteDeFirma(cfg Config, interno *minio.Client) (*minio.Client, error) {
+	if cfg.PublicEndpoint == "" || cfg.PublicEndpoint == cfg.Endpoint {
+		return interno, nil
+	}
+	// Region va explícita a propósito: sin ella minio-go resuelve la
+	// ubicación del bucket con una petición real, y este cliente apunta a un
+	// host que puede no resolver desde aquí (es el del navegador). Firmar no
+	// debe requerir red.
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	c, err := minio.New(cfg.PublicEndpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Secure: cfg.PublicUseSSL,
+		Region: region,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: no se pudo crear el cliente público: %w", err)
+	}
+	return c, nil
+}
+
+// SirveDesdeCDN informa si los objetos se entregan por una base pública en
+// lugar de firmarse uno a uno. Lo expone la API para que el cliente sepa si
+// la URL que recibe caduca.
+func (c *Client) SirveDesdeCDN() bool { return c.publicURL != "" }
 
 // PresignedPutURL emite una URL prefirmada de subida directa (carga
 // multipart directa a objetos, sin pasar por la API).
 func (c *Client) PresignedPutURL(ctx context.Context, objectKey string, expiry time.Duration) (string, error) {
-	u, err := c.mc.PresignedPutObject(ctx, c.bucket, objectKey, expiry)
+	u, err := c.firmante.PresignedPutObject(ctx, c.bucket, objectKey, expiry)
 	if err != nil {
 		return "", fmt.Errorf("storage: no se pudo firmar PUT: %w", err)
 	}
@@ -73,7 +128,7 @@ func (c *Client) PresignedGetURL(ctx context.Context, objectKey string, expiry t
 	if filename != "" {
 		reqParams.Set("response-content-disposition", fmt.Sprintf("inline; filename=%q", filename))
 	}
-	u, err := c.mc.PresignedGetObject(ctx, c.bucket, objectKey, expiry, reqParams)
+	u, err := c.firmante.PresignedGetObject(ctx, c.bucket, objectKey, expiry, reqParams)
 	if err != nil {
 		return "", fmt.Errorf("storage: no se pudo firmar GET: %w", err)
 	}
@@ -96,7 +151,7 @@ func (c *Client) PresignedUploadPartURL(ctx context.Context, objectKey, uploadID
 	reqParams := url.Values{}
 	reqParams.Set("partNumber", fmt.Sprintf("%d", partNumber))
 	reqParams.Set("uploadId", uploadID)
-	u, err := c.mc.Presign(ctx, http.MethodPut, c.bucket, objectKey, expiry, reqParams)
+	u, err := c.firmante.Presign(ctx, http.MethodPut, c.bucket, objectKey, expiry, reqParams)
 	if err != nil {
 		return "", fmt.Errorf("storage: no se pudo firmar la parte %d: %w", partNumber, err)
 	}
@@ -142,3 +197,45 @@ func (c *Client) StatObject(ctx context.Context, objectKey string) (minio.Object
 func (c *Client) RemoveObject(ctx context.Context, objectKey string) error {
 	return c.mc.RemoveObject(ctx, c.bucket, objectKey, minio.RemoveObjectOptions{})
 }
+
+// DetectMIME lee los primeros 512 bytes del objeto almacenado y devuelve el tipo
+// MIME real detectado mediante números mágicos (magic bytes).
+func (c *Client) DetectMIME(ctx context.Context, objectKey string) (string, error) {
+	obj, err := c.mc.GetObject(ctx, c.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("storage: no se pudo abrir el objeto: %w", err)
+	}
+	defer obj.Close()
+
+	buf := make([]byte, 512)
+	n, err := io.ReadFull(obj, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return "", fmt.Errorf("storage: no se pudo leer cabecera: %w", err)
+	}
+	return http.DetectContentType(buf[:n]), nil
+}
+
+// ListObjectParts consulta las partes ya subidas a S3 de una carga multipart
+// en curso, permitiendo que un cliente interrumpido reanude la subida.
+func (c *Client) ListObjectParts(ctx context.Context, objectKey, uploadID string) (minio.ListObjectPartsResult, error) {
+	core := minio.Core{Client: c.mc}
+	return core.ListObjectParts(ctx, c.bucket, objectKey, uploadID, 0, 1000)
+}
+
+// CalculateSHA256 calcula el checksum criptográfico SHA-256 de un objeto
+// ensamblado en S3 para verificación rigurosa de integridad.
+func (c *Client) CalculateSHA256(ctx context.Context, objectKey string) (string, error) {
+	obj, err := c.mc.GetObject(ctx, c.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("storage: no se pudo abrir el objeto para hash: %w", err)
+	}
+	defer obj.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, obj); err != nil {
+		return "", fmt.Errorf("storage: error calculando sha256: %w", err)
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+

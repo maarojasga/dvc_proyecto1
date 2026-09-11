@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	ErrForbidden      = errors.New("courses: no tienes permiso sobre este curso")
+	ErrForbidden       = errors.New("courses: no tienes permiso sobre este curso")
 	ErrVersionNotDraft = errors.New("courses: la versión no es un borrador editable")
 )
 
@@ -43,12 +43,12 @@ func (s *Service) CreateDraft(ctx context.Context, teacher *user.User, slug, tit
 	}
 
 	v := &domain.Version{
-		ID:            uuid.New(),
-		CourseID:      c.ID,
-		VersionNumber: 1,
-		Status:        domain.VersionDraft,
-		Title:         title,
-		Language:      "es",
+		ID:                           uuid.New(),
+		CourseID:                     c.ID,
+		VersionNumber:                1,
+		Status:                       domain.VersionDraft,
+		Title:                        title,
+		Language:                     "es",
 		ApprovalMinScore:             60,
 		ApprovalRequiredResourcesPct: 100,
 		CreatedAt:                    now,
@@ -112,14 +112,14 @@ func (s *Service) CreateUpdateDraft(ctx context.Context, actor *user.User, cours
 		}
 		for _, u := range m.Units {
 			newUnit := &domain.Unit{ID: uuid.New(), ModuleID: newModule.ID, StableID: u.StableID, Title: u.Title, Position: u.Position}
-			if err := s.repo.CreateUnit(ctx, newUnit); err != nil {
+			if err := s.repo.CreateUnit(ctx, draft.ID, newUnit); err != nil {
 				return nil, err
 			}
 			for _, res := range u.Resources {
 				newRes := res
 				newRes.ID = uuid.New()
 				newRes.UnitID = newUnit.ID
-				if err := s.repo.CreateResource(ctx, &newRes); err != nil {
+				if err := s.repo.CreateResource(ctx, draft.ID, &newRes); err != nil {
 					return nil, err
 				}
 			}
@@ -178,12 +178,27 @@ func requireDraft(v *domain.Version) error {
 	return nil
 }
 
-func (s *Service) UpdateMetadata(ctx context.Context, actor *user.User, versionID uuid.UUID, patch domain.Version) error {
+// editableVersion resuelve la versión comprobando de una vez propiedad y
+// estado.
+//
+// Toda mutación de estructura pasa por aquí: una versión publicada es
+// inmutable, y editarla exige despublicarla antes. Antes solo lo comprobaban
+// UpdateMetadata y AddModule, así que el resto de operaciones podían alterar
+// un curso ya publicado.
+func (s *Service) editableVersion(ctx context.Context, actor *user.User, versionID uuid.UUID) (*domain.Version, error) {
 	_, v, err := s.GetOwnedVersion(ctx, actor, versionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := requireDraft(v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+func (s *Service) UpdateMetadata(ctx context.Context, actor *user.User, versionID uuid.UUID, patch domain.Version) error {
+	v, err := s.editableVersion(ctx, actor, versionID)
+	if err != nil {
 		return err
 	}
 	v.Title = patch.Title
@@ -199,11 +214,8 @@ func (s *Service) UpdateMetadata(ctx context.Context, actor *user.User, versionI
 }
 
 func (s *Service) AddModule(ctx context.Context, actor *user.User, versionID uuid.UUID, title string, position int) (*domain.Module, error) {
-	_, v, err := s.GetOwnedVersion(ctx, actor, versionID)
+	v, err := s.editableVersion(ctx, actor, versionID)
 	if err != nil {
-		return nil, err
-	}
-	if err := requireDraft(v); err != nil {
 		return nil, err
 	}
 	m := &domain.Module{ID: uuid.New(), CourseVersionID: v.ID, StableID: uuid.New(), Title: title, Position: position}
@@ -214,46 +226,46 @@ func (s *Service) AddModule(ctx context.Context, actor *user.User, versionID uui
 }
 
 func (s *Service) UpdateModule(ctx context.Context, actor *user.User, versionID, moduleID uuid.UUID, title string, position int) error {
-	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return err
 	}
-	return s.repo.UpdateModule(ctx, &domain.Module{ID: moduleID, Title: title, Position: position})
+	return s.repo.UpdateModule(ctx, versionID, &domain.Module{ID: moduleID, Title: title, Position: position})
 }
 
 func (s *Service) DeleteModule(ctx context.Context, actor *user.User, versionID, moduleID uuid.UUID) error {
-	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return err
 	}
-	return s.repo.DeleteModule(ctx, moduleID)
+	return s.repo.DeleteModule(ctx, versionID, moduleID)
 }
 
 func (s *Service) UpdateUnit(ctx context.Context, actor *user.User, versionID, unitID uuid.UUID, title string, position int) error {
-	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return err
 	}
-	return s.repo.UpdateUnit(ctx, &domain.Unit{ID: unitID, Title: title, Position: position})
+	return s.repo.UpdateUnit(ctx, versionID, &domain.Unit{ID: unitID, Title: title, Position: position})
 }
 
 func (s *Service) DeleteUnit(ctx context.Context, actor *user.User, versionID, unitID uuid.UUID) error {
-	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return err
 	}
-	return s.repo.DeleteUnit(ctx, unitID)
+	return s.repo.DeleteUnit(ctx, versionID, unitID)
 }
 
 func (s *Service) AddUnit(ctx context.Context, actor *user.User, versionID, moduleID uuid.UUID, title string, position int) (*domain.Unit, error) {
-	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return nil, err
 	}
 	u := &domain.Unit{ID: uuid.New(), ModuleID: moduleID, StableID: uuid.New(), Title: title, Position: position}
-	if err := s.repo.CreateUnit(ctx, u); err != nil {
+	if err := s.repo.CreateUnit(ctx, versionID, u); err != nil {
 		return nil, err
 	}
 	return u, nil
 }
 
 func (s *Service) AddResource(ctx context.Context, actor *user.User, versionID uuid.UUID, res *domain.Resource) (*domain.Resource, error) {
-	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return nil, err
 	}
 	if !res.Type.Valid() {
@@ -264,7 +276,7 @@ func (s *Service) AddResource(ctx context.Context, actor *user.User, versionID u
 	if res.ProcessingStatus == "" {
 		res.ProcessingStatus = domain.ProcessingNone
 	}
-	if err := s.repo.CreateResource(ctx, res); err != nil {
+	if err := s.repo.CreateResource(ctx, versionID, res); err != nil {
 		return nil, err
 	}
 	return res, nil
@@ -276,7 +288,7 @@ func (s *Service) GetResource(ctx context.Context, actor *user.User, versionID, 
 	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
 		return nil, err
 	}
-	return s.repo.GetResource(ctx, resourceID)
+	return s.repo.GetResource(ctx, versionID, resourceID)
 }
 
 func (s *Service) SetResourceObjectKey(ctx context.Context, actor *user.User, versionID, resourceID uuid.UUID, objectKey string, status domain.ProcessingStatus) error {
@@ -286,28 +298,28 @@ func (s *Service) SetResourceObjectKey(ctx context.Context, actor *user.User, ve
 	}
 	res.ObjectKey = objectKey
 	res.ProcessingStatus = status
-	return s.repo.UpdateResource(ctx, res)
+	return s.repo.UpdateResource(ctx, versionID, res)
 }
 
 func (s *Service) MarkResourceProcessingStatus(ctx context.Context, actor *user.User, versionID, resourceID uuid.UUID, status domain.ProcessingStatus) error {
 	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
 		return err
 	}
-	return s.repo.SetResourceProcessingStatus(ctx, resourceID, status)
+	return s.repo.SetResourceProcessingStatus(ctx, versionID, resourceID, status)
 }
 
 func (s *Service) UpdateResource(ctx context.Context, actor *user.User, versionID uuid.UUID, res *domain.Resource) error {
-	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return err
 	}
-	return s.repo.UpdateResource(ctx, res)
+	return s.repo.UpdateResource(ctx, versionID, res)
 }
 
 func (s *Service) DeleteResource(ctx context.Context, actor *user.User, versionID, resourceID uuid.UUID) error {
-	if _, _, err := s.GetOwnedVersion(ctx, actor, versionID); err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return err
 	}
-	return s.repo.DeleteResource(ctx, resourceID)
+	return s.repo.DeleteResource(ctx, versionID, resourceID)
 }
 
 // PublishVersion valida exhaustivamente y publica una versión en borrador,

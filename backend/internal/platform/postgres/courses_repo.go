@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/course"
@@ -165,6 +166,19 @@ func (r *CourseRepo) ListCatalog(ctx context.Context, f CatalogFilter) ([]*cours
 
 // --- Módulos, unidades, recursos ---
 
+// affectedOne traduce "ninguna fila afectada" a no encontrado: el objetivo no
+// existe o no pertenece a la versión autorizada, y desde fuera ambas cosas se
+// responden igual para no confirmar identificadores ajenos.
+func affectedOne(tag pgconn.CommandTag, err error) error {
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *CourseRepo) CreateModule(ctx context.Context, m *course.Module) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO modules (id, course_version_id, stable_id, title, position)
@@ -172,64 +186,96 @@ func (r *CourseRepo) CreateModule(ctx context.Context, m *course.Module) error {
 	return err
 }
 
-func (r *CourseRepo) UpdateModule(ctx context.Context, m *course.Module) error {
-	_, err := r.pool.Exec(ctx, `UPDATE modules SET title=$2, position=$3, updated_at=now() WHERE id=$1`, m.ID, m.Title, m.Position)
-	return err
+// Las operaciones sobre módulos, unidades y recursos llevan el identificador
+// de la versión en la propia consulta.
+//
+// La ruta autoriza al profesor sobre una versión, pero el módulo o el recurso
+// llegan como identificadores sueltos: sin acotar por versión, un profesor
+// podría pasar el identificador de un módulo de otro curso y modificarlo.
+// Comprobarlo en el SQL, y no antes, evita además la ventana entre comprobar
+// y actuar.
+
+func (r *CourseRepo) UpdateModule(ctx context.Context, versionID uuid.UUID, m *course.Module) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE modules SET title=$3, position=$4, updated_at=now()
+		WHERE id=$1 AND course_version_id=$2`, m.ID, versionID, m.Title, m.Position)
+	return affectedOne(tag, err)
 }
 
-func (r *CourseRepo) DeleteModule(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM modules WHERE id=$1`, id)
-	return err
+func (r *CourseRepo) DeleteModule(ctx context.Context, versionID, id uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx,
+		`DELETE FROM modules WHERE id=$1 AND course_version_id=$2`, id, versionID)
+	return affectedOne(tag, err)
 }
 
-func (r *CourseRepo) CreateUnit(ctx context.Context, u *course.Unit) error {
-	_, err := r.pool.Exec(ctx, `
+// CreateUnit inserta solo si el módulo pertenece a la versión autorizada.
+func (r *CourseRepo) CreateUnit(ctx context.Context, versionID uuid.UUID, u *course.Unit) error {
+	tag, err := r.pool.Exec(ctx, `
 		INSERT INTO units (id, module_id, stable_id, title, position)
-		VALUES ($1,$2,$3,$4,$5)`, u.ID, u.ModuleID, u.StableID, u.Title, u.Position)
-	return err
+		SELECT $1, $2, $3, $4, $5
+		  FROM modules WHERE id=$2 AND course_version_id=$6`,
+		u.ID, u.ModuleID, u.StableID, u.Title, u.Position, versionID)
+	return affectedOne(tag, err)
 }
 
-func (r *CourseRepo) UpdateUnit(ctx context.Context, u *course.Unit) error {
-	_, err := r.pool.Exec(ctx, `UPDATE units SET title=$2, position=$3, updated_at=now() WHERE id=$1`, u.ID, u.Title, u.Position)
-	return err
+func (r *CourseRepo) UpdateUnit(ctx context.Context, versionID uuid.UUID, u *course.Unit) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE units SET title=$3, position=$4, updated_at=now()
+		WHERE id=$1 AND module_id IN (SELECT id FROM modules WHERE course_version_id=$2)`,
+		u.ID, versionID, u.Title, u.Position)
+	return affectedOne(tag, err)
 }
 
-func (r *CourseRepo) DeleteUnit(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM units WHERE id=$1`, id)
-	return err
+func (r *CourseRepo) DeleteUnit(ctx context.Context, versionID, id uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		DELETE FROM units
+		WHERE id=$1 AND module_id IN (SELECT id FROM modules WHERE course_version_id=$2)`,
+		id, versionID)
+	return affectedOne(tag, err)
 }
 
-func (r *CourseRepo) CreateResource(ctx context.Context, res *course.Resource) error {
-	_, err := r.pool.Exec(ctx, `
+// unidadesDeLaVersion acota una consulta de recursos a la versión autorizada.
+const unidadesDeLaVersion = `
+	SELECT u.id FROM units u
+	  JOIN modules m ON m.id = u.module_id
+	 WHERE m.course_version_id = $2`
+
+// CreateResource inserta solo si la unidad pertenece a la versión autorizada.
+func (r *CourseRepo) CreateResource(ctx context.Context, versionID uuid.UUID, res *course.Resource) error {
+	tag, err := r.pool.Exec(ctx, `
 		INSERT INTO resources (id, unit_id, stable_id, type, title, position, visible, required,
 			downloadable, processing_status, text_content_md, external_url, object_key)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+		  FROM units u JOIN modules m ON m.id = u.module_id
+		 WHERE u.id = $2 AND m.course_version_id = $14`,
 		res.ID, res.UnitID, res.StableID, res.Type, res.Title, res.Position, res.Visible, res.Required,
-		res.Downloadable, res.ProcessingStatus, nullIfEmpty(res.TextContentMD), nullIfEmpty(res.ExternalURL), nullIfEmpty(res.ObjectKey))
-	return err
+		res.Downloadable, res.ProcessingStatus, nullIfEmpty(res.TextContentMD), nullIfEmpty(res.ExternalURL),
+		nullIfEmpty(res.ObjectKey), versionID)
+	return affectedOne(tag, err)
 }
 
-func (r *CourseRepo) UpdateResource(ctx context.Context, res *course.Resource) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE resources SET title=$2, position=$3, visible=$4, required=$5, downloadable=$6,
-			processing_status=$7, text_content_md=$8, external_url=$9, object_key=$10, updated_at=now()
-		WHERE id=$1`,
-		res.ID, res.Title, res.Position, res.Visible, res.Required, res.Downloadable,
+func (r *CourseRepo) UpdateResource(ctx context.Context, versionID uuid.UUID, res *course.Resource) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE resources SET title=$3, position=$4, visible=$5, required=$6, downloadable=$7,
+			processing_status=$8, text_content_md=$9, external_url=$10, object_key=$11, updated_at=now()
+		WHERE id=$1 AND unit_id IN (`+unidadesDeLaVersion+`)`,
+		res.ID, versionID, res.Title, res.Position, res.Visible, res.Required, res.Downloadable,
 		res.ProcessingStatus, nullIfEmpty(res.TextContentMD), nullIfEmpty(res.ExternalURL), nullIfEmpty(res.ObjectKey))
-	return err
+	return affectedOne(tag, err)
 }
 
-func (r *CourseRepo) DeleteResource(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM resources WHERE id=$1`, id)
-	return err
+func (r *CourseRepo) DeleteResource(ctx context.Context, versionID, id uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx,
+		`DELETE FROM resources WHERE id=$1 AND unit_id IN (`+unidadesDeLaVersion+`)`, id, versionID)
+	return affectedOne(tag, err)
 }
 
-func (r *CourseRepo) GetResource(ctx context.Context, id uuid.UUID) (*course.Resource, error) {
+func (r *CourseRepo) GetResource(ctx context.Context, versionID, id uuid.UUID) (*course.Resource, error) {
 	var res course.Resource
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, unit_id, stable_id, type, title, position, visible, required, downloadable,
 			processing_status, coalesce(text_content_md,''), coalesce(external_url,''), coalesce(object_key,'')
-		FROM resources WHERE id=$1`, id).
+		FROM resources WHERE id=$1 AND unit_id IN (`+unidadesDeLaVersion+`)`, id, versionID).
 		Scan(&res.ID, &res.UnitID, &res.StableID, &res.Type, &res.Title, &res.Position, &res.Visible,
 			&res.Required, &res.Downloadable, &res.ProcessingStatus, &res.TextContentMD, &res.ExternalURL, &res.ObjectKey)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -238,9 +284,72 @@ func (r *CourseRepo) GetResource(ctx context.Context, id uuid.UUID) (*course.Res
 	return &res, err
 }
 
-func (r *CourseRepo) SetResourceProcessingStatus(ctx context.Context, id uuid.UUID, status course.ProcessingStatus) error {
-	_, err := r.pool.Exec(ctx, `UPDATE resources SET processing_status=$2, updated_at=now() WHERE id=$1`, id, status)
+// SetResourceProcessingStatusInternal cambia el estado de procesamiento sin
+// acotar por versión.
+//
+// Es para los workers: su autoridad viene del trabajo encolado por la API, no
+// de una sesión de usuario, así que no hay una versión autorizada contra la
+// que acotar. No debe usarse desde un handler HTTP.
+// RecursoPublicadoConMedia describe un recurso de la versión vigente de su
+// curso junto con el estado de su activo multimedia.
+type RecursoPublicadoConMedia struct {
+	CourseID     uuid.UUID
+	TeacherID    uuid.UUID
+	StableID     uuid.UUID
+	Type         string
+	Title        string
+	Visible      bool
+	Downloadable bool
+	TextContent  string
+	ExternalURL  string
+	ObjectKey    string
+	AssetStatus  string
+	HLSMasterKey string
+}
+
+// GetRecursoPublicadoConMedia resuelve un recurso solo si pertenece a la
+// versión vigente del curso.
+//
+// La condición sobre current_published_version_id va en la consulta: así un
+// recurso de un borrador o de una versión retirada no se puede reproducir
+// aunque se conozca su identificador.
+func (r *CourseRepo) GetRecursoPublicadoConMedia(ctx context.Context, resourceID uuid.UUID) (*RecursoPublicadoConMedia, error) {
+	var out RecursoPublicadoConMedia
+	err := r.pool.QueryRow(ctx, `
+		SELECT c.id, c.teacher_id, res.stable_id, res.type, res.title, res.visible,
+		       res.downloadable, coalesce(res.text_content_md, ''),
+		       coalesce(res.external_url, ''), coalesce(res.object_key, ''),
+		       coalesce(ma.status, ''), coalesce(ma.hls_master_key, '')
+		  FROM resources res
+		  JOIN units u   ON u.id = res.unit_id
+		  JOIN modules m ON m.id = u.module_id
+		  JOIN course_versions v ON v.id = m.course_version_id
+		  JOIN courses c ON c.id = v.course_id AND c.current_published_version_id = v.id
+		  LEFT JOIN media_assets ma ON ma.resource_id = res.id
+		 WHERE res.id = $1`, resourceID).
+		Scan(&out.CourseID, &out.TeacherID, &out.StableID, &out.Type, &out.Title, &out.Visible,
+			&out.Downloadable, &out.TextContent, &out.ExternalURL, &out.ObjectKey,
+			&out.AssetStatus, &out.HLSMasterKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (r *CourseRepo) SetResourceProcessingStatusInternal(ctx context.Context, id uuid.UUID, status course.ProcessingStatus) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE resources SET processing_status=$2, updated_at=now() WHERE id=$1`, id, status)
 	return err
+}
+
+func (r *CourseRepo) SetResourceProcessingStatus(ctx context.Context, versionID, id uuid.UUID, status course.ProcessingStatus) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE resources SET processing_status=$3, updated_at=now()
+		WHERE id=$1 AND unit_id IN (`+unidadesDeLaVersion+`)`, id, versionID, status)
+	return affectedOne(tag, err)
 }
 
 // LoadTree carga módulos, unidades y recursos completos de una versión, en

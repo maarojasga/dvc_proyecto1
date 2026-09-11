@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Version, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -42,19 +43,27 @@ export default function CourseDetailPage() {
 
   return (
     <div>
-      <h1>{version.Title}</h1>
-      <p>{version.Summary}</p>
-      <div className="row">
-        <span className="badge">{version.Category}</span>
-        <span className="badge">{version.Level}</span>
-        <span className="badge">{version.Language}</span>
-      </div>
-
-      {user?.role === "student" && (
-        <div className="card">
-          <button onClick={handleEnroll}>Inscribirme</button>
-          {enrollMessage && <p role="status">{enrollMessage}</p>}
+      <header className="page-header">
+        <div>
+          <h1>{version.Title}</h1>
+          <p>{version.Summary}</p>
+          <div className="row" style={{ marginTop: "0.5rem" }}>
+            {version.Category && <span className="badge">{version.Category}</span>}
+            {version.Level && <span className="badge">{version.Level}</span>}
+            <span className="badge">{version.Language}</span>
+          </div>
         </div>
+        {user?.role === "student" && (
+          <div>
+            <button onClick={handleEnroll}>Inscribirme</button>
+          </div>
+        )}
+      </header>
+
+      {enrollMessage && (
+        <p className="success-banner" role="status">
+          {enrollMessage}
+        </p>
       )}
 
       <h2>Contenido</h2>
@@ -69,7 +78,12 @@ export default function CourseDetailPage() {
                   <ul>
                     {u.Resources?.filter((r) => r.Visible).map((r) => (
                       <li key={r.ID}>
-                        {r.Title} <span className="badge">{r.Type}</span>
+                        {/* Solo quien esté inscrito recibirá el contenido; la
+                            API lo comprueba en cada entrega. El enlace se
+                            muestra igual para que se vea qué trae el curso. */}
+                        <Link href={`/cursos/${courseId}/recursos/${r.ID}`}>{r.Title}</Link>{" "}
+                        <span className="badge">{r.Type}</span>
+                        {r.Required && <span className="badge">obligatorio</span>}
                       </li>
                     ))}
                   </ul>

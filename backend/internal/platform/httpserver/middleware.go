@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,15 @@ var (
 	ErrUnauthenticated = errors.New("httpserver: se requiere autenticación")
 	ErrForbidden       = errors.New("httpserver: no tienes permiso para esta operación")
 	ErrBadRequest      = errors.New("httpserver: solicitud inválida")
+	ErrCSRF            = errors.New("httpserver: falta o no coincide el token anti-CSRF")
+
+	// ErrIdempotencyInFlight indica que otra petición con la misma
+	// Idempotency-Key sigue ejecutándose.
+	ErrIdempotencyInFlight = errors.New("httpserver: ya hay una petición idéntica en curso")
+
+	// ErrColaNoDisponible indica que la instancia no tiene inspector de cola
+	// configurado, así que no puede informar de su estado.
+	ErrColaNoDisponible = errors.New("httpserver: la inspección de la cola no está disponible")
 )
 
 type ctxKey int
@@ -26,6 +36,7 @@ type ctxKey int
 const (
 	ctxUser ctxKey = iota
 	ctxRequestID
+	ctxKeySession
 )
 
 // SessionCookieName es el nombre de la cookie httpOnly que transporta el
@@ -34,6 +45,18 @@ const SessionCookieName = "mooc_session"
 
 func withUser(ctx context.Context, u *user.User) context.Context {
 	return context.WithValue(ctx, ctxUser, u)
+}
+
+func withSession(ctx context.Context, s *user.Session) context.Context {
+	return context.WithValue(ctx, ctxKeySession, s)
+}
+
+// SessionFromContext expone la sesión en curso a los handlers, que la
+// necesitan para saber cuál de las sesiones listadas es la actual y para no
+// cerrarla al revocar las demás.
+func SessionFromContext(ctx context.Context) (*user.Session, bool) {
+	s, ok := ctx.Value(ctxKeySession).(*user.Session)
+	return s, ok
 }
 
 // UserFromContext expone el usuario autenticado a los handlers.
@@ -121,16 +144,48 @@ func SecurityHeaders(next http.Handler) http.Handler {
 
 // CORS habilita el origen del frontend configurado, con credenciales
 // (cookie de sesión) permitidas.
+// CabecerasPermitidas son las que el navegador puede enviar desde otro
+// origen.
+//
+// Se arma a partir de las constantes reales y no de una cadena suelta: la
+// lista se había quedado sin X-CSRF-Token, así que el preflight rechazaba
+// todo inicio de sesión desde el navegador aunque la API estuviera correcta.
+var CabecerasPermitidas = []string{
+	"Content-Type",
+	"Authorization",
+	CabeceraIdempotencia,
+	"If-Match",
+	CSRFHeaderName,
+}
+
+// CabecerasExpuestas son las que el JavaScript de la página puede leer de la
+// respuesta. Sin declararlas, el navegador las oculta aunque viajen.
+var CabecerasExpuestas = []string{
+	"ETag",
+	"X-Request-Id",
+	CabeceraIdempotenciaRepetida,
+}
+
 func CORS(allowedOrigin string) func(http.Handler) http.Handler {
+	permitidas := strings.Join(CabecerasPermitidas, ",")
+	expuestas := strings.Join(CabecerasExpuestas, ",")
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
 			h.Set("Access-Control-Allow-Origin", allowedOrigin)
 			h.Set("Access-Control-Allow-Credentials", "true")
 			h.Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Content-Type,Authorization,Idempotency-Key,If-Match")
-			h.Set("Access-Control-Expose-Headers", "ETag,X-Request-Id")
+			h.Set("Access-Control-Allow-Headers", permitidas)
+			h.Set("Access-Control-Expose-Headers", expuestas)
+			// El navegador puede reutilizar el preflight en lugar de repetirlo
+			// antes de cada petición que cambia estado.
+			h.Set("Access-Control-Max-Age", "600")
+			// La respuesta depende del origen: sin esto, una caché intermedia
+			// podría servirle a un origen la cabecera calculada para otro.
+			h.Add("Vary", "Origin")
 			if r.Method == http.MethodOptions {
+				h.Add("Vary", "Access-Control-Request-Headers")
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -171,11 +226,21 @@ func RateLimit(rdb *redis.Client, keyPrefix string, limit int, window time.Durat
 	}
 }
 
+// clientIP devuelve la dirección del cliente, sin el puerto.
+//
+// RemoteAddr viene como "host:puerto", y el puerto es efímero: guardarlo en la
+// bitácora y en las sesiones ensucia el dato y además impide agrupar por
+// dirección, que es justo para lo que sirve.
 func clientIP(r *http.Request) string {
 	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		// El primer elemento es el cliente original; el resto son proxies.
 		return strings.TrimSpace(strings.Split(fwd, ",")[0])
 	}
-	return r.RemoteAddr
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // RequireAuth exige una sesión activa y expone el usuario en el contexto.
@@ -187,12 +252,13 @@ func RequireAuth(authSvc *auth.Service) func(http.Handler) http.Handler {
 				writeError(w, ErrUnauthenticated)
 				return
 			}
-			u, _, err := authSvc.Authenticate(r.Context(), token)
+			u, sess, err := authSvc.Authenticate(r.Context(), token)
 			if err != nil {
 				writeError(w, ErrUnauthenticated)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(withUser(r.Context(), u)))
+			ctx := withSession(withUser(r.Context(), u), sess)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

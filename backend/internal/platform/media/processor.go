@@ -8,11 +8,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -40,6 +43,14 @@ type Processor struct {
 	Storage *storage.Client
 	Assets  *postgres.MediaRepo
 	Courses *postgres.CourseRepo
+	Log     *slog.Logger
+}
+
+func (p *Processor) log() *slog.Logger {
+	if p.Log != nil {
+		return p.Log
+	}
+	return slog.Default()
 }
 
 // HandleProcessMedia es el asynq.HandlerFunc registrado para
@@ -56,25 +67,33 @@ func (p *Processor) HandleProcessMedia(ctx context.Context, t *asynq.Task) error
 	if err != nil {
 		return fmt.Errorf("media: no se encontró el activo %s: %w", payload.MediaAssetID, err)
 	}
-	if asset.Status == "ready" {
-		return nil // idempotencia: ya procesado, no repetir salida.
-	}
 
-	if err := p.Assets.MarkProcessing(ctx, asset.ID); err != nil {
+	// Tomar el trabajo es un UPDATE condicional: si el activo ya está listo o
+	// si otro worker lo está procesando con el arrendamiento vigente, este
+	// intento se descarta en silencio. Es lo que hace que una doble entrega no
+	// produzca salidas repetidas, incluso si llega mientras el primer intento
+	// sigue corriendo.
+	reclamado, err := p.Assets.Reclamar(ctx, asset.ID, time.Now().UTC())
+	if err != nil {
 		return err
+	}
+	if !reclamado {
+		p.log().Info("media: entrega duplicada descartada",
+			"activo", asset.ID, "recurso", payload.ResourceID, "estado", asset.Status)
+		return nil
 	}
 
 	hlsKey, err := p.transcode(ctx, payload)
 	if err != nil {
 		_ = p.Assets.MarkFailed(ctx, asset.ID, err.Error())
-		_ = p.Courses.SetResourceProcessingStatus(ctx, payload.ResourceID, coursedomain.ProcessingFailed)
+		_ = p.Courses.SetResourceProcessingStatusInternal(ctx, payload.ResourceID, coursedomain.ProcessingFailed)
 		return err // asynq reintentará con backoff hasta queue.MaxRetry, luego DLQ.
 	}
 
 	if err := p.Assets.MarkReady(ctx, asset.ID, hlsKey); err != nil {
 		return err
 	}
-	return p.Courses.SetResourceProcessingStatus(ctx, payload.ResourceID, coursedomain.ProcessingReady)
+	return p.Courses.SetResourceProcessingStatusInternal(ctx, payload.ResourceID, coursedomain.ProcessingReady)
 }
 
 func (p *Processor) transcode(ctx context.Context, payload queue.MediaProcessPayload) (hlsMasterKey string, err error) {
@@ -96,24 +115,14 @@ func (p *Processor) transcode(ctx context.Context, payload queue.MediaProcessPay
 }
 
 func (p *Processor) transcodeVideo(ctx context.Context, payload queue.MediaProcessPayload, workDir, srcPath string) (string, error) {
-	sourceHeight, err := probeHeight(ctx, srcPath)
+	ancho, alto, err := probeDimensiones(ctx, srcPath)
 	if err != nil {
 		return "", fmt.Errorf("ffprobe: %w", err)
 	}
 
-	var chosen []rendition
-	for _, r := range ladder {
-		if r.Height <= sourceHeight {
-			chosen = append(chosen, r)
-		}
-	}
-	if len(chosen) == 0 {
-		chosen = []rendition{{Height: sourceHeight, Bitrate: "800k"}}
-	}
-
-	var variants []string
-	for _, r := range chosen {
-		name := fmt.Sprintf("h%d", r.Height)
+	calidades := seleccionarCalidades(alto)
+	for _, r := range calidades {
+		name := nombreCalidad(r)
 		playlist := filepath.Join(workDir, name+".m3u8")
 		segmentPattern := filepath.Join(workDir, name+"_%03d.ts")
 
@@ -125,16 +134,63 @@ func (p *Processor) transcodeVideo(ctx context.Context, payload queue.MediaProce
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("ffmpeg (%s): %w: %s", name, err, truncate(string(out), 500))
 		}
-		variants = append(variants, fmt.Sprintf("#EXT-X-STREAM-INF:BANDWIDTH=%s,RESOLUTION=x%d\n%s.m3u8", bitrateToBps(r.Bitrate), r.Height, name))
 	}
 
 	masterPath := filepath.Join(workDir, "master.m3u8")
-	master := "#EXTM3U\n" + strings.Join(variants, "\n") + "\n"
-	if err := os.WriteFile(masterPath, []byte(master), 0o644); err != nil {
+	if err := os.WriteFile(masterPath, []byte(masterDeVideo(calidades, ancho, alto)), 0o644); err != nil {
 		return "", err
 	}
 
 	return p.uploadDir(ctx, payload.ResourceID.String(), workDir)
+}
+
+// seleccionarCalidades descarta las calidades por encima del original: subir
+// de resolución no añade detalle y multiplica el costo de transcodificación y
+// de entrega. Si el original es más bajo que toda la escalera, se emite una
+// sola variante a su resolución nativa.
+func seleccionarCalidades(alturaOriginal int) []rendition {
+	var elegidas []rendition
+	for _, r := range ladder {
+		if r.Height <= alturaOriginal {
+			elegidas = append(elegidas, r)
+		}
+	}
+	if len(elegidas) == 0 {
+		return []rendition{{Height: alturaOriginal, Bitrate: "800k"}}
+	}
+	return elegidas
+}
+
+func nombreCalidad(r rendition) string { return fmt.Sprintf("h%d", r.Height) }
+
+// anchoEscalado reproduce lo que hace scale=-2:alto en FFmpeg: conserva la
+// relación de aspecto y redondea a un número par, que es lo que exige el
+// submuestreo de croma 4:2:0.
+func anchoEscalado(anchoOriginal, alturaOriginal, altura int) int {
+	if alturaOriginal <= 0 {
+		return 0
+	}
+	ancho := int(math.Round(float64(anchoOriginal) * float64(altura) / float64(alturaOriginal)))
+	if ancho%2 != 0 {
+		ancho++
+	}
+	return ancho
+}
+
+// masterDeVideo arma la lista maestra.
+//
+// RESOLUTION debe ir como ANCHOxALTO: antes se emitía sin el ancho ("x1080"),
+// que no es un valor válido y deja al reproductor sin saber a qué variante
+// cambiar.
+func masterDeVideo(calidades []rendition, anchoOriginal, alturaOriginal int) string {
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n#EXT-X-VERSION:3\n")
+	for _, r := range calidades {
+		ancho := anchoEscalado(anchoOriginal, alturaOriginal, r.Height)
+		fmt.Fprintf(&b, "#EXT-X-STREAM-INF:BANDWIDTH=%s,RESOLUTION=%dx%d\n%s.m3u8\n",
+			bitrateToBps(r.Bitrate), ancho, r.Height, nombreCalidad(r))
+	}
+	return b.String()
 }
 
 func (p *Processor) transcodeAudio(ctx context.Context, payload queue.MediaProcessPayload, workDir, srcPath string) (string, error) {
@@ -150,8 +206,7 @@ func (p *Processor) transcodeAudio(ctx context.Context, payload queue.MediaProce
 	}
 
 	masterPath := filepath.Join(workDir, "master.m3u8")
-	master := "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=128000\naudio.m3u8\n"
-	if err := os.WriteFile(masterPath, []byte(master), 0o644); err != nil {
+	if err := os.WriteFile(masterPath, []byte(masterDeAudio()), 0o644); err != nil {
 		return "", err
 	}
 
@@ -182,14 +237,35 @@ func (p *Processor) uploadDir(ctx context.Context, resourceID, dir string) (mast
 	return fmt.Sprintf("hls/%s/master.m3u8", resourceID), nil
 }
 
-func probeHeight(ctx context.Context, path string) (int, error) {
+// masterDeAudio arma la lista maestra de una pista sin video.
+func masterDeAudio() string {
+	return "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=128000,CODECS=\"mp4a.40.2\"\naudio.m3u8\n"
+}
+
+// probeDimensiones lee ancho y alto del primer flujo de video.
+func probeDimensiones(ctx context.Context, path string) (ancho, alto int, err error) {
 	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
-		"-show_entries", "stream=height", "-of", "csv=p=0", path)
+		"-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", path)
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return strconv.Atoi(strings.TrimSpace(string(out)))
+	return parsearDimensiones(string(out))
+}
+
+// parsearDimensiones interpreta la salida "ANCHOxALTO" de ffprobe.
+func parsearDimensiones(salida string) (ancho, alto int, err error) {
+	campos := strings.Split(strings.TrimSpace(salida), "x")
+	if len(campos) != 2 {
+		return 0, 0, fmt.Errorf("media: dimensiones ilegibles: %q", strings.TrimSpace(salida))
+	}
+	if ancho, err = strconv.Atoi(campos[0]); err != nil {
+		return 0, 0, fmt.Errorf("media: ancho ilegible: %w", err)
+	}
+	if alto, err = strconv.Atoi(campos[1]); err != nil {
+		return 0, 0, fmt.Errorf("media: alto ilegible: %w", err)
+	}
+	return ancho, alto, nil
 }
 
 func bitrateToBps(b string) string {

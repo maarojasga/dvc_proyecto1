@@ -99,7 +99,7 @@ function ResetPasswordInner() {
   const token = params.get("token");
 
   return (
-    <div style={{ maxWidth: 420 }}>
+    <div className="columna-estrecha">
       <h1>Restablecer contraseña</h1>
       {token ? <ConfirmResetForm token={token} /> : <RequestResetForm />}
     </div>

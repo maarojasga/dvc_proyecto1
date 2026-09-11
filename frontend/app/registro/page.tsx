@@ -28,11 +28,12 @@ export default function RegisterPage() {
 
   if (done) {
     return (
-      <div style={{ maxWidth: 480 }}>
+      <div className="columna-estrecha">
         <h1>Revisa tu correo</h1>
         <p className="success-banner">
-          Te enviamos un enlace de verificación a <strong>{email}</strong>. Confírmalo para poder iniciar sesión.
-          En desarrollo, revisa Mailpit en http://localhost:8025.
+          Si <strong>{email}</strong> está disponible, enviamos un enlace de verificación.
+          Confírmalo para poder iniciar sesión. En desarrollo, revisa Mailpit en
+          http://localhost:8025.
         </p>
         <Link href="/login">Ir a iniciar sesión</Link>
       </div>
@@ -40,8 +41,9 @@ export default function RegisterPage() {
   }
 
   return (
-    <div style={{ maxWidth: 420 }}>
+    <div className="columna-estrecha">
       <h1>Crear cuenta de estudiante</h1>
+      <p className="muted">El registro público crea cuentas de estudiante. Los profesores se dan de alta por administración.</p>
       {error && (
         <p className="error-banner" role="alert">
           {error}

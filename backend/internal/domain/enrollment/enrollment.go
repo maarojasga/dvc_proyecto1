@@ -20,8 +20,8 @@ const (
 )
 
 var (
-	ErrAlreadyEnrolled  = errors.New("enrollment: el estudiante ya está inscrito y activo en este curso")
-	ErrNotEnrolled      = errors.New("enrollment: el estudiante no está inscrito en este curso")
+	ErrAlreadyEnrolled    = errors.New("enrollment: el estudiante ya está inscrito y activo en este curso")
+	ErrNotEnrolled        = errors.New("enrollment: el estudiante no está inscrito en este curso")
 	ErrCourseNotPublished = errors.New("enrollment: el curso no tiene una versión publicada")
 )
 
@@ -41,6 +41,13 @@ type Enrollment struct {
 }
 
 // Withdraw retira al estudiante conservando el historial de progreso.
+// DaAccesoAlContenido informa si la inscripción habilita a consultar el
+// curso. Retirarse lo corta; completar o aprobar no: quien terminó un curso
+// conserva el acceso a su material.
+func (e *Enrollment) DaAccesoAlContenido() bool {
+	return e.Status != StatusWithdrawn
+}
+
 func (e *Enrollment) Withdraw(now time.Time) error {
 	if e.Status == StatusWithdrawn {
 		return nil

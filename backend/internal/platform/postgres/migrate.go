@@ -20,6 +20,28 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 // migraciones *.up.sql embebidas que aún no estén registradas en
 // schema_migrations. Es seguro llamarla en cada arranque de la API.
 func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsFS fs.FS) error {
+	// La API y los workers escalan a varias instancias y todos migran al
+	// arrancar. Sin exclusión mutua, dos arranques simultáneos leen
+	// schema_migrations vacía y aplican la misma migración dos veces. El
+	// advisory lock la serializa: el segundo espera y luego no ve nada
+	// pendiente.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("migrate: no se pudo tomar una conexión: %w", err)
+	}
+	defer conn.Release()
+
+	const migrationLockKey = 8274123409
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
+		return fmt.Errorf("migrate: no se pudo tomar el lock: %w", err)
+	}
+	defer func() {
+		// Sin cancelación: soltar el lock debe ocurrir aunque el contexto de
+		// arranque ya haya expirado, o quedaría retenido hasta cerrar la
+		// conexión.
+		_, _ = conn.Exec(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, migrationLockKey)
+	}()
+
 	if _, err := pool.Exec(ctx, migrationsTable); err != nil {
 		return fmt.Errorf("migrate: no se pudo crear schema_migrations: %w", err)
 	}

@@ -31,6 +31,12 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # El navegador sube y descarga objetos directamente contra MinIO, asi
+      # que es un origen cruzado respecto al frontend. Sin esto, el PUT
+      # prefirmado y las peticiones de hls.js al manifiesto fallan en el
+      # preflight. Es el valor por defecto de MinIO; va explicito para que se
+      # vea que en produccion hay que restringirlo al origen real.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ALLOW_ORIGIN:-*}
     ports:
       - "${MINIO_API_PORT:-9100}:9000"
       - "${MINIO_CONSOLE_PORT:-9101}:9001"
@@ -57,6 +63,16 @@ services:
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_USE_SSL: "false"
+      # Host por el que el NAVEGADOR alcanza MinIO. "minio:9000" solo resuelve
+      # dentro de la red del compose, y la firma SigV4 cubre el Host: si se
+      # firma contra el host interno, la URL llega al navegador y muere con
+      # ERR_NAME_NOT_RESOLVED. Tiene que coincidir con el puerto publicado
+      # arriba (MINIO_API_PORT).
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-localhost:${MINIO_API_PORT:-9100}}
+      S3_PUBLIC_USE_SSL: ${S3_PUBLIC_USE_SSL:-false}
+      # Base publica desde la que el reproductor lee el HLS. En produccion es
+      # el CDN; vacia en local, donde los objetos se firman uno a uno.
+      S3_PUBLIC_URL: ${S3_PUBLIC_URL:-}
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_FROM: no-reply@mooc.local
@@ -71,6 +87,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_started
 
   worker:
     build:
@@ -90,6 +108,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_started
 
   frontend:
     build:
