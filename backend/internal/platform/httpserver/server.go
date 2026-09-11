@@ -16,6 +16,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 )
 
@@ -28,6 +29,10 @@ type Deps struct {
 	Progreso    *progreso.Service
 	Media       *postgres.MediaRepo
 	Storage     AlmacenDeCargas
+	// Antimalware escanea lo que se sube antes de darlo por bueno. Es
+	// obligatorio: NewRouter no acepta nil, porque un flujo de carga sin
+	// escaneo que parece tenerlo es peor que no tenerlo.
+	Antimalware antimalware.Escaner
 	// Entrega resuelve las URL de lectura. En producción es el mismo cliente
 	// de Storage; se declara aparte porque la reproducción solo necesita eso.
 	Entrega      EntregaDeObjetos

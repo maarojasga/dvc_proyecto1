@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Version, type Module, type Unit, ApiError } from "@/lib/api";
 import { BlockEditor } from "@/components/BlockEditor";
+import { subirMaterial, type ProgresoSubida } from "@/lib/subida";
 
 const RESOURCE_TYPES = [
   ["text", "Texto enriquecido"],
@@ -378,8 +379,7 @@ function ResourceRow({
   onChange: () => void;
 }) {
   const [uploading, setUploading] = useState(false);
-  const [uploadPercent, setUploadPercent] = useState(0);
-  const [uploadStatusText, setUploadStatusText] = useState("");
+  const [progreso, setProgreso] = useState<ProgresoSubida | null>(null);
   const [error, setError] = useState("");
 
   async function handleDelete() {
@@ -391,64 +391,34 @@ function ResourceRow({
   async function handleFile(file: File) {
     setUploading(true);
     setError("");
-    setUploadPercent(0);
-    setUploadStatusText("Preparando archivo...");
-    const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB estándar de S3
-
+    setProgreso(null);
     try {
-      if (file.size <= CHUNK_SIZE) {
-        setUploadStatusText("Cargando archivo...");
-        setUploadPercent(30);
-        const { upload_url } = await api.requestUploadUrl(versionId, r.ID, file.type || "application/octet-stream");
-        setUploadPercent(60);
-        const putRes = await fetch(upload_url, { method: "PUT", body: file });
-        if (!putRes.ok) throw new Error(`La subida falló (HTTP ${putRes.status}).`);
-        setUploadPercent(90);
-        await api.confirmUpload(versionId, r.ID);
-        setUploadPercent(100);
-      } else {
-        const totalParts = Math.ceil(file.size / CHUNK_SIZE);
-        setUploadStatusText("Iniciando subida...");
-        const { upload_id } = await api.initiateMultipart(versionId, r.ID, file.type || "application/octet-stream");
-        const completedParts: { part_number: number; etag: string }[] = [];
-
-        for (let i = 0; i < totalParts; i++) {
-          const partNumber = i + 1;
-          const start = i * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, file.size);
-          const chunk = file.slice(start, end);
-
-          const pct = Math.round(((i + 0.2) / totalParts) * 100);
-          setUploadPercent(pct);
-          setUploadStatusText(`Cargando... ${pct}%`);
-
-          const { upload_url } = await api.getMultipartPartUrl(versionId, r.ID, upload_id, partNumber);
-          const res = await fetch(upload_url, { method: "PUT", body: chunk });
-          if (!res.ok) throw new Error(`Fallo subiendo parte ${partNumber} (HTTP ${res.status}).`);
-
-          const etag = res.headers.get("ETag") || `part-${partNumber}`;
-          completedParts.push({ part_number: partNumber, etag });
-        }
-
-        setUploadPercent(95);
-        setUploadStatusText("Verificando seguridad e integridad...");
-        await api.completeMultipart(versionId, r.ID, upload_id, completedParts);
-        setUploadPercent(100);
-        setUploadStatusText("¡Archivo listo!");
-      }
-
-      setTimeout(() => {
-        setUploadStatusText("");
-        setUploadPercent(0);
-      }, 1500);
-
+      // El ciclo completo —hash, partes, reanudación, cierre— vive en
+      // lib/subida.ts. Aquí solo se pinta el avance.
+      await subirMaterial({ versionId, resourceId: r.ID, file, onProgreso: setProgreso });
       onChange();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo subir el archivo");
+      setError(
+        e instanceof ApiError
+          ? [e.message, ...(e.details ?? [])].join(" ")
+          : e instanceof Error
+            ? e.message
+            : "No se pudo subir el archivo",
+      );
     } finally {
       setUploading(false);
+      setProgreso(null);
     }
   }
+
+  // El avance es el real de la transferencia: mientras no hay progreso, lo que
+  // se está haciendo es calcular el checksum del archivo completo.
+  const porcentaje = progreso && progreso.total > 0 ? Math.round((progreso.subido / progreso.total) * 100) : 0;
+  const etiqueta = !uploading
+    ? "Subir archivo"
+    : progreso
+      ? `Subiendo ${porcentaje}%${progreso.partes > 1 ? ` (parte ${progreso.parte} de ${progreso.partes})` : ""}`
+      : "Calculando checksum…";
 
   return (
     <li className="row" style={{ flexDirection: "column", alignItems: "stretch", gap: "0.4rem" }}>
@@ -461,7 +431,7 @@ function ResourceRow({
         {editable && BINARY_TYPES.has(r.Type) && (
           <label className="row" style={{ marginBottom: 0 }}>
             <span className="badge" style={{ cursor: uploading ? "not-allowed" : "pointer", background: uploading ? "#3b82f6" : undefined, color: uploading ? "white" : undefined }}>
-              {uploading ? (uploadStatusText || "Cargando…") : "Subir archivo"}
+              {etiqueta}
             </span>
             <input
               type="file"
@@ -482,10 +452,17 @@ function ResourceRow({
       </div>
 
       {uploading && (
-        <div style={{ width: "100%", background: "#e5e7eb", borderRadius: "999px", height: "6px", overflow: "hidden" }}>
+        <div
+          role="progressbar"
+          aria-label={`Subida de ${r.Title}`}
+          aria-valuenow={porcentaje}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          style={{ width: "100%", background: "#e5e7eb", borderRadius: "999px", height: "6px", overflow: "hidden" }}
+        >
           <div
             style={{
-              width: `${uploadPercent}%`,
+              width: `${porcentaje}%`,
               background: "#3b82f6",
               height: "100%",
               transition: "width 0.3s ease-in-out",
@@ -590,27 +567,4 @@ function AddResourceForm({
       <button type="submit">Agregar recurso</button>
     </form>
   );
-}
-
-/**
- * El navegador sube el archivo directamente al almacén de objetos, no a la
- * API, así que un fallo ahí llega como un escueto "Failed to fetch" sin
- * cabeceras ni estado. La causa casi siempre es de configuración —la URL
- * prefirmada apunta a un host que solo existe dentro de la red de
- * contenedores, o el almacén no permite el origen del navegador—, y el
- * profesor no tiene por qué deducirla del devtools. La URL que se intentó
- * abrir es el dato que lo distingue, así que se muestra.
- */
-function mensajeDeSubida(e: unknown, uploadUrl: string): string {
-  if (e instanceof TypeError && uploadUrl) {
-    const host = (() => {
-      try {
-        return new URL(uploadUrl).host;
-      } catch {
-        return uploadUrl;
-      }
-    })();
-    return `No se pudo contactar con el almacenamiento en ${host}. Revisa que ese host sea alcanzable desde el navegador (S3_PUBLIC_ENDPOINT) y que permita peticiones desde este origen.`;
-  }
-  return e instanceof Error ? e.message : "No se pudo subir el archivo";
 }

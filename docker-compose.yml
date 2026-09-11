@@ -43,6 +43,22 @@ services:
     volumes:
       - minio_data:/data
 
+  clamav:
+    image: clamav/clamav:stable
+    environment:
+      # Se salta el freshclam del arranque en local: descargar la base de
+      # firmas tarda minutos y la imagen ya la trae. En un despliegue real
+      # esto va en true, porque una base de firmas vieja no protege.
+      CLAMAV_NO_FRESHCLAMD: ${CLAMAV_NO_FRESHCLAMD:-true}
+    healthcheck:
+      # clamd tarda en cargar las firmas; hasta que responda PING no acepta
+      # escaneos, y la API lo necesita para aceptar cargas.
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
   mailpit:
     image: axllent/mailpit:latest
     ports:
@@ -73,6 +89,10 @@ services:
       # Base publica desde la que el reproductor lee el HLS. En produccion es
       # el CDN; vacia en local, donde los objetos se firman uno a uno.
       S3_PUBLIC_URL: ${S3_PUBLIC_URL:-}
+      # Demonio ClamAV que escanea el material subido. Si se deja vacia, la API
+      # usa el escaner de desarrollo (reconoce EICAR y ejecutables) y en
+      # APP_ENV=production se niega a arrancar.
+      ANTIMALWARE_ADDR: ${ANTIMALWARE_ADDR-clamav:3310}
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_FROM: no-reply@mooc.local
@@ -89,6 +109,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+      clamav:
+        condition: service_healthy
 
   worker:
     build:

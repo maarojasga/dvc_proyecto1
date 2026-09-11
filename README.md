@@ -23,17 +23,46 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 | 1 | Registro, verificación de correo, sesiones revocables y recuperación | Completo, con pruebas de integración |
 | 2 | Gestión administrativa de usuarios | Completo: usuarios, roles, estados, sesiones (ver y cerrar), consulta de la bitácora inmutable y protección del último administrador activo |
 | 3 | Autoría, jerarquía y versiones | Completo: jerarquía de cuatro niveles con `stable_id`, ordenamiento, previsualización, validación exhaustiva de publicación y versiones publicadas inmutables |
-| 4 | Editor de bloques con autosave y Markdown canónico | No: hoy son campos de texto Markdown sin autosave |
-| 5 | Carga multimedia | Parcial: PUT prefirmado de 24 h. Falta multipart reanudable, checksum, MIME real y antimalware |
+| 4 | Editor de bloques con autosave y Markdown canónico | Parcial: editor de bloques con ida y vuelta a Markdown; el autoguardado es local al navegador |
+| 5 | Carga multimedia | Completo: multipart directa y reanudable 24 h, SHA-256 obligatorio verificado en servidor, MIME real del contenido y escaneo antimalware con ClamAV |
 | 6 | Procesamiento asíncrono a HLS | Completo: worker asynq con FFmpeg sin upscaling, original conservado, toma exclusiva del trabajo, reintentos con backoff, dead-letter queue con alerta y entrega autorizada por CDN |
 | 7 | Visor PDF y reproducción adaptativa | Completo: reproductor HLS adaptativo que reanuda desde la última posición reportada, visor PDF y entrega autorizada de cada tipo de recurso |
-| 8 | Quizzes | No: el dominio existe con pruebas, pero sin repositorio, API ni interfaz |
-| 9 | Progreso e insignias | No: igual que quizzes |
-| 10 | Catálogo, inscripción, retiro y reinscripción | Casi completo. Falta ampliar filtros más allá de la búsqueda por texto |
+| 8 | Quizzes | Backend completo: snapshot por intento, clave solo en servidor, guardado parcial, envío idempotente, expiración y nota calculada en servidor. Falta la interfaz |
+| 9 | Progreso e insignias | Backend completo: heartbeats con permanencia, rechazo auditado de porcentajes del cliente, insignia única y verificación pública sin correo. Faltan la imagen de la insignia y la interfaz |
+| 10 | Catálogo, inscripción, retiro y reinscripción | Completo: búsqueda por texto, filtros por categoría y nivel, y la reinscripción reutiliza la inscripción, así que conserva progreso y resultados |
 
 De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
 3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
 protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
+
+### Verificación de las cargas
+
+El material no pasa por la API: el navegador lo sube directo al almacén con
+URLs prefirmadas, en partes de 5 MB, y la carga queda abierta 24 horas, así que
+una subida interrumpida se reanuda pidiendo qué partes llegaron y subiendo solo
+las que faltan.
+
+Al cerrar la carga se comprueban cuatro cosas, en este orden: que el objeto
+existe y no está vacío, que su SHA-256 coincide con el que declaró el cliente,
+que su MIME **real** —el de los bytes, no el declarado— no es de los
+prohibidos, y que pasa el antimalware. Si algo falla, el objeto se borra: dejar
+material que ya se decidió rechazar solo sirve para que alguien lo encuentre
+después.
+
+El checksum es obligatorio y lo calcula el navegador antes de subir. Uno
+opcional no verifica integridad: la documenta cuando ya salió bien.
+
+Dos detalles que se pagan al desplegar:
+
+- **El almacén tiene que exponer la cabecera `ETag` por CORS**
+  (`Access-Control-Expose-Headers: ETag`). El cierre de la carga necesita el
+  ETag de cada parte, y sin la cabecera expuesta el navegador lee `null`. Es un
+  fallo incómodo porque el PUT responde 200: parece que fue bien.
+- **`ANTIMALWARE_ADDR` apunta al demonio ClamAV.** Si se deja vacía, la API usa
+  un escáner de desarrollo que solo reconoce EICAR y firmas de ejecutable, y
+  con `APP_ENV=production` el arranque falla en lugar de aceptar cargas sin
+  escanear de verdad. Un escáner que aprueba todo es peor que ninguno, porque
+  nadie lo revisa.
 
 ### El host del almacén: interno frente al del navegador
 

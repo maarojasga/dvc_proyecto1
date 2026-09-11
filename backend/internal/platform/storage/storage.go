@@ -222,6 +222,17 @@ func (c *Client) ListObjectParts(ctx context.Context, objectKey, uploadID string
 	return core.ListObjectParts(ctx, c.bucket, objectKey, uploadID, 0, 1000)
 }
 
+// AbrirObjeto devuelve el contenido del objeto para transmitirlo. Lo usa el
+// escaneo antimalware, que necesita ver los bytes sin que la API los guarde en
+// disco: el material de un curso puede pesar cientos de megas.
+func (c *Client) AbrirObjeto(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+	obj, err := c.mc.GetObject(ctx, c.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("storage: no se pudo abrir %s: %w", objectKey, err)
+	}
+	return obj, nil
+}
+
 // CalculateSHA256 calcula el checksum criptográfico SHA-256 de un objeto
 // ensamblado en S3 para verificación rigurosa de integridad.
 func (c *Client) CalculateSHA256(ctx context.Context, objectKey string) (string, error) {

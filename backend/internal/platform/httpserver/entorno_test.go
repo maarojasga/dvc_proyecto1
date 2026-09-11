@@ -27,6 +27,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
@@ -111,7 +112,34 @@ type almacenEnMemoria struct {
 	cargas    map[string][]storage.ParteEnCurso // uploadID -> partes
 	borrados  []string
 	contenido string // MIME que DetectMIME devolverá
+	// cuerpo es lo que el almacén dará por subido. Las pruebas lo fijan para
+	// ejercer el escaneo (EICAR, un ejecutable) o la integridad.
+	cuerpo    []byte
 	siguiente int
+}
+
+// cuerpoAEscribir devuelve lo que la prueba fijó, o material inocuo.
+func (a *almacenEnMemoria) cuerpoAEscribir() []byte {
+	if a.cuerpo != nil {
+		return a.cuerpo
+	}
+	return []byte("%PDF-1.7\n contenido de prueba inocuo")
+}
+
+// pon fija el contenido que el almacén dará por subido y devuelve su SHA-256,
+// que es lo que el cliente tendría que declarar.
+func (a *almacenEnMemoria) pon(cuerpo []byte) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cuerpo = cuerpo
+	suma := sha256.Sum256(cuerpo)
+	return hex.EncodeToString(suma[:])
+}
+
+// shaDelInocuo es el checksum del contenido por defecto.
+func (a *almacenEnMemoria) shaDelInocuo() string {
+	suma := sha256.Sum256(a.cuerpoAEscribir())
+	return hex.EncodeToString(suma[:])
 }
 
 func nuevoAlmacenEnMemoria() *almacenEnMemoria {
@@ -157,11 +185,7 @@ func (a *almacenEnMemoria) CerrarCargaMultiparte(_ context.Context, objectKey, u
 	if _, ok := a.cargas[uploadID]; !ok {
 		return errors.New("carga desconocida")
 	}
-	total := 0
-	for range partes {
-		total += 5 << 20
-	}
-	a.objetos[objectKey] = make([]byte, total)
+	a.objetos[objectKey] = a.cuerpoAEscribir()
 	delete(a.cargas, uploadID)
 	return nil
 }
@@ -190,13 +214,17 @@ func (a *almacenEnMemoria) Metadatos(_ context.Context, objectKey string) (stora
 	return storage.ObjetoInfo{Tamano: int64(len(b)), ContentType: ct, ETag: "etag-objeto"}, nil
 }
 
-func (a *almacenEnMemoria) DetectMIME(_ context.Context, _ string) (string, error) {
+// DetectMIME olfatea los bytes guardados, como hace el cliente real. Devolver
+// el MIME que declaró el cliente convertiría la comprobación en un espejo: es
+// justo la mentira que el "MIME real" existe para detectar.
+func (a *almacenEnMemoria) DetectMIME(_ context.Context, objectKey string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.contenido == "" {
-		return "application/octet-stream", nil
+	b, ok := a.objetos[objectKey]
+	if !ok {
+		return "", errors.New("objeto ausente")
 	}
-	return a.contenido, nil
+	return http.DetectContentType(b), nil
 }
 
 func (a *almacenEnMemoria) CalculateSHA256(_ context.Context, objectKey string) (string, error) {
@@ -210,6 +238,16 @@ func (a *almacenEnMemoria) CalculateSHA256(_ context.Context, objectKey string) 
 	return hex.EncodeToString(suma[:]), nil
 }
 
+func (a *almacenEnMemoria) AbrirObjeto(_ context.Context, objectKey string) (io.ReadCloser, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b, ok := a.objetos[objectKey]
+	if !ok {
+		return nil, errors.New("objeto ausente")
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
 func (a *almacenEnMemoria) RemoveObject(_ context.Context, objectKey string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -218,17 +256,12 @@ func (a *almacenEnMemoria) RemoveObject(_ context.Context, objectKey string) err
 	return nil
 }
 
-// fueBorrado dice si el almacén eliminó el objeto, que es cómo se comprueba
-// que un rechazo de integridad o de MIME no deja basura detrás.
-func (a *almacenEnMemoria) fueBorrado(objectKey string) bool {
+// huboBorrado dice si el almacén eliminó algo, que es cómo se comprueba que un
+// rechazo de integridad, de MIME o de antimalware no deja basura detrás.
+func (a *almacenEnMemoria) huboBorrado() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for _, k := range a.borrados {
-		if k == objectKey {
-			return true
-		}
-	}
-	return false
+	return len(a.borrados) > 0
 }
 
 type entorno struct {
@@ -297,6 +330,7 @@ func nuevoEntorno(t *testing.T) *entorno {
 		Progreso:     progresoSvc,
 		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
 		Storage:      almacen,
+		Antimalware:  antimalware.DeDesarrollo{},
 		Redis:        rdb,
 		CORSOrigin:   "http://localhost:3000",
 		CookieSecure: false,
@@ -320,6 +354,14 @@ type respuesta struct {
 	Cuerpo   map[string]any
 	Crudo    string
 	Cabecera http.Header
+}
+
+// codigoDeError extrae error.code del sobre uniforme, que es lo que un cliente
+// usa para distinguir un rechazo de otro.
+func (r respuesta) codigoDeError(t *testing.T) string {
+	t.Helper()
+	codigo, _ := r.campo(t, "error", "code").(string)
+	return codigo
 }
 
 func (r respuesta) campo(t *testing.T, ruta ...string) any {

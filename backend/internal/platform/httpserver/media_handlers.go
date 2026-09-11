@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"time"
 
@@ -41,6 +42,7 @@ type AlmacenDeCargas interface {
 	Metadatos(ctx context.Context, objectKey string) (storage.ObjetoInfo, error)
 	DetectMIME(ctx context.Context, objectKey string) (string, error)
 	CalculateSHA256(ctx context.Context, objectKey string) (string, error)
+	AbrirObjeto(ctx context.Context, objectKey string) (io.ReadCloser, error)
 	RemoveObject(ctx context.Context, objectKey string) error
 }
 

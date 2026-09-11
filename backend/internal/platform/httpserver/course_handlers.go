@@ -408,16 +408,24 @@ func (h *handlers) requestResourceUploadURL(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"upload_url": putURL, "object_key": objectKey, "method": "PUT"})
 }
 
+type confirmUploadRequest struct {
+	ChecksumSHA256 string `json:"checksum_sha256"`
+}
+
 // confirmResourceUpload se llama tras completar la subida directa al
-// almacenamiento. Verifica integridad (el objeto existe y tiene contenido)
-// y, si el tipo de recurso requiere procesamiento asíncrono (video/audio),
-// registra el activo multimedia y encola la transcodificación a HLS; en
-// caso contrario marca el recurso listo de inmediato.
+// almacenamiento. Aplica las comprobaciones de carga (integridad, MIME real,
+// antimalware) y, si el tipo de recurso requiere procesamiento asíncrono
+// (video/audio), registra el activo multimedia y encola la transcodificación a
+// HLS; en caso contrario marca el recurso listo de inmediato.
 func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request) {
 	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
 	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
 	if err1 != nil || err2 != nil {
 		writeError(w, ErrBadRequest)
+		return
+	}
+	var req confirmUploadRequest
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	actor, _ := UserFromContext(r.Context())
@@ -432,9 +440,9 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	info, err := h.deps.Storage.Metadatos(r.Context(), res.ObjectKey)
-	if err != nil || info.Tamano == 0 {
-		writeError(w, errors.New("el objeto cargado no existe o está vacío"))
+	carga, err := h.verificarCarga(r.Context(), res.ObjectKey, req.ChecksumSHA256)
+	if err != nil {
+		h.responderCargaRechazada(w, r, res.ObjectKey, err)
 		return
 	}
 
@@ -443,14 +451,18 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "ready", "mime_type": carga.MIME,
+			"size_bytes": carga.Info.Tamano, "checksum_sha256": carga.Checksum,
+		})
 		return
 	}
 
 	assetID := uuid.New()
 	if err := h.deps.Media.Create(r.Context(), &postgres.MediaAsset{
 		ID: assetID, ResourceID: resourceID, OriginalObjectKey: res.ObjectKey,
-		MimeType: info.ContentType, SizeBytes: info.Tamano, Status: "uploaded",
+		MimeType: carga.MIME, SizeBytes: carga.Info.Tamano, ChecksumSHA256: carga.Checksum,
+		Status: "uploaded",
 	}); err != nil {
 		writeError(w, err)
 		return
@@ -636,32 +648,9 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	info, err := h.deps.Storage.Metadatos(r.Context(), res.ObjectKey)
-	if err != nil || info.Tamano == 0 {
-		writeError(w, errors.New("el objeto cargado no existe o está vacío"))
-		return
-	}
-
-	// Verificación de integridad por Checksum SHA-256 si fue provisto
-	calculatedSHA256, shaErr := h.deps.Storage.CalculateSHA256(r.Context(), res.ObjectKey)
-	if req.ChecksumSHA256 != "" && shaErr == nil {
-		if calculatedSHA256 != req.ChecksumSHA256 {
-			_ = h.deps.Storage.RemoveObject(r.Context(), res.ObjectKey)
-			writeError(w, errors.New("fallo de integridad: el checksum SHA-256 no coincide"))
-			return
-		}
-	}
-
-	realMime, mimeErr := h.deps.Storage.DetectMIME(r.Context(), res.ObjectKey)
-	detectedMime := info.ContentType
-	if mimeErr == nil && realMime != "" {
-		detectedMime = realMime
-	}
-
-	// Filtro de seguridad: bloquear ejecutables binarios
-	if detectedMime == "application/x-dosexec" || detectedMime == "application/x-executable" || detectedMime == "application/x-sharedlib" {
-		_ = h.deps.Storage.RemoveObject(r.Context(), res.ObjectKey)
-		writeError(w, errors.New("el archivo contiene un binario ejecutable no permitido"))
+	carga, err := h.verificarCarga(r.Context(), res.ObjectKey, req.ChecksumSHA256)
+	if err != nil {
+		h.responderCargaRechazada(w, r, res.ObjectKey, err)
 		return
 	}
 
@@ -672,9 +661,9 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":          "ready",
-			"mime_type":       detectedMime,
-			"size_bytes":      info.Tamano,
-			"checksum_sha256": calculatedSHA256,
+			"mime_type":       carga.MIME,
+			"size_bytes":      carga.Info.Tamano,
+			"checksum_sha256": carga.Checksum,
 		})
 		return
 	}
@@ -682,7 +671,8 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 	assetID := uuid.New()
 	if err := h.deps.Media.Create(r.Context(), &postgres.MediaAsset{
 		ID: assetID, ResourceID: resourceID, OriginalObjectKey: res.ObjectKey,
-		MimeType: detectedMime, SizeBytes: info.Tamano, Status: "uploaded",
+		MimeType: carga.MIME, SizeBytes: carga.Info.Tamano, ChecksumSHA256: carga.Checksum,
+		Status: "uploaded",
 	}); err != nil {
 		writeError(w, err)
 		return
@@ -712,8 +702,8 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":          "queued",
 		"media_asset_id":  assetID.String(),
-		"size_bytes":      info.Tamano,
-		"checksum_sha256": calculatedSHA256,
+		"size_bytes":      carga.Info.Tamano,
+		"checksum_sha256": carga.Checksum,
 	})
 }
 

@@ -32,6 +32,12 @@ type Config struct {
 	S3PublicEndpoint string
 	S3PublicUseSSL   bool
 
+	// AntimalwareAddr es la dirección del demonio ClamAV (host:puerto). Si
+	// queda vacía se usa el escáner de desarrollo, y el arranque en
+	// producción lo rechaza: un escáner que aprueba todo da la apariencia del
+	// control sin el control.
+	AntimalwareAddr string
+
 	SMTPHost string
 	SMTPPort string
 	SMTPFrom string
@@ -60,6 +66,8 @@ func Load() Config {
 
 		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
 		S3PublicUseSSL:   getBool("S3_PUBLIC_USE_SSL", getBool("S3_USE_SSL", false)),
+
+		AntimalwareAddr: getEnv("ANTIMALWARE_ADDR", ""),
 
 		SMTPHost: getEnv("SMTP_HOST", "localhost"),
 		SMTPPort: getEnv("SMTP_PORT", "1025"),

@@ -21,6 +21,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/config"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
@@ -62,6 +63,11 @@ func main() {
 		log.Fatalf("api: storage: %v", err)
 	}
 
+	escaner, err := escanerDeCargas(cfg)
+	if err != nil {
+		log.Fatalf("api: antimalware: %v", err)
+	}
+
 	m := mailer.New(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPFrom)
 	queueClient := queue.NewClient(cfg.RedisAddr)
 	defer queueClient.Close()
@@ -91,7 +97,8 @@ func main() {
 		Auth: authSvc, Admin: adminSvc, Courses: coursesSvc, Enrollments: enrollmentsSvc,
 		Quizzes: quizzesSvc, Progreso: progresoSvc,
 		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
-		Redis: rdb, Queue: queueClient,
+		Antimalware: escaner,
+		Redis:       rdb, Queue: queueClient,
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
 	})
@@ -149,4 +156,21 @@ func bootstrapAdmin(ctx context.Context, users *postgres.UserRepo) error {
 	}
 	log.Printf("api: administrador inicial creado (%s)", email)
 	return nil
+}
+
+// escanerDeCargas elige el motor antimalware según la configuración.
+//
+// En producción, sin ClamAV configurado, el arranque falla en lugar de caer al
+// escáner de desarrollo. Es deliberado: un flujo de carga que dice escanear y
+// aprueba todo es peor que uno que no escanea, porque nadie lo revisa.
+func escanerDeCargas(cfg config.Config) (antimalware.Escaner, error) {
+	if cfg.AntimalwareAddr != "" {
+		log.Printf("antimalware: clamd en %s", cfg.AntimalwareAddr)
+		return antimalware.NuevoClamd(cfg.AntimalwareAddr), nil
+	}
+	if cfg.Env == "production" {
+		return nil, errors.New("falta ANTIMALWARE_ADDR: en producción no se admite el escáner de desarrollo")
+	}
+	log.Printf("antimalware: escáner de desarrollo (reconoce EICAR y ejecutables). Define ANTIMALWARE_ADDR para usar ClamAV")
+	return antimalware.DeDesarrollo{}, nil
 }

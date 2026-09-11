@@ -680,14 +680,172 @@ paths:
 
   /courses/versions/{versionId}/resources/{resourceId}/confirm-upload:
     post:
-      summary: Confirma una subida y encola el procesamiento asíncrono si aplica (video/audio)
+      summary: Confirma una subida simple, la verifica y encola el procesamiento si aplica
+      description: |
+        Verifica la carga antes de darla por buena: el objeto existe y no está
+        vacío, su SHA-256 coincide con el declarado, su MIME real no es de los
+        prohibidos y pasa el escaneo antimalware. Si algo falla, el objeto se
+        borra del almacén y el recurso no avanza de estado.
       operationId: confirmResourceUpload
       parameters:
         - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmacionDeCarga" }
       responses:
-        "200": { description: Recurso listo de inmediato (no requiere procesamiento). }
-        "202": { description: Trabajo de transcodificación encolado (video/audio). }
+        "200":
+          description: Recurso listo de inmediato (no requiere procesamiento).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "202":
+          description: Trabajo de transcodificación encolado (video/audio).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "400": { $ref: "#/components/responses/ChecksumRequerido" }
+        "422": { $ref: "#/components/responses/CargaRechazada" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/initiate:
+    post:
+      summary: Inicia una carga multipart reanudable
+      description: |
+        La carga queda abierta 24 horas en el almacén: durante ese plazo el
+        cliente puede consultar qué partes llegaron y subir solo las que
+        faltan.
+      operationId: initiateMultipartUpload
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                content_type:
+                  type: string
+                  description: >-
+                    MIME declarado por el cliente. Es informativo; al cerrar la
+                    carga se comprueba el MIME real del contenido.
+      responses:
+        "200":
+          description: Carga iniciada.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [upload_id, object_key]
+                properties:
+                  upload_id: { type: string }
+                  object_key: { type: string }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/part-url:
+    post:
+      summary: Firma la URL de una parte de la carga
+      operationId: requestMultipartPartURL
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id, part_number]
+              properties:
+                upload_id: { type: string }
+                part_number: { type: integer, minimum: 1, maximum: 10000 }
+      responses:
+        "200":
+          description: |
+            URL prefirmada para el PUT de la parte. El almacén debe exponer la
+            cabecera ETag por CORS: el cierre de la carga la necesita para cada
+            parte.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [upload_url, part_number]
+                properties:
+                  upload_url: { type: string, format: uri }
+                  part_number: { type: integer }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/parts:
+    get:
+      summary: Lista las partes que el almacén ya tiene de una carga en curso
+      description: Es lo que permite reanudar; el cliente sube solo lo que falta.
+      operationId: listMultipartParts
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: upload_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Partes presentes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id: { type: string }
+                  parts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        part_number: { type: integer }
+                        size_bytes: { type: integer, format: int64 }
+                        etag: { type: string }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/complete:
+    post:
+      summary: Cierra la carga multipart, la verifica y encola el procesamiento si aplica
+      description: |
+        Aplica las mismas comprobaciones que confirm-upload: integridad por
+        SHA-256, MIME real y escaneo antimalware. Un rechazo borra el objeto.
+      operationId: completeMultipartUpload
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/ConfirmacionDeCarga"
+                - type: object
+                  required: [upload_id, parts]
+                  properties:
+                    upload_id: { type: string }
+                    parts:
+                      type: array
+                      minItems: 1
+                      items:
+                        type: object
+                        required: [part_number, etag]
+                        properties:
+                          part_number: { type: integer }
+                          etag: { type: string }
+      responses:
+        "200":
+          description: Recurso listo de inmediato (no requiere procesamiento).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "202":
+          description: Trabajo de transcodificación encolado (video/audio).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "400": { $ref: "#/components/responses/ChecksumRequerido" }
+        "422": { $ref: "#/components/responses/CargaRechazada" }
 
   /catalog:
     get:
@@ -1070,6 +1228,23 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+    ChecksumRequerido:
+      description: |
+        Falta `checksum_sha256`. Se exige y no se acepta omitido: un checksum
+        opcional no verifica integridad, solo la documenta cuando ya salió bien.
+        `error.code` es `checksum_requerido`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    CargaRechazada:
+      description: |
+        La carga no pasó una comprobación y el objeto se borró del almacén.
+        `error.code` distingue el motivo: `integridad_fallida` (el SHA-256 no
+        coincide), `tipo_no_admitido` (el MIME real no se acepta como material
+        de curso) o `archivo_infectado` (el antimalware lo reportó).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
 
   securitySchemes:
     sessionCookie:
@@ -1080,6 +1255,32 @@ components:
       type: http
       scheme: bearer
   schemas:
+    ConfirmacionDeCarga:
+      type: object
+      required: [checksum_sha256]
+      properties:
+        checksum_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: |
+            SHA-256 del archivo, en hexadecimal minúscula, calculado por el
+            cliente. El servidor lo recalcula sobre lo que ensambló el almacén
+            y rechaza la carga si no coincide.
+    CargaVerificada:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready, queued]
+        mime_type:
+          type: string
+          description: MIME real detectado del contenido, no el declarado por el cliente.
+        size_bytes: { type: integer, format: int64 }
+        checksum_sha256: { type: string }
+        media_asset_id:
+          type: string
+          format: uuid
+          description: Solo en `queued`. Identifica el activo multimedia en proceso.
     User:
       type: object
       required: [id, email, full_name, role, status]

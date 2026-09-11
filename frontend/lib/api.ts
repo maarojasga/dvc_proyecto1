@@ -214,10 +214,11 @@ export const api = {
       `/api/v1/courses/versions/${versionId}/resources/${resourceId}/upload-url`,
       { method: "POST", body: JSON.stringify({ mime_type: mimeType }) },
     ),
-  confirmUpload: (versionId: string, resourceId: string) =>
-    request<{ status: string }>(`/api/v1/courses/versions/${versionId}/resources/${resourceId}/confirm-upload`, {
-      method: "POST",
-    }),
+  confirmUpload: (versionId: string, resourceId: string, checksumSha256: string) =>
+    request<{ status: string; mime_type?: string; size_bytes?: number; checksum_sha256?: string }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/confirm-upload`,
+      { method: "POST", body: JSON.stringify({ checksum_sha256: checksumSha256 }) },
+    ),
 
   initiateMultipart: (versionId: string, resourceId: string, contentType: string) =>
     request<{ upload_id: string; object_key: string }>(
@@ -234,10 +235,19 @@ export const api = {
     resourceId: string,
     uploadId: string,
     parts: { part_number: number; etag: string }[],
+    checksumSha256: string,
   ) =>
-    request<{ status: string; media_asset_id?: string; size_bytes?: number }>(
+    request<{ status: string; media_asset_id?: string; size_bytes?: number; checksum_sha256?: string }>(
       `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/complete`,
-      { method: "POST", body: JSON.stringify({ upload_id: uploadId, parts }) },
+      {
+        method: "POST",
+        body: JSON.stringify({ upload_id: uploadId, parts, checksum_sha256: checksumSha256 }),
+      },
+    ),
+
+  listMultipartParts: (versionId: string, resourceId: string, uploadId: string) =>
+    request<{ upload_id: string; parts: { part_number: number; size_bytes: number; etag: string }[] }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/parts?upload_id=${encodeURIComponent(uploadId)}`,
     ),
 
   listCatalog: (params: Record<string, string> = {}) =>
