@@ -36,3 +36,8 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Snapshot de Redis. Aparece cuando se levanta un redis-server local para
+# verificar (lo escribe en su directorio de trabajo, que suele ser backend/).
+# Es un artefacto de la maquina, no del proyecto.
+dump.rdb
