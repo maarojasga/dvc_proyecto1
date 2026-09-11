@@ -48,3 +48,7 @@ dump.rdb
 frontend/test-results/
 frontend/playwright-report/
 frontend/blob-report/
+
+# Resultados de la prueba de carga. Se generan en cada ejecución y su valor es
+# como evidencia de una corrida concreta, no como historia del repositorio.
+ops/carga/resultados/

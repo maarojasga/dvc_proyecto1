@@ -115,6 +115,50 @@ Dos detalles que se pagan al desplegar:
   escanear de verdad. Un escáner que aprueba todo es peor que ninguno, porque
   nadie lo revisa.
 
+### Prueba de carga
+
+Los objetivos son 50.000 usuarios registrados y 2.000 concurrentes. La prueba
+está en `ops/carga/` con k6, por etapas, y sus umbrales por flujo son la
+definición operativa de «sin incumplimientos críticos» —incluido uno que hay
+que justificar: **el inicio de sesión tiene un umbral de 1.500 ms y no 500,
+porque bcrypt con coste 12 tarda ~250 ms a propósito.** Pedirle a ese flujo lo
+mismo que a una lectura sería pedir que el hash fuera débil.
+
+Sembrar el juego de datos va por la base directamente y con un único hash
+precalculado, no por la API: por ese mismo coste de bcrypt, 50.000 altas serían
+más de tres horas antes de poder medir. El comando se niega a arrancar con
+`APP_ENV=production`, porque 50.000 cuentas con una contraseña conocida en una
+base real es una brecha.
+
+Lo medido hasta ahora, en una máquina de 4 núcleos con una sola instancia de
+API y el generador de carga en el mismo host:
+
+| Etapa | Concurrencia | req/s | p95 global | Fallos | Umbrales |
+|---|---|---|---|---|---|
+| 1 (10 % del objetivo) | 200 | 137 | 8,2 ms | 0 | en verde |
+| 2 (50 %) | 1.000 | 358 | 5.449 ms | 0 | cinco cruzados |
+
+La etapa 1, que es la que exige la condición de aceptación, pasa con holgura.
+La etapa 2 cruza todos los umbrales de latencia **sin un solo fallo**: nada
+falla, todo se vuelve lento.
+
+Y la causa está atribuida. Repetir la etapa 2 quitando solo el escenario de
+inicio de sesión, con la misma concurrencia total, baja el p95 del catálogo de
+1.861 ms a **22 ms**. Cien inicios de sesión concurrentes son unos 25 segundos
+de CPU por segundo sobre cuatro núcleos, porque bcrypt con coste 12 cuesta
+~250 ms de cálculo puro: **un pico de identidad degrada la lectura del
+catálogo, que no comparte nada con él salvo el procesador.**
+
+No es un defecto que se arregle en el código —abaratar bcrypt es debilitar el
+almacenamiento de contraseñas—. Se mitiga escalando horizontalmente, que es
+para lo que está el proxy inverso, y dándole capacidad propia al flujo de
+identidad.
+
+**Nada de esto es la evidencia de aceptación**: exige el sistema desplegado con
+Compose, el almacén real y el generador de carga fuera de la máquina que ejecuta
+la API. Los números, la atribución y lo que la prueba no cubre están en
+`ops/carga/README.md`.
+
 ### Pruebas y CI
 
 | Qué | Cuántas | Dónde |
