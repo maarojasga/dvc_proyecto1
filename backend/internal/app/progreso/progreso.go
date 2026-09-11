@@ -85,13 +85,13 @@ func NewService(
 // Resumen es el avance de una inscripcion tal como se le presenta al
 // estudiante.
 type Resumen struct {
-	EnrollmentID          uuid.UUID `json:"enrollment_id"`
-	CourseID              uuid.UUID `json:"course_id"`
-	Status                string    `json:"status"`
-	PorcentajeObligatorio float64   `json:"required_percent"`
-	ObligatoriosTotal     int       `json:"required_total"`
-	ObligatoriosHechos    int       `json:"required_completed"`
-	QuizzesPendientes     int       `json:"quizzes_pending"`
+	EnrollmentID          uuid.UUID  `json:"enrollment_id"`
+	CourseID              uuid.UUID  `json:"course_id"`
+	Status                string     `json:"status"`
+	PorcentajeObligatorio float64    `json:"required_percent"`
+	ObligatoriosTotal     int        `json:"required_total"`
+	ObligatoriosHechos    int        `json:"required_completed"`
+	QuizzesPendientes     int        `json:"quizzes_pending"`
 	CompletedAt           *time.Time `json:"completed_at,omitempty"`
 	ApprovedAt            *time.Time `json:"approved_at,omitempty"`
 	CodigoInsignia        string     `json:"badge_code,omitempty"`

@@ -13,7 +13,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
-	"github.com/minio/minio-go/v7"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
 )
 
 func (h *handlers) registerCourses(mux *http.ServeMux) {
@@ -432,8 +432,8 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	info, err := h.deps.Storage.StatObject(r.Context(), res.ObjectKey)
-	if err != nil || info.Size == 0 {
+	info, err := h.deps.Storage.Metadatos(r.Context(), res.ObjectKey)
+	if err != nil || info.Tamano == 0 {
 		writeError(w, errors.New("el objeto cargado no existe o está vacío"))
 		return
 	}
@@ -450,7 +450,7 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 	assetID := uuid.New()
 	if err := h.deps.Media.Create(r.Context(), &postgres.MediaAsset{
 		ID: assetID, ResourceID: resourceID, OriginalObjectKey: res.ObjectKey,
-		MimeType: info.ContentType, SizeBytes: info.Size, Status: "uploaded",
+		MimeType: info.ContentType, SizeBytes: info.Tamano, Status: "uploaded",
 	}); err != nil {
 		writeError(w, err)
 		return
@@ -626,21 +626,18 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	minioParts := make([]minio.CompletePart, len(req.Parts))
+	partes := make([]storage.ParteCargada, len(req.Parts))
 	for i, p := range req.Parts {
-		minioParts[i] = minio.CompletePart{
-			PartNumber: p.PartNumber,
-			ETag:       p.ETag,
-		}
+		partes[i] = storage.ParteCargada{Numero: p.PartNumber, ETag: p.ETag}
 	}
 
-	if err := h.deps.Storage.CompleteMultipartUpload(r.Context(), res.ObjectKey, req.UploadID, minioParts); err != nil {
+	if err := h.deps.Storage.CerrarCargaMultiparte(r.Context(), res.ObjectKey, req.UploadID, partes); err != nil {
 		writeError(w, err)
 		return
 	}
 
-	info, err := h.deps.Storage.StatObject(r.Context(), res.ObjectKey)
-	if err != nil || info.Size == 0 {
+	info, err := h.deps.Storage.Metadatos(r.Context(), res.ObjectKey)
+	if err != nil || info.Tamano == 0 {
 		writeError(w, errors.New("el objeto cargado no existe o está vacío"))
 		return
 	}
@@ -676,7 +673,7 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":          "ready",
 			"mime_type":       detectedMime,
-			"size_bytes":      info.Size,
+			"size_bytes":      info.Tamano,
 			"checksum_sha256": calculatedSHA256,
 		})
 		return
@@ -685,7 +682,7 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 	assetID := uuid.New()
 	if err := h.deps.Media.Create(r.Context(), &postgres.MediaAsset{
 		ID: assetID, ResourceID: resourceID, OriginalObjectKey: res.ObjectKey,
-		MimeType: detectedMime, SizeBytes: info.Size, Status: "uploaded",
+		MimeType: detectedMime, SizeBytes: info.Tamano, Status: "uploaded",
 	}); err != nil {
 		writeError(w, err)
 		return
@@ -715,7 +712,7 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":          "queued",
 		"media_asset_id":  assetID.String(),
-		"size_bytes":      info.Size,
+		"size_bytes":      info.Tamano,
 		"checksum_sha256": calculatedSHA256,
 	})
 }
@@ -740,15 +737,22 @@ func (h *handlers) listMultipartParts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partsResult, err := h.deps.Storage.ListObjectParts(r.Context(), res.ObjectKey, uploadID)
+	partes, err := h.deps.Storage.PartesYaSubidas(r.Context(), res.ObjectKey, uploadID)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
+	// Se devuelve el número y el tamaño de cada parte ya presente: es lo que
+	// el cliente necesita para saber por dónde seguir sin volver a subirlas.
+	lista := make([]map[string]any, 0, len(partes))
+	for _, pt := range partes {
+		lista = append(lista, map[string]any{
+			"part_number": pt.Numero, "size_bytes": pt.Tamano, "etag": pt.ETag,
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"upload_id": uploadID,
-		"parts":     partsResult.ObjectParts,
+		"parts":     lista,
 	})
 }
-

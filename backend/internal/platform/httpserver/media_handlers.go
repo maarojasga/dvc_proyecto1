@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
 )
 
 // vigenciaEntrega es lo que dura una URL firmada de contenido. Corta a
@@ -21,6 +23,25 @@ const vigenciaEntrega = 15 * time.Minute
 type EntregaDeObjetos interface {
 	PresignedGetURL(ctx context.Context, objectKey string, expiry time.Duration, filename string) (string, error)
 	SirveDesdeCDN() bool
+}
+
+// AlmacenDeCargas es lo que la autoría necesita del almacenamiento para subir
+// material: firmar, cerrar y auditar una carga.
+//
+// Va estrecha y en forma de interfaz por la misma razón que EntregaDeObjetos,
+// y por una más: el cliente real contacta al almacén al construirse, así que
+// sin esto los handlers de carga no se pueden probar sin un MinIO vivo —y lo
+// que no se puede probar acaba roto.
+type AlmacenDeCargas interface {
+	PresignedPutURL(ctx context.Context, objectKey string, expiry time.Duration) (string, error)
+	InitiateMultipartUpload(ctx context.Context, objectKey, contentType string) (string, error)
+	PresignedUploadPartURL(ctx context.Context, objectKey, uploadID string, partNumber int, expiry time.Duration) (string, error)
+	CerrarCargaMultiparte(ctx context.Context, objectKey, uploadID string, partes []storage.ParteCargada) error
+	PartesYaSubidas(ctx context.Context, objectKey, uploadID string) ([]storage.ParteEnCurso, error)
+	Metadatos(ctx context.Context, objectKey string) (storage.ObjetoInfo, error)
+	DetectMIME(ctx context.Context, objectKey string) (string, error)
+	CalculateSHA256(ctx context.Context, objectKey string) (string, error)
+	RemoveObject(ctx context.Context, objectKey string) error
 }
 
 func (h *handlers) registerMedia(mux *http.ServeMux) {

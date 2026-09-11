@@ -238,4 +238,66 @@ func (c *Client) CalculateSHA256(ctx context.Context, objectKey string) (string,
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
+// Los tipos siguientes son el vocabulario propio del almacén. Existen para que
+// las capas de arriba (handlers, casos de uso) hablen de objetos y de partes
+// sin importar el SDK de un proveedor concreto, que es lo que pide la
+// restricción de mantener el dominio desacoplado del proveedor cloud. La
+// traducción desde y hacia los tipos de minio-go vive aquí y en ningún otro
+// sitio.
 
+// ObjetoInfo son los metadatos de un objeto ya cargado.
+type ObjetoInfo struct {
+	Tamano      int64
+	ContentType string
+	ETag        string
+}
+
+// ParteCargada identifica una parte confirmada por el cliente al cerrar una
+// carga multipart.
+type ParteCargada struct {
+	Numero int
+	ETag   string
+}
+
+// ParteEnCurso es una parte ya presente en el almacén, usada para que un
+// cliente interrumpido sepa qué le falta por subir.
+type ParteEnCurso struct {
+	Numero int
+	Tamano int64
+	ETag   string
+	Subida time.Time
+}
+
+// Metadatos devuelve los metadatos de un objeto en el vocabulario propio.
+func (c *Client) Metadatos(ctx context.Context, objectKey string) (ObjetoInfo, error) {
+	info, err := c.StatObject(ctx, objectKey)
+	if err != nil {
+		return ObjetoInfo{}, err
+	}
+	return ObjetoInfo{Tamano: info.Size, ContentType: info.ContentType, ETag: info.ETag}, nil
+}
+
+// CerrarCargaMultiparte finaliza la carga a partir de las partes confirmadas
+// por el cliente.
+func (c *Client) CerrarCargaMultiparte(ctx context.Context, objectKey, uploadID string, partes []ParteCargada) error {
+	convertidas := make([]minio.CompletePart, len(partes))
+	for i, p := range partes {
+		convertidas[i] = minio.CompletePart{PartNumber: p.Numero, ETag: p.ETag}
+	}
+	return c.CompleteMultipartUpload(ctx, objectKey, uploadID, convertidas)
+}
+
+// PartesYaSubidas lista lo que el almacén ya tiene de una carga en curso.
+func (c *Client) PartesYaSubidas(ctx context.Context, objectKey, uploadID string) ([]ParteEnCurso, error) {
+	res, err := c.ListObjectParts(ctx, objectKey, uploadID)
+	if err != nil {
+		return nil, err
+	}
+	partes := make([]ParteEnCurso, 0, len(res.ObjectParts))
+	for _, p := range res.ObjectParts {
+		partes = append(partes, ParteEnCurso{
+			Numero: p.PartNumber, Tamano: p.Size, ETag: p.ETag, Subida: p.LastModified,
+		})
+	}
+	return partes, nil
+}

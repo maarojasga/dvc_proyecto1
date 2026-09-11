@@ -237,4 +237,3 @@ func TestCargaMultipartCicloDeVidaYReanudacion(t *testing.T) {
 		t.Fatalf("listar partes para reanudar: %d %s", res.Estado, res.Crudo)
 	}
 }
-

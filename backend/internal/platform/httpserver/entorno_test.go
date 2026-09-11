@@ -3,7 +3,11 @@ package httpserver_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +31,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/redisclient"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/migrations"
 )
 
@@ -93,12 +98,146 @@ func (e entregaPorCDN) PresignedGetURL(_ context.Context, objectKey string, _ ti
 
 func (e entregaPorCDN) SirveDesdeCDN() bool { return true }
 
+// almacenEnMemoria hace de almacén de objetos para las pruebas de carga. El
+// cliente real contacta a MinIO al construirse, así que sin un doble no hay
+// forma de probar el ciclo de vida de una carga multipart —ni de notar que un
+// handler desreferencia un almacén ausente.
+//
+// Guarda lo justo para que las aserciones sean sobre comportamiento y no sobre
+// llamadas: qué partes se subieron, qué se cerró y qué se borró.
+type almacenEnMemoria struct {
+	mu        sync.Mutex
+	objetos   map[string][]byte
+	cargas    map[string][]storage.ParteEnCurso // uploadID -> partes
+	borrados  []string
+	contenido string // MIME que DetectMIME devolverá
+	siguiente int
+}
+
+func nuevoAlmacenEnMemoria() *almacenEnMemoria {
+	return &almacenEnMemoria{
+		objetos: map[string][]byte{},
+		cargas:  map[string][]storage.ParteEnCurso{},
+	}
+}
+
+func (a *almacenEnMemoria) PresignedPutURL(_ context.Context, objectKey string, _ time.Duration) (string, error) {
+	return "https://almacen.pruebas.local/" + objectKey + "?firma=puesta", nil
+}
+
+func (a *almacenEnMemoria) InitiateMultipartUpload(_ context.Context, objectKey, contentType string) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.siguiente++
+	id := fmt.Sprintf("carga-%d", a.siguiente)
+	a.cargas[id] = nil
+	if contentType != "" {
+		a.contenido = contentType
+	}
+	return id, nil
+}
+
+// PresignedUploadPartURL firma la parte y, para que la prueba pueda reanudar,
+// la da por subida: el cliente real haría el PUT contra esa URL.
+func (a *almacenEnMemoria) PresignedUploadPartURL(_ context.Context, objectKey, uploadID string, partNumber int, _ time.Duration) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.cargas[uploadID]; !ok {
+		return "", errors.New("carga desconocida")
+	}
+	a.cargas[uploadID] = append(a.cargas[uploadID], storage.ParteEnCurso{
+		Numero: partNumber, Tamano: 5 << 20, ETag: fmt.Sprintf("etag-%d", partNumber),
+	})
+	return fmt.Sprintf("https://almacen.pruebas.local/%s?partNumber=%d&uploadId=%s", objectKey, partNumber, uploadID), nil
+}
+
+func (a *almacenEnMemoria) CerrarCargaMultiparte(_ context.Context, objectKey, uploadID string, partes []storage.ParteCargada) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.cargas[uploadID]; !ok {
+		return errors.New("carga desconocida")
+	}
+	total := 0
+	for range partes {
+		total += 5 << 20
+	}
+	a.objetos[objectKey] = make([]byte, total)
+	delete(a.cargas, uploadID)
+	return nil
+}
+
+func (a *almacenEnMemoria) PartesYaSubidas(_ context.Context, _ string, uploadID string) ([]storage.ParteEnCurso, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	partes, ok := a.cargas[uploadID]
+	if !ok {
+		return nil, errors.New("carga desconocida")
+	}
+	return partes, nil
+}
+
+func (a *almacenEnMemoria) Metadatos(_ context.Context, objectKey string) (storage.ObjetoInfo, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b, ok := a.objetos[objectKey]
+	if !ok {
+		return storage.ObjetoInfo{}, errors.New("objeto ausente")
+	}
+	ct := a.contenido
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	return storage.ObjetoInfo{Tamano: int64(len(b)), ContentType: ct, ETag: "etag-objeto"}, nil
+}
+
+func (a *almacenEnMemoria) DetectMIME(_ context.Context, _ string) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.contenido == "" {
+		return "application/octet-stream", nil
+	}
+	return a.contenido, nil
+}
+
+func (a *almacenEnMemoria) CalculateSHA256(_ context.Context, objectKey string) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b, ok := a.objetos[objectKey]
+	if !ok {
+		return "", errors.New("objeto ausente")
+	}
+	suma := sha256.Sum256(b)
+	return hex.EncodeToString(suma[:]), nil
+}
+
+func (a *almacenEnMemoria) RemoveObject(_ context.Context, objectKey string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.objetos, objectKey)
+	a.borrados = append(a.borrados, objectKey)
+	return nil
+}
+
+// fueBorrado dice si el almacén eliminó el objeto, que es cómo se comprueba
+// que un rechazo de integridad o de MIME no deja basura detrás.
+func (a *almacenEnMemoria) fueBorrado(objectKey string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, k := range a.borrados {
+		if k == objectKey {
+			return true
+		}
+	}
+	return false
+}
+
 type entorno struct {
 	t       *testing.T
 	handler http.Handler
 	pool    *pgxpool.Pool
 	rdb     *redis.Client
 	correos *buzon
+	almacen *almacenEnMemoria
 }
 
 func nuevoEntorno(t *testing.T) *entorno {
@@ -147,6 +286,7 @@ func nuevoEntorno(t *testing.T) *entorno {
 	evaluaciones := postgres.NewQuizRepo(pool)
 	insignias := postgres.NewBadgeRepo(pool)
 
+	almacen := nuevoAlmacenEnMemoria()
 	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, users)
 	handler := httpserver.NewRouter(httpserver.Deps{
 		Auth:         authSvc,
@@ -156,11 +296,12 @@ func nuevoEntorno(t *testing.T) *entorno {
 		Quizzes:      quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
 		Progreso:     progresoSvc,
 		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
+		Storage:      almacen,
 		Redis:        rdb,
 		CORSOrigin:   "http://localhost:3000",
 		CookieSecure: false,
 	})
-	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos}
+	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos, almacen: almacen}
 }
 
 // cliente conserva cookies entre peticiones, como un navegador, y reenvía el

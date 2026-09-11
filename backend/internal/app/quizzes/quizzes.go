@@ -66,14 +66,14 @@ func NewService(q *postgres.QuizRepo, cr *postgres.CourseRepo, cs *courses.Servi
 // VistaIntento es la proyeccion que si puede viajar al cliente: preguntas y
 // opciones en el orden congelado, sin ninguna marca de cual es la correcta.
 type VistaIntento struct {
-	AttemptID     uuid.UUID        `json:"attempt_id"`
-	QuizID        uuid.UUID        `json:"quiz_id"`
-	Title         string           `json:"title"`
-	AttemptNumber int              `json:"attempt_number"`
-	Status        string           `json:"status"`
-	StartedAt     time.Time        `json:"started_at"`
-	ExpiresAt     *time.Time       `json:"expires_at,omitempty"`
-	Questions     []PreguntaVisible `json:"questions"`
+	AttemptID     uuid.UUID           `json:"attempt_id"`
+	QuizID        uuid.UUID           `json:"quiz_id"`
+	Title         string              `json:"title"`
+	AttemptNumber int                 `json:"attempt_number"`
+	Status        string              `json:"status"`
+	StartedAt     time.Time           `json:"started_at"`
+	ExpiresAt     *time.Time          `json:"expires_at,omitempty"`
+	Questions     []PreguntaVisible   `json:"questions"`
 	Answers       map[string][]string `json:"answers"`
 	// Score y Passed solo se rellenan cuando la politica de retroalimentacion
 	// permite revelarlos.
@@ -483,7 +483,7 @@ func (s *Service) vista(ctx context.Context, q *quiz.Quiz, intento *quiz.Attempt
 		}
 		pv := PreguntaVisible{
 			StableID: p.StableID, PromptMD: p.PromptMD,
-			Type: string(intento.Snapshot.QuestionType[preguntaID]),
+			Type:   string(intento.Snapshot.QuestionType[preguntaID]),
 			Points: intento.Snapshot.Points[preguntaID],
 		}
 		for _, opcionID := range intento.Snapshot.OptionOrder[preguntaID] {

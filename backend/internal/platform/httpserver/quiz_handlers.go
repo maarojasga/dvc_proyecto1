@@ -27,9 +27,9 @@ func (h *handlers) registerQuizzes(mux *http.ServeMux) {
 }
 
 type definirQuizRequest struct {
-	Title            string `json:"title"`
-	TimeLimitSeconds *int   `json:"time_limit_seconds"`
-	MaxAttempts      *int   `json:"max_attempts"`
+	Title            string  `json:"title"`
+	TimeLimitSeconds *int    `json:"time_limit_seconds"`
+	MaxAttempts      *int    `json:"max_attempts"`
 	PassScore        float64 `json:"pass_score"`
 	FeedbackPolicy   string  `json:"feedback_policy"`
 	ShuffleQuestions bool    `json:"shuffle_questions"`

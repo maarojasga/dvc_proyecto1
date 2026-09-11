@@ -17,7 +17,6 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
-	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
 )
 
 type Deps struct {
@@ -28,7 +27,7 @@ type Deps struct {
 	Quizzes     *quizzes.Service
 	Progreso    *progreso.Service
 	Media       *postgres.MediaRepo
-	Storage     *storage.Client
+	Storage     AlmacenDeCargas
 	// Entrega resuelve las URL de lectura. En producción es el mismo cliente
 	// de Storage; se declara aparte porque la reproducción solo necesita eso.
 	Entrega      EntregaDeObjetos
