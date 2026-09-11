@@ -195,3 +195,46 @@ func TestLaPrevisualizacionDevuelveElArbolCompleto(t *testing.T) {
 		t.Errorf("un profesor ajeno no debería ver el borrador, llegó %d", ajeno.Estado)
 	}
 }
+
+func TestCargaMultipartCicloDeVidaYReanudacion(t *testing.T) {
+	env := nuevoEntorno(t)
+	c, versionID := env.profesorConCurso("prof-multi@example.com", "curso-multi")
+	moduloID := moduloEnVersion(t, c, versionID, "Módulo Multimedia")
+
+	res := c.hacer(http.MethodPost, "/courses/versions/"+versionID+"/modules/"+moduloID+"/units",
+		map[string]any{"title": "Unidad Video", "position": 1})
+	unidadID, _ := res.campo(t, "ID").(string)
+
+	res = c.hacer(http.MethodPost, "/courses/versions/"+versionID+"/units/"+unidadID+"/resources",
+		map[string]any{"type": "video", "title": "Clase Video", "position": 1, "visible": true})
+	recursoID, _ := res.campo(t, "ID").(string)
+
+	// 1. Iniciar subida multipart
+	res = c.hacer(http.MethodPost, "/courses/versions/"+versionID+"/resources/"+recursoID+"/multipart/initiate",
+		map[string]any{"content_type": "video/mp4"})
+	if res.Estado != http.StatusOK {
+		t.Fatalf("iniciar multipart: %d %s", res.Estado, res.Crudo)
+	}
+	uploadID, _ := res.campo(t, "upload_id").(string)
+	if uploadID == "" {
+		t.Fatalf("no se recibió upload_id: %s", res.Crudo)
+	}
+
+	// 2. Solicitar URL firmada de la parte 1
+	res = c.hacer(http.MethodPost, "/courses/versions/"+versionID+"/resources/"+recursoID+"/multipart/part-url",
+		map[string]any{"upload_id": uploadID, "part_number": 1})
+	if res.Estado != http.StatusOK {
+		t.Fatalf("pedir url de parte: %d %s", res.Estado, res.Crudo)
+	}
+	partURL, _ := res.campo(t, "upload_url").(string)
+	if partURL == "" {
+		t.Fatalf("no se recibió upload_url de la parte: %s", res.Crudo)
+	}
+
+	// 3. Consultar partes para reanudación de carga interrumpida
+	res = c.hacer(http.MethodGet, "/courses/versions/"+versionID+"/resources/"+recursoID+"/multipart/parts?upload_id="+uploadID, nil)
+	if res.Estado != http.StatusOK {
+		t.Fatalf("listar partes para reanudar: %d %s", res.Estado, res.Crudo)
+	}
+}
+

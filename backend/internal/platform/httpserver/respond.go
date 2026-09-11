@@ -9,7 +9,10 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/quiz"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 )
@@ -84,6 +87,22 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusUnprocessableEntity, "invalid_position", nil
 	case errors.Is(err, enrollment.ErrCourseNotPublished):
 		return http.StatusConflict, "course_not_published", nil
+	case errors.Is(err, quiz.ErrMaxAttemptsReached):
+		return http.StatusConflict, "max_attempts_reached", nil
+	case errors.Is(err, quiz.ErrAttemptExpired):
+		return http.StatusConflict, "attempt_expired", nil
+	case errors.Is(err, quiz.ErrAttemptNotOpen):
+		return http.StatusConflict, "attempt_not_open", nil
+	case errors.Is(err, quiz.ErrAlreadySubmitted):
+		return http.StatusConflict, "attempt_already_submitted", nil
+	case errors.Is(err, quizzes.ErrRespuestaInvalida):
+		return http.StatusUnprocessableEntity, "invalid_answer", nil
+	case errors.Is(err, quizzes.ErrIntentoAjeno):
+		// Se responde como inexistente y no como prohibido: confirmar que el
+		// intento existe ya seria filtrar informacion de otro estudiante.
+		return http.StatusNotFound, "not_found", nil
+	case errors.Is(err, progreso.ErrTipoDeEventoInvalido):
+		return http.StatusUnprocessableEntity, "invalid_event_type", nil
 	case errors.Is(err, ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", nil
 	case errors.Is(err, ErrForbidden):

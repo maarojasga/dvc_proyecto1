@@ -6,7 +6,10 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -194,3 +197,45 @@ func (c *Client) StatObject(ctx context.Context, objectKey string) (minio.Object
 func (c *Client) RemoveObject(ctx context.Context, objectKey string) error {
 	return c.mc.RemoveObject(ctx, c.bucket, objectKey, minio.RemoveObjectOptions{})
 }
+
+// DetectMIME lee los primeros 512 bytes del objeto almacenado y devuelve el tipo
+// MIME real detectado mediante números mágicos (magic bytes).
+func (c *Client) DetectMIME(ctx context.Context, objectKey string) (string, error) {
+	obj, err := c.mc.GetObject(ctx, c.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("storage: no se pudo abrir el objeto: %w", err)
+	}
+	defer obj.Close()
+
+	buf := make([]byte, 512)
+	n, err := io.ReadFull(obj, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return "", fmt.Errorf("storage: no se pudo leer cabecera: %w", err)
+	}
+	return http.DetectContentType(buf[:n]), nil
+}
+
+// ListObjectParts consulta las partes ya subidas a S3 de una carga multipart
+// en curso, permitiendo que un cliente interrumpido reanude la subida.
+func (c *Client) ListObjectParts(ctx context.Context, objectKey, uploadID string) (minio.ListObjectPartsResult, error) {
+	core := minio.Core{Client: c.mc}
+	return core.ListObjectParts(ctx, c.bucket, objectKey, uploadID, 0, 1000)
+}
+
+// CalculateSHA256 calcula el checksum criptográfico SHA-256 de un objeto
+// ensamblado en S3 para verificación rigurosa de integridad.
+func (c *Client) CalculateSHA256(ctx context.Context, objectKey string) (string, error) {
+	obj, err := c.mc.GetObject(ctx, c.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("storage: no se pudo abrir el objeto para hash: %w", err)
+	}
+	defer obj.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, obj); err != nil {
+		return "", fmt.Errorf("storage: error calculando sha256: %w", err)
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+

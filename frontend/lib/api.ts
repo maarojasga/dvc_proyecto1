@@ -219,6 +219,27 @@ export const api = {
       method: "POST",
     }),
 
+  initiateMultipart: (versionId: string, resourceId: string, contentType: string) =>
+    request<{ upload_id: string; object_key: string }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/initiate`,
+      { method: "POST", body: JSON.stringify({ content_type: contentType }) },
+    ),
+  getMultipartPartUrl: (versionId: string, resourceId: string, uploadId: string, partNumber: number) =>
+    request<{ upload_url: string; part_number: number }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/part-url`,
+      { method: "POST", body: JSON.stringify({ upload_id: uploadId, part_number: partNumber }) },
+    ),
+  completeMultipart: (
+    versionId: string,
+    resourceId: string,
+    uploadId: string,
+    parts: { part_number: number; etag: string }[],
+  ) =>
+    request<{ status: string; media_asset_id?: string; size_bytes?: number }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/complete`,
+      { method: "POST", body: JSON.stringify({ upload_id: uploadId, parts }) },
+    ),
+
   listCatalog: (params: Record<string, string> = {}) =>
     request<{ items: Version[] }>(`/api/v1/catalog?${new URLSearchParams(params)}`),
   getPublishedCourse: (courseId: string) => request<Version>(`/api/v1/catalog/${courseId}`),

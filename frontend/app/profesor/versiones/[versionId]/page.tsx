@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Version, type Module, type Unit, ApiError } from "@/lib/api";
+import { BlockEditor } from "@/components/BlockEditor";
 
 const RESOURCE_TYPES = [
   ["text", "Texto enriquecido"],
@@ -377,6 +378,8 @@ function ResourceRow({
   onChange: () => void;
 }) {
   const [uploading, setUploading] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const [uploadStatusText, setUploadStatusText] = useState("");
   const [error, setError] = useState("");
 
   async function handleDelete() {
@@ -388,51 +391,109 @@ function ResourceRow({
   async function handleFile(file: File) {
     setUploading(true);
     setError("");
-    let uploadUrl = "";
+    setUploadPercent(0);
+    setUploadStatusText("Preparando archivo...");
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB estándar de S3
+
     try {
-      const { upload_url } = await api.requestUploadUrl(versionId, r.ID, file.type || "application/octet-stream");
-      uploadUrl = upload_url;
-      const putRes = await fetch(upload_url, { method: "PUT", body: file });
-      if (!putRes.ok) {
-        throw new Error(`La subida al almacenamiento falló (HTTP ${putRes.status}).`);
+      if (file.size <= CHUNK_SIZE) {
+        setUploadStatusText("Cargando archivo...");
+        setUploadPercent(30);
+        const { upload_url } = await api.requestUploadUrl(versionId, r.ID, file.type || "application/octet-stream");
+        setUploadPercent(60);
+        const putRes = await fetch(upload_url, { method: "PUT", body: file });
+        if (!putRes.ok) throw new Error(`La subida falló (HTTP ${putRes.status}).`);
+        setUploadPercent(90);
+        await api.confirmUpload(versionId, r.ID);
+        setUploadPercent(100);
+      } else {
+        const totalParts = Math.ceil(file.size / CHUNK_SIZE);
+        setUploadStatusText("Iniciando subida...");
+        const { upload_id } = await api.initiateMultipart(versionId, r.ID, file.type || "application/octet-stream");
+        const completedParts: { part_number: number; etag: string }[] = [];
+
+        for (let i = 0; i < totalParts; i++) {
+          const partNumber = i + 1;
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, file.size);
+          const chunk = file.slice(start, end);
+
+          const pct = Math.round(((i + 0.2) / totalParts) * 100);
+          setUploadPercent(pct);
+          setUploadStatusText(`Cargando... ${pct}%`);
+
+          const { upload_url } = await api.getMultipartPartUrl(versionId, r.ID, upload_id, partNumber);
+          const res = await fetch(upload_url, { method: "PUT", body: chunk });
+          if (!res.ok) throw new Error(`Fallo subiendo parte ${partNumber} (HTTP ${res.status}).`);
+
+          const etag = res.headers.get("ETag") || `part-${partNumber}`;
+          completedParts.push({ part_number: partNumber, etag });
+        }
+
+        setUploadPercent(95);
+        setUploadStatusText("Verificando seguridad e integridad...");
+        await api.completeMultipart(versionId, r.ID, upload_id, completedParts);
+        setUploadPercent(100);
+        setUploadStatusText("¡Archivo listo!");
       }
-      await api.confirmUpload(versionId, r.ID);
+
+      setTimeout(() => {
+        setUploadStatusText("");
+        setUploadPercent(0);
+      }, 1500);
+
       onChange();
     } catch (e) {
-      setError(mensajeDeSubida(e, uploadUrl));
+      setError(e instanceof Error ? e.message : "No se pudo subir el archivo");
     } finally {
       setUploading(false);
     }
   }
 
   return (
-    <li className="row">
-      <span style={{ flex: 1 }}>
-        {r.Title} <span className="badge">{r.Type}</span>{" "}
-        {r.ProcessingStatus !== "none" && <span className="badge">procesamiento: {r.ProcessingStatus}</span>}
-        {!r.Visible && <span className="badge">oculto</span>}
-      </span>
-      {editable && BINARY_TYPES.has(r.Type) && (
-        <label className="row" style={{ marginBottom: 0 }}>
-          <span className="badge" style={{ cursor: "pointer" }}>
-            {uploading ? "Subiendo…" : "Subir archivo"}
-          </span>
-          <input
-            type="file"
-            style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}
-            disabled={uploading}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleFile(file);
+    <li className="row" style={{ flexDirection: "column", alignItems: "stretch", gap: "0.4rem" }}>
+      <div className="row" style={{ alignItems: "center" }}>
+        <span style={{ flex: 1 }}>
+          {r.Title} <span className="badge">{r.Type}</span>{" "}
+          {r.ProcessingStatus !== "none" && <span className="badge">procesamiento: {r.ProcessingStatus}</span>}
+          {!r.Visible && <span className="badge">oculto</span>}
+        </span>
+        {editable && BINARY_TYPES.has(r.Type) && (
+          <label className="row" style={{ marginBottom: 0 }}>
+            <span className="badge" style={{ cursor: uploading ? "not-allowed" : "pointer", background: uploading ? "#3b82f6" : undefined, color: uploading ? "white" : undefined }}>
+              {uploading ? (uploadStatusText || "Cargando…") : "Subir archivo"}
+            </span>
+            <input
+              type="file"
+              style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}
+              disabled={uploading}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file);
+              }}
+            />
+          </label>
+        )}
+        {editable && (
+          <button className="danger" onClick={handleDelete} disabled={uploading}>
+            Eliminar
+          </button>
+        )}
+      </div>
+
+      {uploading && (
+        <div style={{ width: "100%", background: "#e5e7eb", borderRadius: "999px", height: "6px", overflow: "hidden" }}>
+          <div
+            style={{
+              width: `${uploadPercent}%`,
+              background: "#3b82f6",
+              height: "100%",
+              transition: "width 0.3s ease-in-out",
             }}
           />
-        </label>
+        </div>
       )}
-      {editable && (
-        <button className="danger" onClick={handleDelete}>
-          Eliminar
-        </button>
-      )}
+
       {error && <span className="error-banner">{error}</span>}
     </li>
   );
@@ -502,8 +563,12 @@ function AddResourceForm({
 
       {type === "text" && (
         <div className="form-field">
-          <label htmlFor={`content-${unitId}`}>Contenido (Markdown)</label>
-          <textarea id={`content-${unitId}`} rows={3} value={textContent} onChange={(e) => setTextContent(e.target.value)} />
+          <label>Contenido del Recurso (Bloques)</label>
+          <BlockEditor
+            initialMarkdown={textContent}
+            draftKey={`draft_unit_${unitId}`}
+            onChange={(canonicalMd) => setTextContent(canonicalMd)}
+          />
         </div>
       )}
       {(type === "link" || type === "iframe") && (

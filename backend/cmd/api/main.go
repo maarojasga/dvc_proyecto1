@@ -17,6 +17,8 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/config"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
@@ -68,11 +70,18 @@ func main() {
 	courseRepo := postgres.NewCourseRepo(pool)
 	enrollmentRepo := postgres.NewEnrollmentRepo(pool)
 	mediaRepo := postgres.NewMediaRepo(pool)
+	progressRepo := postgres.NewProgressRepo(pool)
+	quizRepo := postgres.NewQuizRepo(pool)
+	badgeRepo := postgres.NewBadgeRepo(pool)
 
 	authSvc := auth.NewService(userRepo, m, cfg.PublicBaseURL, cfg.SessionTTL)
 	adminSvc := admin.NewService(userRepo)
 	coursesSvc := courses.NewService(courseRepo)
-	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, postgres.NewProgressRepo(pool))
+	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, progressRepo)
+	progresoSvc := progreso.NewService(progressRepo, enrollmentRepo, courseRepo, quizRepo, badgeRepo, userRepo)
+	// El servicio de quizzes avisa al de progreso al cerrar un intento, porque
+	// aprobar una evaluacion puede ser lo ultimo que faltaba para el curso.
+	quizzesSvc := quizzes.NewService(quizRepo, courseRepo, coursesSvc, enrollmentRepo, progresoSvc)
 
 	if err := bootstrapAdmin(ctx, userRepo); err != nil {
 		log.Printf("api: no se pudo crear el administrador inicial: %v", err)
@@ -80,6 +89,7 @@ func main() {
 
 	router := httpserver.NewRouter(httpserver.Deps{
 		Auth: authSvc, Admin: adminSvc, Courses: coursesSvc, Enrollments: enrollmentsSvc,
+		Quizzes: quizzesSvc, Progreso: progresoSvc,
 		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
 		Redis: rdb, Queue: queueClient,
 		Inspector:  queue.NewInspector(cfg.RedisAddr),

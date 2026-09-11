@@ -836,6 +836,213 @@ paths:
       responses:
         "200": { description: Inscripción retirada. }
 
+  /courses/versions/{versionId}/resources/{resourceId}/quiz:
+    put:
+      tags: [Evaluacion]
+      summary: Define o reemplaza la evaluacion de un recurso de tipo quiz
+      description: >
+        Solo el profesor dueno y sobre una version en borrador. La respuesta no
+        devuelve las preguntas: incluirlas expondria la clave correcta.
+      operationId: definirQuiz
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, questions]
+              properties:
+                title: { type: string }
+                time_limit_seconds: { type: integer, nullable: true }
+                max_attempts: { type: integer, nullable: true }
+                pass_score: { type: number, minimum: 0, maximum: 100 }
+                feedback_policy:
+                  type: string
+                  enum: [immediate, after_submit, after_close, none]
+                shuffle_questions: { type: boolean }
+                questions:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [prompt_md, type, options]
+                    properties:
+                      prompt_md: { type: string }
+                      type: { type: string, enum: [single, multiple] }
+                      points: { type: number, exclusiveMinimum: 0 }
+                      options:
+                        type: array
+                        minItems: 2
+                        items:
+                          type: object
+                          required: [text_md]
+                          properties:
+                            text_md: { type: string }
+                            is_correct: { type: boolean }
+      responses:
+        "200": { description: Evaluacion guardada. }
+        "409": { $ref: "#/components/responses/Problema" }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /recursos/{resourceId}/quiz/intentos:
+    post:
+      tags: [Evaluacion]
+      summary: Abre un intento, o devuelve el que ya estuviera en curso
+      description: >
+        Recargar la pagina no gasta un intento: si hay uno abierto se devuelve
+        ese. Las opciones viajan sin ninguna marca de cual es la correcta.
+      operationId: iniciarIntento
+      parameters:
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "201": { description: Intento abierto. }
+        "409":
+          description: Se agoto el numero maximo de intentos.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+
+  /quiz/intentos/{attemptId}:
+    get:
+      tags: [Evaluacion]
+      summary: Consulta un intento propio
+      operationId: verIntento
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Estado del intento. }
+        "404":
+          description: >
+            Tambien se responde asi para un intento de otra persona: confirmar
+            que existe ya seria filtrar informacion ajena.
+
+  /quiz/intentos/{attemptId}/respuestas:
+    put:
+      tags: [Evaluacion]
+      summary: Guardado parcial de una pregunta
+      description: >
+        Se valida que la pregunta y las opciones pertenezcan al snapshot del
+        intento, y que una pregunta de respuesta unica no reciba varias.
+      operationId: guardarRespuesta
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question_stable_id, selected_option_stable_ids]
+              properties:
+                question_stable_id: { type: string, format: uuid }
+                selected_option_stable_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200": { description: Respuesta guardada. }
+        "409": { $ref: "#/components/responses/Problema" }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /quiz/intentos/{attemptId}/enviar:
+    post:
+      tags: [Evaluacion]
+      summary: Envio definitivo y calificacion en servidor
+      description: >
+        La nota se calcula contra el snapshot congelado al iniciar, asi que es
+        reproducible aunque el autor edite el quiz despues. Reintentar con la
+        misma Idempotency-Key devuelve la nota ya calculada en vez de calificar
+        otra vez.
+      operationId: enviarIntento
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: Intento calificado. }
+        "409": { $ref: "#/components/responses/Problema" }
+
+  /recursos/{resourceId}/progreso:
+    post:
+      tags: [Progreso]
+      summary: Reporta una senal de progreso
+      description: >
+        El cliente reporta que abrio, que sigue ahi o que cerro. El servidor
+        decide cuanto tiempo acredita comparando marcas de tiempo propias: un
+        porcentaje enviado por el cliente no se acepta. Las senales
+        implausibles se descartan y se auditan.
+      operationId: registrarProgreso
+      parameters:
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [open, heartbeat, close] }
+                complete: { type: boolean }
+      responses:
+        "200": { description: Resumen de avance actualizado. }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /cursos/{courseId}/progreso:
+    get:
+      tags: [Progreso]
+      summary: Resumen de avance del estudiante en un curso
+      operationId: verProgreso
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Porcentaje de obligatorios, estado e insignia. }
+
+  /insignias/mias:
+    get:
+      tags: [Insignias]
+      summary: Lista las insignias del estudiante autenticado
+      operationId: misInsignias
+      responses:
+        "200": { description: Lista de insignias. }
+
+  /insignias/{codigo}:
+    get:
+      tags: [Insignias]
+      summary: Verificacion publica de una insignia
+      description: >
+        No exige sesion, que es el sentido de una insignia verificable. No
+        expone el correo ni el identificador del estudiante.
+      operationId: verificarInsignia
+      security: []
+      parameters:
+        - { name: codigo, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Estado de la insignia. }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /insignias/{codigo}/revocar:
+    post:
+      tags: [Insignias]
+      summary: Revoca una insignia (solo administracion)
+      description: >
+        La URL publica sigue resolviendo, pero reporta el estado revocado. La
+        revocacion queda auditada.
+      operationId: revocarInsignia
+      parameters:
+        - { name: codigo, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        "200": { description: Insignia revocada. }
+
 components:
   parameters:
     IdempotencyKey:

@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth-context";
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const router = useRouter();
@@ -53,10 +54,19 @@ export default function LoginPage() {
           />
         </div>
         <div className="form-field">
-          <label htmlFor="password">Contraseña</label>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
+            <label htmlFor="password" style={{ marginBottom: 0 }}>Contraseña</label>
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              style={{ background: "transparent", border: "none", color: "#3b82f6", cursor: "pointer", fontSize: "0.8rem", padding: "0 4px", textDecoration: "underline" }}
+            >
+              {showPassword ? "Ocultar" : "Mostrar"}
+            </button>
+          </div>
           <input
             id="password"
-            type="password"
+            type={showPassword ? "text" : "password"}
             required
             autoComplete="current-password"
             value={password}

@@ -20,6 +20,8 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
@@ -139,11 +141,20 @@ func nuevoEntorno(t *testing.T) *entorno {
 		"http://localhost:3000", user.DefaultSessionTTL)
 
 	cursos := postgres.NewCourseRepo(pool)
+	cursosSvc := courses.NewService(cursos)
+	inscripciones := postgres.NewEnrollmentRepo(pool)
+	avance := postgres.NewProgressRepo(pool)
+	evaluaciones := postgres.NewQuizRepo(pool)
+	insignias := postgres.NewBadgeRepo(pool)
+
+	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, users)
 	handler := httpserver.NewRouter(httpserver.Deps{
 		Auth:         authSvc,
 		Admin:        admin.NewService(users),
-		Courses:      courses.NewService(cursos),
-		Enrollments:  enrollments.NewService(postgres.NewEnrollmentRepo(pool), cursos, postgres.NewProgressRepo(pool)),
+		Courses:      cursosSvc,
+		Enrollments:  enrollments.NewService(inscripciones, cursos, avance),
+		Quizzes:      quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
+		Progreso:     progresoSvc,
 		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
 		Redis:        rdb,
 		CORSOrigin:   "http://localhost:3000",
