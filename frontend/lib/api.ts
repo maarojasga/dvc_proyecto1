@@ -180,7 +180,7 @@ export const api = {
   unpublishCourse: (courseId: string) =>
     request<{ status: string }>(`/api/v1/courses/${courseId}/unpublish`, { method: "POST" }),
   getVersion: (versionId: string) => request<Version>(`/api/v1/courses/versions/${versionId}`),
-  updateVersionMetadata: (versionId: string, data: Partial<Version>) =>
+  updateVersionMetadata: (versionId: string, data: CuerpoDeVersion) =>
     request<{ status: string }>(`/api/v1/courses/versions/${versionId}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -202,11 +202,17 @@ export const api = {
     }),
   deleteUnit: (versionId: string, unitId: string) =>
     request<void>(`/api/v1/courses/versions/${versionId}/units/${unitId}`, { method: "DELETE" }),
-  addResource: (versionId: string, unitId: string, data: Partial<Resource>) =>
+  addResource: (versionId: string, unitId: string, data: CuerpoDeRecurso) =>
     request<Resource>(`/api/v1/courses/versions/${versionId}/units/${unitId}/resources`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  updateResource: (versionId: string, resourceId: string, data: CuerpoDeRecurso) =>
+    request<{ status: string }>(`/api/v1/courses/versions/${versionId}/resources/${resourceId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+
   deleteResource: (versionId: string, resourceId: string) =>
     request<void>(`/api/v1/courses/versions/${versionId}/resources/${resourceId}`, { method: "DELETE" }),
   requestUploadUrl: (versionId: string, resourceId: string, mimeType: string) =>
@@ -303,6 +309,38 @@ export interface Unit {
   Title: string;
   Position: number;
   Resources?: Resource[];
+}
+
+/** CuerpoDeVersion son las claves que la API lee al editar los metadatos. */
+export interface CuerpoDeVersion {
+  title: string;
+  summary: string;
+  description_md: string;
+  category: string;
+  level: string;
+  language: string;
+  approval_min_score: number;
+  approval_required_resources_pct: number;
+}
+
+/**
+ * CuerpoDeRecurso son las claves que la API lee al crear o editar un recurso.
+ *
+ * Van en snake_case porque así están las etiquetas JSON del servidor. Es
+ * explícito y no derivado de Resource a propósito: enviar los nombres del
+ * modelo (TextContentMD, ExternalURL) hacía que esos dos campos llegaran
+ * vacíos, porque Go empareja sin distinguir mayúsculas pero no ignora los
+ * guiones bajos. Los demás campos colaban por casualidad.
+ */
+export interface CuerpoDeRecurso {
+  type: string;
+  title: string;
+  position: number;
+  visible: boolean;
+  required: boolean;
+  downloadable: boolean;
+  text_content_md?: string;
+  external_url?: string;
 }
 
 export interface Resource {

@@ -254,13 +254,22 @@ func (r *CourseRepo) CreateResource(ctx context.Context, versionID uuid.UUID, re
 	return affectedOne(tag, err)
 }
 
+// UpdateResource actualiza lo que el profesor edita en el formulario de
+// autoría.
+//
+// A propósito no toca processing_status ni object_key. Los dueña el flujo de
+// carga, que tiene sus propios métodos, y escribirlos aquí desde una petición
+// de edición hacía dos daños: el estado llegaba vacío y violaba el CHECK de la
+// columna —así que editar cualquier recurso devolvía 500—, y la clave del
+// objeto se borraba, de modo que cambiar el título de un vídeo le quitaba el
+// archivo ya subido.
 func (r *CourseRepo) UpdateResource(ctx context.Context, versionID uuid.UUID, res *course.Resource) error {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE resources SET title=$3, position=$4, visible=$5, required=$6, downloadable=$7,
-			processing_status=$8, text_content_md=$9, external_url=$10, object_key=$11, updated_at=now()
+			text_content_md=$8, external_url=$9, updated_at=now()
 		WHERE id=$1 AND unit_id IN (`+unidadesDeLaVersion+`)`,
 		res.ID, versionID, res.Title, res.Position, res.Visible, res.Required, res.Downloadable,
-		res.ProcessingStatus, nullIfEmpty(res.TextContentMD), nullIfEmpty(res.ExternalURL), nullIfEmpty(res.ObjectKey))
+		nullIfEmpty(res.TextContentMD), nullIfEmpty(res.ExternalURL))
 	return affectedOne(tag, err)
 }
 
@@ -337,6 +346,17 @@ func (r *CourseRepo) GetRecursoPublicadoConMedia(ctx context.Context, resourceID
 		return nil, err
 	}
 	return &out, nil
+}
+
+// SetResourceObjectKey fija la clave del objeto y el estado de procesamiento
+// juntos, que es como avanza el flujo de carga. Va aparte de UpdateResource
+// porque son campos del flujo de carga, no del formulario de autoría.
+func (r *CourseRepo) SetResourceObjectKey(ctx context.Context, versionID, id uuid.UUID, objectKey string, status course.ProcessingStatus) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE resources SET object_key=$3, processing_status=$4, updated_at=now()
+		WHERE id=$1 AND unit_id IN (`+unidadesDeLaVersion+`)`,
+		id, versionID, nullIfEmpty(objectKey), status)
+	return affectedOne(tag, err)
 }
 
 func (r *CourseRepo) SetResourceProcessingStatusInternal(ctx context.Context, id uuid.UUID, status course.ProcessingStatus) error {

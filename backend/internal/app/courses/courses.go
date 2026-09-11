@@ -292,13 +292,10 @@ func (s *Service) GetResource(ctx context.Context, actor *user.User, versionID, 
 }
 
 func (s *Service) SetResourceObjectKey(ctx context.Context, actor *user.User, versionID, resourceID uuid.UUID, objectKey string, status domain.ProcessingStatus) error {
-	res, err := s.GetResource(ctx, actor, versionID, resourceID)
-	if err != nil {
+	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return err
 	}
-	res.ObjectKey = objectKey
-	res.ProcessingStatus = status
-	return s.repo.UpdateResource(ctx, versionID, res)
+	return s.repo.SetResourceObjectKey(ctx, versionID, resourceID, objectKey, status)
 }
 
 func (s *Service) MarkResourceProcessingStatus(ctx context.Context, actor *user.User, versionID, resourceID uuid.UUID, status domain.ProcessingStatus) error {

@@ -23,7 +23,7 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 | 1 | Registro, verificación de correo, sesiones revocables y recuperación | Completo, con pruebas de integración |
 | 2 | Gestión administrativa de usuarios | Completo: usuarios, roles, estados, sesiones (ver y cerrar), consulta de la bitácora inmutable y protección del último administrador activo |
 | 3 | Autoría, jerarquía y versiones | Completo: jerarquía de cuatro niveles con `stable_id`, ordenamiento, previsualización, validación exhaustiva de publicación y versiones publicadas inmutables |
-| 4 | Editor de bloques con autosave y Markdown canónico | Parcial: editor de bloques con ida y vuelta a Markdown; el autoguardado es local al navegador |
+| 4 | Editor de bloques con autosave y Markdown canónico | Completo: bloques con ida y vuelta probada por tipo de nodo, Markdown canónico estable, autoguardado en servidor y borrador local como red de seguridad con recuperación explícita |
 | 5 | Carga multimedia | Completo: multipart directa y reanudable 24 h, SHA-256 obligatorio verificado en servidor, MIME real del contenido y escaneo antimalware con ClamAV |
 | 6 | Procesamiento asíncrono a HLS | Completo: worker asynq con FFmpeg sin upscaling, original conservado, toma exclusiva del trabajo, reintentos con backoff, dead-letter queue con alerta y entrega autorizada por CDN |
 | 7 | Visor PDF y reproducción adaptativa | Completo: reproductor HLS adaptativo que reanuda desde la última posición reportada, visor PDF y entrega autorizada de cada tipo de recurso |
@@ -34,6 +34,23 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
 3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
 protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
+
+### Autoría del contenido de texto
+
+El editor de bloques guarda Markdown canónico: la serialización es estable, así
+que dos ediciones que no cambian nada no producen documentos distintos. Hay
+pruebas de ida y vuelta por tipo de nodo, que es lo que el enunciado recomienda
+dejar bloqueante, y fijan dos propiedades distintas: que bloques → Markdown →
+bloques devuelve los mismos bloques, y que Markdown → bloques → Markdown es
+estable a partir de la primera pasada.
+
+El autoguardado va al servidor, con el borrador en `localStorage` solo como red
+de seguridad por si el guardado falla. La diferencia se dice en la interfaz
+—«guardado en el servidor» y «borrador local» son garantías distintas— y el
+borrador de una sesión anterior **se ofrece, no se impone**: cargarlo por
+encima del contenido del servidor pierde ediciones sin avisar, y basta editar
+en un equipo y abrir en otro donde quedó un borrador viejo para que el
+autoguardado lo escriba encima.
 
 ### Verificación de las cargas
 

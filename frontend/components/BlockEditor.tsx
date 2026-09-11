@@ -14,6 +14,15 @@ interface BlockEditorProps {
   initialMarkdown?: string;
   draftKey?: string;
   onChange: (canonicalMarkdown: string) => void;
+  /**
+   * onAutosave persiste el contenido en el servidor. Cuando se pasa, el
+   * borrador local deja de ser el guardado y pasa a ser solo la red: se usa
+   * para no perder cambios si el guardado falla.
+   *
+   * Sin él —al crear un recurso que todavía no existe en el servidor— el
+   * borrador local es lo único que hay, y se dice así en la interfaz.
+   */
+  onAutosave?: (canonicalMarkdown: string) => Promise<void>;
 }
 
 export function markdownToBlocks(md: string): Block[] {
@@ -124,66 +133,141 @@ export function markdownToBlocks(md: string): Block[] {
   return blocks.length ? blocks : [{ id: "b-1", type: "paragraph", content: "" }];
 }
 
-export function blocksToMarkdown(blocks: Block[]): string {
-  return blocks
-    .map((b) => {
-      switch (b.type) {
-        case "heading": {
-          const prefix = "#".repeat(b.level || 2);
-          return `${prefix} ${b.content.trim()}`;
-        }
-        case "paragraph":
-          return b.content.trim();
-        case "code":
-          return `\`\`\`${b.language || ""}\n${b.content}\n\`\`\``;
-        case "callout":
-          return `> ${b.content.trim()}`;
-        case "list":
-          return `- ${b.content.trim()}`;
-        default:
-          return b.content;
-      }
-    })
-    .filter((s) => s.length > 0)
-    .join("\n\n");
+function serializarBloque(b: Block): string {
+  switch (b.type) {
+    case "heading": {
+      const prefix = "#".repeat(b.level || 2);
+      return `${prefix} ${b.content.trim()}`;
+    }
+    case "paragraph":
+      return b.content.trim();
+    case "code":
+      return `\`\`\`${b.language || ""}\n${b.content}\n\`\`\``;
+    case "callout":
+      return `> ${b.content.trim()}`;
+    case "list":
+      return `- ${b.content.trim()}`;
+    default:
+      return b.content;
+  }
 }
 
-export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft", onChange }: BlockEditorProps) {
-  const [blocks, setBlocks] = useState<Block[]>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem(draftKey);
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch {}
-      }
-    }
-    return markdownToBlocks(initialMarkdown);
-  });
+export function blocksToMarkdown(blocks: Block[]): string {
+  const lineas = blocks.map(serializarBloque);
+  let salida = "";
 
-  const [autosaveStatus, setAutosaveStatus] = useState<string>("Borrador guardado");
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  for (let i = 0; i < blocks.length; i++) {
+    if (!lineas[i].length) continue;
+    if (salida.length) {
+      // Los elementos de lista consecutivos van pegados. Separarlos con línea
+      // en blanco produce una lista "suelta", que Markdown renderiza con un
+      // párrafo dentro de cada punto: es otro documento, y el editor no tiene
+      // forma de expresar esa diferencia. Todo lo demás va separado por línea
+      // en blanco, que es lo que separa bloques en Markdown.
+      const pegar = blocks[i].type === "list" && bloqueAnteriorVisible(blocks, lineas, i)?.type === "list";
+      salida += pegar ? "\n" : "\n\n";
+    }
+    salida += lineas[i];
+  }
+  return salida;
+}
+
+/** bloqueAnteriorVisible salta los bloques que no producen texto. */
+function bloqueAnteriorVisible(blocks: Block[], lineas: string[], i: number): Block | undefined {
+  for (let j = i - 1; j >= 0; j--) {
+    if (lineas[j].length) return blocks[j];
+  }
+  return undefined;
+}
+
+/** RETARDO_AUTOGUARDADO es la pausa al teclear antes de guardar. */
+const RETARDO_AUTOGUARDADO = 800;
+
+type EstadoGuardado =
+  | { tipo: "limpio" }
+  | { tipo: "guardando" }
+  | { tipo: "guardado"; cuando: Date; enServidor: boolean }
+  | { tipo: "fallido"; motivo: string };
+
+function leerBorradorLocal(clave: string): Block[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const guardado = localStorage.getItem(clave);
+    if (!guardado) return null;
+    const bloques = JSON.parse(guardado);
+    return Array.isArray(bloques) && bloques.length ? bloques : null;
+  } catch {
+    return null;
+  }
+}
+
+export function BlockEditor({
+  initialMarkdown = "",
+  draftKey = "mooc_block_draft",
+  onChange,
+  onAutosave,
+}: BlockEditorProps) {
+  // El contenido del servidor es el punto de partida. Cargar el borrador local
+  // por encima —como se hacía— pierde ediciones sin avisar: basta editar en un
+  // equipo y abrir en otro donde quedó un borrador viejo para que el
+  // autoguardado lo escriba encima. El borrador se ofrece, no se impone.
+  const [blocks, setBlocks] = useState<Block[]>(() => markdownToBlocks(initialMarkdown));
+  const [borradorLocal, setBorradorLocal] = useState<Block[] | null>(null);
+  const [estado, setEstado] = useState<EstadoGuardado>({ tipo: "limpio" });
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const local = leerBorradorLocal(draftKey);
+    if (!local) return;
+    // Solo se ofrece si dice algo distinto de lo que ya hay.
+    if (blocksToMarkdown(local) !== blocksToMarkdown(markdownToBlocks(initialMarkdown))) {
+      setBorradorLocal(local);
+    } else {
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {}
+    }
+    // Se mira una vez, al montar: después el estado del editor es la verdad.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const triggerAutosave = useCallback(
     (newBlocks: Block[]) => {
-      setAutosaveStatus("Guardando...");
+      setEstado({ tipo: "guardando" });
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
-      saveTimeoutRef.current = setTimeout(() => {
+      saveTimeoutRef.current = setTimeout(async () => {
+        const md = blocksToMarkdown(newBlocks);
+        // El borrador local se escribe antes de intentar el servidor: si el
+        // guardado falla, es lo que permite no perder lo escrito.
         try {
-          if (typeof window !== "undefined") {
-            localStorage.setItem(draftKey, JSON.stringify(newBlocks));
-          }
-          const md = blocksToMarkdown(newBlocks);
-          onChange(md);
-          const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-          setAutosaveStatus(`Autoguardado a las ${timeStr}`);
+          localStorage.setItem(draftKey, JSON.stringify(newBlocks));
         } catch {
-          setAutosaveStatus("Error al autoguardar");
+          // Sin almacenamiento local se pierde la red de seguridad, no el
+          // guardado en servidor.
         }
-      }, 800);
+        onChange(md);
+
+        if (!onAutosave) {
+          setEstado({ tipo: "guardado", cuando: new Date(), enServidor: false });
+          return;
+        }
+        try {
+          await onAutosave(md);
+          setEstado({ tipo: "guardado", cuando: new Date(), enServidor: true });
+          // Guardado en el servidor, el borrador local ya no hace falta.
+          try {
+            localStorage.removeItem(draftKey);
+          } catch {}
+        } catch (e) {
+          setEstado({
+            tipo: "fallido",
+            motivo: e instanceof Error ? e.message : "no se pudo guardar en el servidor",
+          });
+        }
+      }, RETARDO_AUTOGUARDADO);
     },
-    [draftKey, onChange],
+    [draftKey, onChange, onAutosave],
   );
 
   useEffect(() => {
@@ -191,6 +275,20 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
   }, []);
+
+  function recuperarBorrador() {
+    if (!borradorLocal) return;
+    setBlocks(borradorLocal);
+    setBorradorLocal(null);
+    triggerAutosave(borradorLocal);
+  }
+
+  function descartarBorrador() {
+    setBorradorLocal(null);
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {}
+  }
 
   const updateBlock = (id: string, updates: Partial<Block>) => {
     const updated = blocks.map((b) => (b.id === id ? { ...b, ...updates } : b));
@@ -251,11 +349,37 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
   return (
     <div className="stack" style={{ background: "var(--color-bg-subtle, #f8f9fa)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--color-border, #e5e7eb)" }}>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-        <strong style={{ fontSize: "0.9rem" }}>Editor de Bloques (Markdown Canónico)</strong>
-        <span className="badge" style={{ fontSize: "0.75rem", opacity: 0.8 }}>
-          {autosaveStatus}
+        <strong style={{ fontSize: "0.9rem" }}>Editor de bloques (Markdown canónico)</strong>
+        {/* role="status" para que un lector de pantalla anuncie el guardado
+            sin robar el foco al profesor mientras escribe. */}
+        <span className="badge" role="status" aria-live="polite" style={{ fontSize: "0.75rem", opacity: 0.8 }}>
+          {textoDeEstado(estado, Boolean(onAutosave))}
         </span>
       </div>
+
+      {estado.tipo === "fallido" && (
+        <p className="error-banner" role="alert">
+          No se pudo guardar en el servidor: {estado.motivo}. Lo escrito queda en este
+          navegador y se ofrecerá recuperarlo al volver a abrir el recurso.
+        </p>
+      )}
+
+      {borradorLocal && (
+        <div className="warning-banner" role="alert">
+          <p>
+            Hay un borrador sin guardar de una sesión anterior en este navegador. Puede
+            ser más viejo que lo que se ve arriba.
+          </p>
+          <div className="row">
+            <button type="button" onClick={recuperarBorrador}>
+              Recuperar el borrador
+            </button>
+            <button type="button" className="danger" onClick={descartarBorrador}>
+              Descartar
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="stack" style={{ gap: "0.75rem" }}>
         {blocks.map((block, index) => (
@@ -389,4 +513,31 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
       </div>
     </div>
   );
+}
+
+/**
+ * textoDeEstado dice donde quedo lo escrito, no solo que se guardo. La
+ * diferencia importa: "guardado en este navegador" y "guardado en el
+ * servidor" son garantias distintas, y un profesor que cierra el portatil
+ * merece saber cual tiene.
+ */
+function textoDeEstado(estado: EstadoGuardado, haciaServidor: boolean): string {
+  switch (estado.tipo) {
+    case "limpio":
+      return haciaServidor ? "Sin cambios" : "Borrador local";
+    case "guardando":
+      return "Guardando…";
+    case "guardado": {
+      const hora = estado.cuando.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+      return estado.enServidor
+        ? `Guardado en el servidor a las ${hora}`
+        : `Borrador local guardado a las ${hora}`;
+    }
+    case "fallido":
+      return "Sin guardar en el servidor";
+  }
 }

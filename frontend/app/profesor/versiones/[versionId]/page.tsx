@@ -145,7 +145,7 @@ function MetadataForm({ version, disabled, onSaved }: { version: Version; disabl
         language: form.Language,
         approval_min_score: Number(form.ApprovalMinScore),
         approval_required_resources_pct: Number(form.ApprovalRequiredResourcesPct),
-      } as any);
+      });
       onSaved();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "No se pudo guardar");
@@ -381,6 +381,7 @@ function ResourceRow({
   const [uploading, setUploading] = useState(false);
   const [progreso, setProgreso] = useState<ProgresoSubida | null>(null);
   const [error, setError] = useState("");
+  const [editandoTexto, setEditandoTexto] = useState(false);
 
   async function handleDelete() {
     if (!confirm(`¿Eliminar el recurso "${r.Title}"?`)) return;
@@ -444,12 +445,40 @@ function ResourceRow({
             />
           </label>
         )}
+        {editable && r.Type === "text" && (
+          <button type="button" onClick={() => setEditandoTexto((v) => !v)} disabled={uploading}>
+            {editandoTexto ? "Cerrar editor" : "Editar contenido"}
+          </button>
+        )}
         {editable && (
           <button className="danger" onClick={handleDelete} disabled={uploading}>
             Eliminar
           </button>
         )}
       </div>
+
+      {editandoTexto && (
+        <BlockEditor
+          initialMarkdown={r.TextContentMD ?? ""}
+          draftKey={`mooc_borrador_recurso_${r.ID}`}
+          onChange={() => {
+            /* el guardado lo hace onAutosave; aquí no hay nada que sincronizar */
+          }}
+          onAutosave={async (markdown) => {
+            // PATCH del recurso completo: el handler reemplaza los campos, así
+            // que hay que reenviar los que no cambian o se perderían.
+            await api.updateResource(versionId, r.ID, {
+              type: r.Type,
+              title: r.Title,
+              position: r.Position,
+              visible: r.Visible,
+              required: r.Required,
+              downloadable: r.Downloadable,
+              text_content_md: markdown,
+            });
+          }}
+        />
+      )}
 
       {uploading && (
         <div
@@ -500,14 +529,14 @@ function AddResourceForm({
     setError("");
     try {
       await api.addResource(versionId, unitId, {
-        Type: type,
-        Title: title,
-        Position: nextPosition,
-        Visible: visible,
-        Required: required,
-        Downloadable: false,
-        TextContentMD: type === "text" ? textContent : undefined,
-        ExternalURL: type === "link" || type === "iframe" ? externalUrl : undefined,
+        type,
+        title,
+        position: nextPosition,
+        visible,
+        required,
+        downloadable: false,
+        text_content_md: type === "text" ? textContent : undefined,
+        external_url: type === "link" || type === "iframe" ? externalUrl : undefined,
       });
       setTitle("");
       setTextContent("");
