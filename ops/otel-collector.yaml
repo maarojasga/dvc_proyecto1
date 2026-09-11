@@ -1,0 +1,48 @@
+# Colector de OpenTelemetry para la demostración.
+#
+# Recibe por OTLP/HTTP, que es lo que exportan la API y los workers, y escribe
+# lo recibido en su propio log. Es deliberadamente simple: el objetivo es poder
+# leer una traza completa —subida, encolado, transcodificación— durante la
+# demostración, sin montar Jaeger ni Tempo.
+#
+# En un despliegue real este archivo cambia el exporter por el backend de
+# trazas que se use; los servicios no se enteran, porque siguen hablando OTLP.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # El lote reduce las escrituras. Con 2.000 usuarios concurrentes, exportar
+  # traza por traza costaría más que la propia instrumentación.
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+  # Un tope de memoria para que el colector no se lleve por delante al resto
+  # de la máquina si el backend de trazas deja de responder.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+
+exporters:
+  debug:
+    # detailed imprime atributos y eventos, que es lo que hace falta para
+    # verificar que la traza cruza de la API al worker.
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+  telemetry:
+    logs:
+      level: info

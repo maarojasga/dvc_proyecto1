@@ -849,26 +849,81 @@ paths:
 
   /catalog:
     get:
-      summary: Catálogo de cursos publicados, con búsqueda y filtros
+      summary: Catálogo de cursos publicados, con búsqueda, filtros y paginación por cursor
+      description: |
+        La paginación es por cursor y no por desplazamiento. Con OFFSET, si se
+        publica un curso mientras alguien pasa de página, las filas se desplazan
+        y el lector se salta una o ve otra dos veces; además el coste crece con
+        el desplazamiento. El cursor apunta a la última fila entregada.
+
+        Responde con `ETag`; una petición con `If-None-Match` igual recibe 304
+        sin cuerpo.
       operationId: listCatalog
       security: []
       parameters:
-        - { name: q, in: query, schema: { type: string } }
+        - { name: q, in: query, description: Busca en título y resumen., schema: { type: string } }
         - { name: category, in: query, schema: { type: string } }
         - { name: level, in: query, schema: { type: string } }
-        - { name: limit, in: query, schema: { type: integer } }
-        - { name: offset, in: query, schema: { type: integer } }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          description: >-
+            El `next_cursor` de la respuesta anterior. Es opaco; no debe
+            interpretarse ni construirse en el cliente. Uno inválido responde
+            400 y no la primera página.
+          schema: { type: string }
+        - name: If-None-Match
+          in: header
+          schema: { type: string }
       responses:
-        "200": { description: Lista de versiones publicadas. }
+        "200":
+          description: Una página de versiones publicadas.
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    description: >-
+                      Versiones publicadas, con sus metadatos. Sin el árbol de
+                      módulos, que se pide por curso.
+                    items: { type: object }
+                  next_cursor:
+                    type: string
+                    description: Ausente cuando no hay más páginas.
+        "304": { description: Sin cambios respecto al ETag enviado. }
+        "400": { $ref: "#/components/responses/Error" }
 
   /catalog/{courseId}:
     get:
       summary: Detalle de la versión publicada vigente de un curso
       operationId: getPublishedCourse
       security: []
-      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      description: |
+        Responde con `ETag`: el árbol de un curso publicado es inmutable
+        mientras siga publicado, y el estudiante lo pide al entrar y al volver
+        de cada recurso. Una petición con `If-None-Match` igual recibe 304 sin
+        cuerpo.
+
+        No lleva ninguna URL firmada, así que un 304 no deja al cliente con una
+        URL vencida. Por eso `/resources/{id}/content`, que sí las lleva, no
+        usa ETag.
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: If-None-Match, in: header, schema: { type: string } }
       responses:
-        "200": { description: Versión publicada con su árbol de contenido. }
+        "200":
+          description: Versión publicada con su árbol de contenido.
+          headers:
+            ETag:
+              schema: { type: string }
+        "304": { description: Sin cambios respecto al ETag enviado. }
         "404": { description: El curso no tiene versión publicada. }
 
   /resources/{resourceId}/content:

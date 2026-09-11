@@ -360,7 +360,7 @@ func (s *Service) ListMine(ctx context.Context, teacher *user.User) ([]*domain.C
 	return s.repo.ListByTeacher(ctx, teacher.ID)
 }
 
-func (s *Service) ListCatalog(ctx context.Context, f postgres.CatalogFilter) ([]*domain.Version, error) {
+func (s *Service) ListCatalog(ctx context.Context, f postgres.CatalogFilter) (postgres.PaginaDeCatalogo, error) {
 	return s.repo.ListCatalog(ctx, f)
 }
 

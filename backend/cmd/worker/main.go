@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hibiken/asynq"
 
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/config"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/media"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/observabilidad"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
@@ -27,6 +29,24 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	apagarObs, err := observabilidad.Iniciar(ctx, observabilidad.Config{
+		Servicio: "mooc-worker", Version: cfg.AppVersion, Entorno: cfg.Env,
+		Endpoint: cfg.OTLPEndpoint, Muestreo: cfg.OTLPMuestreo,
+	})
+	if err != nil {
+		log.Error("worker: observabilidad", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		// Contexto propio: el de arriba está cancelado tras la señal de
+		// apagado, y con él no se vaciaría lo último medido.
+		cierre, cancelar := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelar()
+		if err := apagarObs(cierre); err != nil {
+			log.Error("worker: al cerrar la observabilidad", "error", err)
+		}
+	}()
 
 	pool, err := postgres.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -53,7 +73,10 @@ func main() {
 	}
 
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(queue.TaskProcessMedia, processor.HandleProcessMedia)
+	// ConTraza envuelve el manejador para que el trabajo continúe la traza de
+	// quien lo encoló y el tramo quede marcado con error si falla, que es lo
+	// que hay que poder encontrar cuando un trabajo acaba en la DLQ.
+	mux.Handle(queue.TaskProcessMedia, queue.ConTraza("procesar multimedia", processor.HandleProcessMedia))
 
 	srv := queue.NewServer(cfg.RedisAddr, 5, log)
 

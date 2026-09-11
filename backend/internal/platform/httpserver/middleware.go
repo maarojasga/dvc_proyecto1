@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -231,17 +230,19 @@ func RateLimit(rdb *redis.Client, keyPrefix string, limit int, window time.Durat
 // RemoteAddr viene como "host:puerto", y el puerto es efímero: guardarlo en la
 // bitácora y en las sesiones ensucia el dato y además impide agrupar por
 // dirección, que es justo para lo que sirve.
+// clientIP devuelve la dirección a la que atribuir la petición.
+//
+// La lista de proxies de confianza se instala al construir el router. Ver
+// ip_del_cliente.go: X-Forwarded-For solo se cree cuando llega de un proxy
+// declarado, porque de esta dirección dependen el límite de tasa y la
+// bitácora.
 func clientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		// El primer elemento es el cliente original; el resto son proxies.
-		return strings.TrimSpace(strings.Split(fwd, ",")[0])
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return ipDelCliente(r, proxiesConfiables)
 }
+
+// proxiesConfiables lo fija NewRouter al arrancar. Es un valor de paquete
+// porque clientIP se llama desde middlewares que no reciben las dependencias.
+var proxiesConfiables ProxiesDeConfianza
 
 // RequireAuth exige una sesión activa y expone el usuario en el contexto.
 func RequireAuth(authSvc *auth.Service) func(http.Handler) http.Handler {

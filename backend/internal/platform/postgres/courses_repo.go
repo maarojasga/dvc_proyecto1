@@ -133,35 +133,80 @@ type CatalogFilter struct {
 	Category string
 	Level    string
 	Limit    int
-	Offset   int
+	// Desde es la posición desde la que continuar. Nil es la primera página.
+	Desde *Cursor
 }
 
-func (r *CourseRepo) ListCatalog(ctx context.Context, f CatalogFilter) ([]*course.Version, error) {
-	limit := f.Limit
-	if limit <= 0 || limit > 100 {
-		limit = 20
+// PaginaDeCatalogo es una página del catálogo con la posición para pedir la
+// siguiente.
+type PaginaDeCatalogo struct {
+	Items []*course.Version
+	// Siguiente está vacío cuando no hay más. Se calcula pidiendo una fila de
+	// más que el límite: si llega, hay más, y esa fila no se entrega.
+	Siguiente string
+}
+
+// LimiteCatalogoPorDefecto y LimiteCatalogoMaximo acotan el tamaño de página.
+const (
+	LimiteCatalogoPorDefecto = 20
+	LimiteCatalogoMaximo     = 100
+)
+
+// ListCatalog devuelve una página del catálogo publicado.
+//
+// El orden es (published_at DESC, id DESC). El id va como desempate porque dos
+// versiones pueden publicarse en el mismo instante, y sin él el orden no es
+// total: la paginación repetiría o se saltaría filas.
+func (r *CourseRepo) ListCatalog(ctx context.Context, f CatalogFilter) (PaginaDeCatalogo, error) {
+	limite := f.Limit
+	if limite <= 0 || limite > LimiteCatalogoMaximo {
+		limite = LimiteCatalogoPorDefecto
 	}
+
+	// Se pide una fila de más para saber si hay página siguiente sin tener que
+	// contar el total, que en un catálogo grande cuesta un recorrido completo.
+	var instanteDesde any
+	var idDesde any
+	if f.Desde != nil {
+		instanteDesde = f.Desde.Instante
+		idDesde = f.Desde.ID
+	}
+
 	rows, err := r.pool.Query(ctx, `
 		SELECT `+versionColumns+` FROM course_versions
 		WHERE status='published'
 		  AND ($1 = '' OR title ILIKE '%'||$1||'%' OR summary ILIKE '%'||$1||'%')
 		  AND ($2 = '' OR category = $2)
 		  AND ($3 = '' OR level = $3)
-		ORDER BY published_at DESC
-		LIMIT $4 OFFSET $5`, f.Search, f.Category, f.Level, limit, f.Offset)
+		  AND ($4::timestamptz IS NULL OR (published_at, id) < ($4::timestamptz, $5::uuid))
+		ORDER BY published_at DESC, id DESC
+		LIMIT $6`, f.Search, f.Category, f.Level, instanteDesde, idDesde, limite+1)
 	if err != nil {
-		return nil, err
+		return PaginaDeCatalogo{}, err
 	}
 	defer rows.Close()
+
 	var out []*course.Version
 	for rows.Next() {
 		v, err := scanVersion(rows)
 		if err != nil {
-			return nil, err
+			return PaginaDeCatalogo{}, err
 		}
 		out = append(out, v)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return PaginaDeCatalogo{}, err
+	}
+
+	pagina := PaginaDeCatalogo{Items: out}
+	if len(out) > limite {
+		ultima := out[limite-1]
+		pagina.Items = out[:limite]
+		if ultima.PublishedAt != nil {
+			pagina.Siguiente = Cursor{Instante: *ultima.PublishedAt, ID: ultima.ID}.Codificar()
+		}
+	}
+	return pagina, nil
 }
 
 // --- Módulos, unidades, recursos ---

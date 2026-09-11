@@ -414,8 +414,17 @@ export const api = {
       `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/parts?upload_id=${encodeURIComponent(uploadId)}`,
     ),
 
+  /**
+   * listCatalog pide una página del catálogo.
+   *
+   * La paginación es por cursor: `next_cursor` apunta a la última fila
+   * entregada, y se devuelve tal cual sin interpretarlo. Es opaco a propósito,
+   * así el servidor puede cambiar el orden sin romper al cliente.
+   */
   listCatalog: (params: Record<string, string> = {}) =>
-    request<{ items: Version[] }>(`/api/v1/catalog?${new URLSearchParams(params)}`),
+    request<{ items: Version[]; next_cursor?: string }>(
+      `/api/v1/catalog?${new URLSearchParams(params)}`,
+    ),
   getPublishedCourse: (courseId: string) => request<Version>(`/api/v1/catalog/${courseId}`),
 
   enroll: (courseId: string) =>

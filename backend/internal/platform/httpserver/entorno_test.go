@@ -494,6 +494,14 @@ func (e *entorno) asciendeA(correo string, rol string) {
 
 // profesorConCurso deja una cuenta de profesor con un curso en borrador, y
 // devuelve el cliente autenticado junto con el identificador de la versión.
+// profesor deja una cuenta de profesor lista y devuelve su cliente.
+func (e *entorno) profesor(correo string) *cliente {
+	e.t.Helper()
+	e.registrarYVerificar(correo)
+	e.asciendeA(correo, "teacher")
+	return e.entrar(correo, clavePrueba)
+}
+
 func (e *entorno) profesorConCurso(correo, slug string) (*cliente, string) {
 	e.t.Helper()
 	e.registrarYVerificar(correo)

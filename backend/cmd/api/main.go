@@ -24,6 +24,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/observabilidad"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/redisclient"
@@ -63,6 +64,23 @@ func main() {
 		log.Fatalf("api: storage: %v", err)
 	}
 
+	apagarObs, err := observabilidad.Iniciar(ctx, observabilidad.Config{
+		Servicio: "mooc-api", Version: cfg.AppVersion, Entorno: cfg.Env,
+		Endpoint: cfg.OTLPEndpoint, Muestreo: cfg.OTLPMuestreo,
+	})
+	if err != nil {
+		log.Fatalf("api: observabilidad: %v", err)
+	}
+	defer func() {
+		// Un contexto propio: el de arriba puede estar ya cancelado por la
+		// señal de apagado, y entonces no se vaciaría nada.
+		cierre, cancelar := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelar()
+		if err := apagarObs(cierre); err != nil {
+			log.Printf("api: al cerrar la observabilidad: %v", err)
+		}
+	}()
+
 	escaner, err := escanerDeCargas(cfg)
 	if err != nil {
 		log.Fatalf("api: antimalware: %v", err)
@@ -101,6 +119,7 @@ func main() {
 		Redis:       rdb, Queue: queueClient,
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
+		ProxiesDeConfianza: cfg.TrustedProxies,
 	})
 
 	srv := &http.Server{

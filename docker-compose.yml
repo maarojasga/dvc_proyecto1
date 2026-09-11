@@ -59,6 +59,18 @@ services:
       retries: 20
       start_period: 120s
 
+  # Colector de OpenTelemetry. Recibe trazas y metricas de la API y de los
+  # workers, y las deja en su propio log para poder leerlas en la demostracion
+  # sin montar un backend completo. En produccion se apunta a Jaeger, Tempo o
+  # lo que se use.
+  otel:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./ops/otel-collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "${OTEL_HTTP_PORT:-4318}:4318"
+
   mailpit:
     image: axllent/mailpit:latest
     ports:
@@ -93,6 +105,17 @@ services:
       # usa el escaner de desarrollo (reconoce EICAR y ejecutables) y en
       # APP_ENV=production se niega a arrancar.
       ANTIMALWARE_ADDR: ${ANTIMALWARE_ADDR-clamav:3310}
+      # Observabilidad. Vacia desactiva la exportacion: sin colector, un
+      # arranque que falla por eso seria peor que no tener trazas.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT-otel:4318}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}
+      APP_VERSION: ${APP_VERSION:-dev}
+      # Redes desde las que se acepta X-Forwarded-For. La red por defecto del
+      # compose esta en 172.16/12; sin declararla, todas las peticiones
+      # parecerian venir del proxy y un solo abusador agotaria el limite de
+      # tasa de todos. Declarar de mas seria peor: cualquiera podria elegir su
+      # direccion y esquivar el limite.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12}
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_FROM: no-reply@mooc.local
@@ -100,8 +123,11 @@ services:
       COOKIE_SECURE: "false"
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-    ports:
-      - "8080:8080"
+    # La API no publica puerto: lo hace el proxy, que reparte entre las
+    # instancias. Publicar 8080 aqui impedia `--scale api=N`, porque la segunda
+    # instancia chocaba con el puerto de la primera.
+    expose:
+      - "8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,6 +151,9 @@ services:
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_USE_SSL: "false"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT-otel:4318}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}
+      APP_VERSION: ${APP_VERSION:-dev}
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,6 +161,22 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+
+  # Proxy inverso delante de la API. Existe para que `docker compose up
+  # --scale api=3` funcione: reparte entre las instancias por el DNS interno
+  # del compose, que devuelve todas las direcciones del servicio.
+  #
+  # Tambien es lo que hace demostrable que la API no guarda estado local: las
+  # peticiones de una misma sesion caen en instancias distintas y todo sigue
+  # funcionando, porque la sesion vive en Redis y la verdad en Postgres.
+  proxy:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./ops/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      - api
 
   frontend:
     build:

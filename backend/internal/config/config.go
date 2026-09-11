@@ -32,10 +32,24 @@ type Config struct {
 	S3PublicEndpoint string
 	S3PublicUseSSL   bool
 
+	// OTLPEndpoint es el colector de OpenTelemetry (host:puerto, HTTP). Vacío
+	// desactiva la exportación: en local no hay colector, y fallar el arranque
+	// por eso sería peor que no tener trazas.
+	OTLPEndpoint string
+	// OTLPMuestreo es la fracción de trazas que se conservan, de 0 a 1. Con
+	// 2.000 concurrentes, guardarlas todas cuesta más que lo que informan.
+	OTLPMuestreo float64
+	AppVersion   string
+
 	// AntimalwareAddr es la dirección del demonio ClamAV (host:puerto). Si
 	// queda vacía se usa el escáner de desarrollo, y el arranque en
 	// producción lo rechaza: un escáner que aprueba todo da la apariencia del
 	// control sin el control.
+	// TrustedProxies son las redes desde las que se acepta X-Forwarded-For.
+	// Vacío es el lado seguro: sin declararlas, la dirección del cliente sale
+	// del socket y no de una cabecera que cualquiera puede escribir.
+	TrustedProxies string
+
 	AntimalwareAddr string
 
 	SMTPHost string
@@ -67,6 +81,14 @@ func Load() Config {
 		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
 		S3PublicUseSSL:   getBool("S3_PUBLIC_USE_SSL", getBool("S3_USE_SSL", false)),
 
+		// Se lee la variable estándar de OpenTelemetry, para que valga la
+		// configuración que ya conoce cualquiera que haya usado un colector.
+		OTLPEndpoint: getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTLPMuestreo: getFloat("OTEL_TRACES_SAMPLER_ARG", 1),
+		AppVersion:   getEnv("APP_VERSION", "dev"),
+
+		TrustedProxies: getEnv("TRUSTED_PROXIES", ""),
+
 		AntimalwareAddr: getEnv("ANTIMALWARE_ADDR", ""),
 
 		SMTPHost: getEnv("SMTP_HOST", "localhost"),
@@ -96,6 +118,18 @@ func getBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func getFloat(key string, fallback float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }
 
 func getDuration(key string, fallback time.Duration) time.Duration {

@@ -475,6 +475,9 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 	task, err := queueTask(queue.TaskProcessMedia, queue.MediaProcessPayload{
 		TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
 		SourceObjectKey: res.ObjectKey, Kind: kind,
+		// El contexto de traza viaja con el trabajo: así la transcodificación
+		// aparece como continuación de esta subida y no como una traza suelta.
+		Traza: queue.InyectarTraza(r.Context()),
 	})
 	if err != nil {
 		writeError(w, err)
@@ -495,15 +498,33 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 func (h *handlers) listCatalog(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	offset, _ := strconv.Atoi(q.Get("offset"))
-	items, err := h.deps.Courses.ListCatalog(r.Context(), postgres.CatalogFilter{
-		Search: q.Get("q"), Category: q.Get("category"), Level: q.Get("level"), Limit: limit, Offset: offset,
-	})
+
+	filtro := postgres.CatalogFilter{
+		Search: q.Get("q"), Category: q.Get("category"), Level: q.Get("level"), Limit: limit,
+	}
+	// El cursor se valida: uno corrupto es una petición inválida y no "empieza
+	// de nuevo". Interpretarlo como el principio devolvería la primera página
+	// en silencio y el cliente creería estar avanzando.
+	if cursor := q.Get("cursor"); cursor != "" {
+		desde, err := postgres.DecodificarCursor(cursor)
+		if err != nil {
+			writeError(w, ErrBadRequest)
+			return
+		}
+		filtro.Desde = &desde
+	}
+
+	pagina, err := h.deps.Courses.ListCatalog(r.Context(), filtro)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	cuerpo := map[string]any{"items": pagina.Items}
+	if pagina.Siguiente != "" {
+		cuerpo["next_cursor"] = pagina.Siguiente
+	}
+	// Con ETag: el catálogo cambia poco y se pide en cada vuelta a la lista.
+	writeJSONConETag(w, r, http.StatusOK, cuerpo)
 }
 
 func (h *handlers) getPublishedCourse(w http.ResponseWriter, r *http.Request) {
@@ -517,7 +538,11 @@ func (h *handlers) getPublishedCourse(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, v)
+	// Con ETag: el árbol de un curso publicado es inmutable mientras siga
+	// publicado, y el estudiante lo pide al entrar y al volver de cada recurso.
+	// No lleva ninguna URL firmada, así que un 304 no deja al cliente con una
+	// URL vencida.
+	writeJSONConETag(w, r, http.StatusOK, v)
 }
 
 type initiateMultipartRequest struct {
@@ -685,6 +710,9 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 	task, err := queueTask(queue.TaskProcessMedia, queue.MediaProcessPayload{
 		TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
 		SourceObjectKey: res.ObjectKey, Kind: kind,
+		// El contexto de traza viaja con el trabajo: así la transcodificación
+		// aparece como continuación de esta subida y no como una traza suelta.
+		Traza: queue.InyectarTraza(r.Context()),
 	})
 	if err != nil {
 		writeError(w, err)

@@ -5,10 +5,12 @@ package httpserver
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/admin"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
@@ -41,9 +43,18 @@ type Deps struct {
 	Inspector    *asynq.Inspector
 	CORSOrigin   string
 	CookieSecure bool
+	// ProxiesDeConfianza son las redes desde las que se acepta
+	// X-Forwarded-For, en CIDR separados por comas. Detrás del proxy inverso
+	// del despliegue hay que declararlo: sin esto todas las peticiones
+	// parecerían venir del proxy y un solo abusador agotaría el límite de
+	// tasa de todos. Vacío significa que no se cree a nadie, que es el lado
+	// seguro por defecto.
+	ProxiesDeConfianza string
 }
 
 func NewRouter(d Deps) http.Handler {
+	proxiesConfiables = NuevosProxiesDeConfianza(d.ProxiesDeConfianza)
+
 	mux := http.NewServeMux()
 
 	h := &handlers{deps: d}
@@ -57,7 +68,7 @@ func NewRouter(d Deps) http.Handler {
 	h.registerMedia(mux)
 	h.registerOperacion(mux)
 
-	return Chain(mux,
+	manejador := Chain(mux,
 		RequestID,
 		Recover,
 		Logging,
@@ -66,6 +77,41 @@ func NewRouter(d Deps) http.Handler {
 		CSRF,
 		Idempotency(d.Redis),
 	)
+
+	// La instrumentación va por fuera de todo: así el tramo cubre también lo
+	// que hacen los middlewares (el límite de tasa, la idempotencia, el
+	// rechazo por CSRF), que es justo donde conviene mirar cuando una petición
+	// no llega al handler.
+	//
+	// El nombre del tramo sale del patrón de ruta y no de la URL concreta: con
+	// la URL, cada identificador crearía un nombre distinto y las métricas
+	// serían inservibles por cardinalidad.
+	return otelhttp.NewHandler(manejador, "api",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			if patron := patronDeRuta(r); patron != "" {
+				return r.Method + " " + patron
+			}
+			return r.Method
+		}),
+		// El chequeo de salud lo llama el orquestador cada pocos segundos y no
+		// dice nada de nadie: instrumentarlo solo añade ruido y coste.
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != "/api/v1/health"
+		}),
+	)
+}
+
+// patronDeRuta devuelve el patrón con el que se registró la ruta
+// ("GET /api/v1/courses/{courseId}"), sin los valores concretos.
+func patronDeRuta(r *http.Request) string {
+	if r.Pattern == "" {
+		return ""
+	}
+	// El patrón viene como "METODO /ruta"; el método ya se añade aparte.
+	if i := strings.IndexByte(r.Pattern, ' '); i >= 0 {
+		return r.Pattern[i+1:]
+	}
+	return r.Pattern
 }
 
 type handlers struct {

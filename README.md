@@ -32,8 +32,9 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 | 10 | Catálogo, inscripción, retiro y reinscripción | Completo: búsqueda por texto, filtros por categoría y nivel, y la reinscripción reutiliza la inscripción, así que conserva progreso y resultados |
 
 De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
-3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
-protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
+3.1 al día con la implementación, errores uniformes, `Idempotency-Key`,
+protección CSRF, paginación por cursor, ETag con peticiones condicionales y
+OpenTelemetry con trazas y métricas.
 
 ### Evaluación y progreso
 
@@ -106,6 +107,82 @@ Dos detalles que se pagan al desplegar:
   con `APP_ENV=production` el arranque falla en lugar de aceptar cargas sin
   escanear de verdad. Un escáner que aprueba todo es peor que ninguno, porque
   nadie lo revisa.
+
+### Paginación por cursor y ETag
+
+El catálogo pagina por cursor, no por desplazamiento. Con `OFFSET`, si se
+publica un curso mientras alguien pasa de página, las filas se desplazan y el
+lector se salta una o ve otra dos veces; y el coste crece con el
+desplazamiento, porque la base cuenta y descarta todo lo anterior. El cursor
+apunta a la última fila entregada, así que es estable frente a inserciones y su
+coste no depende de lo lejos que se haya llegado. Hay una prueba que publica un
+curso a mitad del recorrido y comprueba que no se repite ni se salta ninguno.
+
+El orden lleva el `id` como desempate. Sin él, dos versiones publicadas en el
+mismo instante dejarían el orden incompleto, y la paginación volvería a
+repetir o saltarse filas.
+
+El cursor es opaco y un cursor inválido responde 400, no la primera página:
+devolver el principio en silencio haría creer al cliente que está avanzando.
+
+El catálogo y el árbol de un curso publicado responden con `ETag`, y un
+`If-None-Match` que coincide recibe 304 sin cuerpo. El ETag se calcula del JSON
+que se iba a enviar, que es más trabajo que derivarlo de un `updated_at` pero
+no se puede desincronizar. **`/resources/{id}/content` no lleva ETag** a
+propósito: su respuesta incluye una URL firmada con caducidad, y un 304 dejaría
+al cliente con una URL vencida creyendo que está al día.
+
+### Escalar a varias instancias
+
+`docker compose up --scale api=3` funciona porque la API **no publica puerto**:
+lo hace un nginx delante, que reparte entre las instancias. Con la API
+publicando 8080 directamente —como estaba— la segunda instancia chocaba con el
+puerto de la primera y el escalamiento fallaba.
+
+El proxy resuelve `api` en cada petición y no al arrancar (de ahí la variable
+en `proxy_pass`), porque el DNS del compose devuelve todas las instancias del
+servicio: sin eso, nginx se quedaría con la primera dirección y escalar no
+cambiaría nada.
+
+Esto es además lo que hace demostrable que la API no guarda estado local: las
+peticiones de una misma sesión caen en instancias distintas y todo sigue
+funcionando, porque la sesión vive en Redis y la verdad en Postgres.
+
+**`TRUSTED_PROXIES` hay que declararlo detrás del proxy.** De la dirección del
+cliente dependen el límite de tasa y la bitácora, y con un proxy delante todas
+las peticiones llegan desde él. Sin declararlo, el límite se aplicaría a la
+suma de todo el tráfico y un solo abusador lo agotaría para todos.
+
+Declarar de más es peor que de menos: `X-Forwarded-For` la escribe quien
+quiera, y creerla sin condiciones —como se hacía— deja esquivar el límite de
+tasa entero rotando el valor, y llena la bitácora de direcciones elegidas por
+el atacante. Ahora la cabecera solo se lee cuando la petición llega de una red
+declarada, y se toma el último salto de la cadena que no sea de confianza.
+
+### Observabilidad
+
+Trazas y métricas por OpenTelemetry, exportadas por OTLP/HTTP al colector que
+indique `OTEL_EXPORTER_OTLP_ENDPOINT`. Vacía desactiva la exportación: en local
+no hay colector, y fallar el arranque por eso sería peor que no tener trazas.
+
+Lo que más cuesta conseguir y más se nota en la demostración es que **la traza
+cruza la cola**. La API inyecta el contexto de traza en el propio trabajo y el
+worker lo extrae al ejecutarlo, así que subir un vídeo y verlo transcodificado
+son el mismo hilo y no dos trazas sueltas. El transporte son las cabeceras
+estándar de W3C Trace Context, así que cualquier colector lo entiende sin
+configuración especial.
+
+El muestreo es `ParentBased`: si la API decidió conservar una petición, el
+worker que continúa ese trabajo mantiene la decisión. Si cada pieza decidiera
+por su cuenta quedarían trazas a medias, que es lo peor de los dos mundos —se
+paga el coste y no se puede seguir el hilo—. Para la prueba de carga conviene
+bajar `OTEL_TRACES_SAMPLER_ARG`.
+
+El nombre de cada tramo sale del patrón de ruta (`GET /api/v1/catalog/{courseId}`)
+y no de la URL concreta: con la URL, cada identificador crearía un nombre
+distinto y las métricas serían inservibles por cardinalidad. El chequeo de
+salud no se instrumenta, porque lo llama el orquestador cada pocos segundos y
+no dice nada de nadie.
 
 ### El host del almacén: interno frente al del navegador
 
