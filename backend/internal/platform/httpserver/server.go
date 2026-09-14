@@ -19,6 +19,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
 )
 
 type Deps struct {
@@ -42,9 +43,12 @@ type Deps struct {
 	Auditor Auditor
 	// Entrega resuelve las URL de lectura. En producción es el mismo cliente
 	// de Storage; se declara aparte porque la reproducción solo necesita eso.
-	Entrega      EntregaDeObjetos
-	Redis        *redis.Client
-	Queue        *asynq.Client
+	Entrega EntregaDeObjetos
+	Redis   *redis.Client
+	// Queue publica los trabajos asíncronos. Es una interfaz para que los
+	// manejadores no dependan del SDK de la cola y una prueba pueda comprobar
+	// qué se encoló sin Redis de por medio.
+	Queue        queue.Encolador
 	Inspector    *asynq.Inspector
 	CORSOrigin   string
 	CookieSecure bool

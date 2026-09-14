@@ -11,6 +11,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/documento"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/quiz"
@@ -125,6 +126,8 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusUnprocessableEntity, "malware_detected", nil
 	case errors.Is(err, ErrTipoNoCorresponde):
 		return http.StatusUnprocessableEntity, "mime_mismatch", nil
+	case errors.Is(err, documento.ErrFormatoNoSoportado):
+		return http.StatusUnprocessableEntity, "presentation_format_unsupported", nil
 	case errors.Is(err, iframe.ErrHostNoAutorizado):
 		return http.StatusUnprocessableEntity, "iframe_host_not_allowed", nil
 	case errors.Is(err, iframe.ErrEsquemaNoPermitido):

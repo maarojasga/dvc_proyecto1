@@ -103,7 +103,7 @@ func main() {
 		Antimalware: escaner,
 		Iframes:     iframeRepo,
 		Auditor:     userRepo,
-		Redis:       rdb, Queue: queueClient,
+		Redis:       rdb, Queue: queue.NuevoEncolador(queueClient),
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
 	})

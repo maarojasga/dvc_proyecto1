@@ -305,6 +305,9 @@ type RecursoPublicadoConMedia struct {
 	ObjectKey    string
 	AssetStatus  string
 	HLSMasterKey string
+	// DerivedPDFKey es la vista previa de una presentación. El original sigue
+	// en ObjectKey: la conversión añade una vista, no sustituye al archivo.
+	DerivedPDFKey string
 }
 
 // GetRecursoPublicadoConMedia resuelve un recurso solo si pertenece a la
@@ -319,7 +322,8 @@ func (r *CourseRepo) GetRecursoPublicadoConMedia(ctx context.Context, resourceID
 		SELECT c.id, c.teacher_id, res.stable_id, res.type, res.title, res.visible,
 		       res.downloadable, coalesce(res.text_content_md, ''),
 		       coalesce(res.external_url, ''), coalesce(res.object_key, ''),
-		       coalesce(ma.status, ''), coalesce(ma.hls_master_key, '')
+		       coalesce(ma.status, ''), coalesce(ma.hls_master_key, ''),
+		       coalesce(ma.derived_pdf_key, '')
 		  FROM resources res
 		  JOIN units u   ON u.id = res.unit_id
 		  JOIN modules m ON m.id = u.module_id
@@ -329,7 +333,7 @@ func (r *CourseRepo) GetRecursoPublicadoConMedia(ctx context.Context, resourceID
 		 WHERE res.id = $1`, resourceID).
 		Scan(&out.CourseID, &out.TeacherID, &out.StableID, &out.Type, &out.Title, &out.Visible,
 			&out.Downloadable, &out.TextContent, &out.ExternalURL, &out.ObjectKey,
-			&out.AssetStatus, &out.HLSMasterKey)
+			&out.AssetStatus, &out.HLSMasterKey, &out.DerivedPDFKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

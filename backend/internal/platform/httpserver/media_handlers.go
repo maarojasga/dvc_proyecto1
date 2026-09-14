@@ -41,6 +41,10 @@ type contentResponse struct {
 	CDN bool `json:"cdn,omitempty"`
 	// ExpiresIn son los segundos de validez cuando la URL va firmada.
 	ExpiresIn int `json:"expires_in,omitempty"`
+	// OriginalURL es el archivo tal como lo subió el profesor, cuando el
+	// recurso se presenta convertido (una presentación) y además es
+	// descargable.
+	OriginalURL string `json:"original_url,omitempty"`
 	// Markdown es el contenido de los recursos de texto.
 	Markdown string `json:"markdown,omitempty"`
 	// ExternalURL es el destino de enlaces e iframes.
@@ -98,6 +102,11 @@ func (h *handlers) resourceContent(w http.ResponseWriter, r *http.Request) {
 		out.CDN = h.deps.Entrega.SirveDesdeCDN()
 		if !out.CDN {
 			out.ExpiresIn = int(vigenciaEntrega.Seconds())
+		}
+	}
+	if contenido.ClaveOriginal != "" {
+		if url, err := h.deps.Entrega.PresignedGetURL(r.Context(), contenido.ClaveOriginal, vigenciaEntrega, ""); err == nil {
+			out.OriginalURL = url
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

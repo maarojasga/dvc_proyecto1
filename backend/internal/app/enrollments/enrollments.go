@@ -124,6 +124,9 @@ type Contenido struct {
 	Sandbox        string
 	Permisos       string
 	ReferrerPolicy string
+	// ClaveOriginal es el archivo tal como lo subió el profesor, cuando el
+	// recurso se entrega convertido y además es descargable.
+	ClaveOriginal string
 }
 
 // autorizarRecurso comprueba el derecho de acceso a un recurso y, de paso,
@@ -189,11 +192,25 @@ func (s *Service) ContenidoDeRecurso(ctx context.Context, actor *user.User, reso
 			}
 			out.PosicionSegundos = pos
 		}
-	case "pdf", "image", "file", "presentation":
+	case "pdf", "image", "file":
 		if rec.ObjectKey == "" {
 			return nil, ErrMediaNoLista
 		}
 		out.ClaveObjeto = rec.ObjectKey
+	case "presentation":
+		// Lo que se entrega es el PDF convertido, para que se pueda
+		// previsualizar con el visor: la presentación original no la abre el
+		// navegador. Si la conversión aún no terminó, el recurso no está listo.
+		if rec.AssetStatus != "ready" || rec.DerivedPDFKey == "" {
+			return nil, ErrMediaNoLista
+		}
+		out.ClaveObjeto = rec.DerivedPDFKey
+		// El original sigue disponible para descargarlo cuando el profesor lo
+		// marcó descargable: convertir no debe quitarle al estudiante el
+		// archivo que el autor quiso entregarle.
+		if rec.Downloadable {
+			out.ClaveOriginal = rec.ObjectKey
+		}
 	case "iframe":
 		// Se vuelve a autorizar al servir, no solo al guardar: la lista pudo
 		// cambiar desde entonces, y quien la recorta espera que el contenido

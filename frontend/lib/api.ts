@@ -87,6 +87,9 @@ export interface ResourceContent {
   markdown?: string;
   external_url?: string;
   position_seconds?: number;
+  // El archivo tal como lo subio el profesor, cuando el recurso se presenta
+  // convertido (una presentacion) y ademas es descargable.
+  original_url?: string;
   // Atributos de seguridad de un iframe. Los decide el servidor a partir de la
   // lista blanca; el cliente los aplica tal cual.
   sandbox?: string;

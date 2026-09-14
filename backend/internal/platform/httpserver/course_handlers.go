@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 
 	domain "github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/course"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
@@ -484,19 +483,7 @@ func (h *handlers) aceptarCargaVerificada(
 		return
 	}
 
-	kind := "video"
-	if res.Type == domain.ResourceAudio {
-		kind = "audio"
-	}
-	task, err := queueTask(queue.TaskProcessMedia, queue.MediaProcessPayload{
-		TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
-		SourceObjectKey: res.ObjectKey, Kind: kind,
-	})
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if _, err := h.deps.Queue.Enqueue(task, asynq.MaxRetry(queue.MaxRetry), asynq.TaskID(assetID.String())); err != nil {
+	if err := h.deps.Queue.Encolar(r.Context(), h.trabajoDeProcesamiento(assetID, resourceID, res, obj)); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -509,6 +496,39 @@ func (h *handlers) aceptarCargaVerificada(
 		"status": "queued", "media_asset_id": assetID.String(),
 		"mime_type": obj.MIME, "size_bytes": obj.Tamano, "checksum_sha256": obj.SHA256,
 	})
+}
+
+// trabajoDeProcesamiento elige qué encolar según el tipo de recurso: HLS para
+// video y audio, conversión a PDF para presentaciones.
+//
+// El identificador del activo hace de clave de idempotencia en los dos casos,
+// que es lo que permite que una doble entrega no produzca salidas repetidas.
+func (h *handlers) trabajoDeProcesamiento(
+	assetID, resourceID uuid.UUID, res *domain.Resource, obj objetoVerificado,
+) queue.Trabajo {
+	// El identificador del activo hace de clave: dos confirmaciones de la
+	// misma carga publican el mismo trabajo, no dos.
+	trabajo := queue.Trabajo{ClaveDeIdempotencia: assetID.String()}
+
+	if res.Type == domain.ResourcePresentation {
+		trabajo.Tipo = queue.TaskConvertDocument
+		trabajo.Payload = queue.DocumentConvertPayload{
+			TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
+			SourceObjectKey: res.ObjectKey, Formato: string(obj.Formato),
+		}
+		return trabajo
+	}
+
+	kind := "video"
+	if res.Type == domain.ResourceAudio {
+		kind = "audio"
+	}
+	trabajo.Tipo = queue.TaskProcessMedia
+	trabajo.Payload = queue.MediaProcessPayload{
+		TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
+		SourceObjectKey: res.ObjectKey, Kind: kind,
+	}
+	return trabajo
 }
 
 func (h *handlers) listCatalog(w http.ResponseWriter, r *http.Request) {

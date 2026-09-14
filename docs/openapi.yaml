@@ -1351,7 +1351,8 @@ components:
         El objeto llegó pero no se acepta. `error.code` distingue el motivo:
         `checksum_mismatch` (integridad), `mime_mismatch` (el contenido real no
         corresponde al tipo del recurso), `malware_detected` (lo rechazó el
-        escaneo) o `upload_missing` (no hay objeto). En los tres primeros casos
+        escaneo), `presentation_format_unsupported` (no es un PPTX ni un ODP
+        reconocible) o `upload_missing` (no hay objeto). Salvo en el último,
         el objeto ya fue borrado del almacén.
       content:
         application/json:
@@ -1398,7 +1399,10 @@ components:
         media_asset_id:
           type: string
           format: uuid
-          description: Solo en `queued`; identifica el trabajo de transcodificación.
+          description: >
+            Solo en `queued`; identifica el trabajo asíncrono, que es la
+            transcodificación a HLS en vídeo y audio y la conversión a PDF en
+            presentaciones.
 
     Insignia:
       type: object

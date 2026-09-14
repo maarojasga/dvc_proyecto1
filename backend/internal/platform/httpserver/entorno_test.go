@@ -100,6 +100,7 @@ type entorno struct {
 	rdb     *redis.Client
 	correos *buzon
 	almacen *almacenFalso
+	cola    *colaFalsa
 }
 
 func nuevoEntorno(t *testing.T) *entorno {
@@ -150,6 +151,7 @@ func nuevoEntorno(t *testing.T) *entorno {
 	insignias := postgres.NewBadgeRepo(pool)
 
 	almacen := nuevoAlmacenFalso()
+	cola := nuevaColaFalsa()
 	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, almacen, users)
 	handler := httpserver.NewRouter(httpserver.Deps{
 		Auth:         authSvc,
@@ -159,6 +161,8 @@ func nuevoEntorno(t *testing.T) *entorno {
 		Quizzes:      quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
 		Progreso:     progresoSvc,
 		Storage:      almacen,
+		Media:        postgres.NewMediaRepo(pool),
+		Queue:        cola,
 		Iframes:      marcos,
 		Auditor:      users,
 		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
@@ -166,7 +170,7 @@ func nuevoEntorno(t *testing.T) *entorno {
 		CORSOrigin:   "http://localhost:3000",
 		CookieSecure: false,
 	})
-	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos, almacen: almacen}
+	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos, almacen: almacen, cola: cola}
 }
 
 // cliente conserva cookies entre peticiones, como un navegador, y reenvía el
@@ -317,6 +321,28 @@ func (e *entorno) profesorConCurso(correo, slug string) (*cliente, string) {
 		e.t.Fatalf("no se pudo leer el id de la versión: %s", res.Crudo)
 	}
 	return c, versionID
+}
+
+// marcarPresentacionConvertida simula lo que deja el worker al terminar: el
+// PDF en el almacén, el activo listo con su clave derivada y el recurso
+// marcado como procesado.
+//
+// Se hace en base y no invocando al worker porque la conversión exige
+// LibreOffice; lo que esta prueba verifica es la entrega del derivado, no la
+// conversión, que se prueba aparte.
+func (e *entorno) marcarPresentacionConvertida(recursoID string) {
+	e.t.Helper()
+	clave := "presentaciones/" + recursoID + "/preview.pdf"
+	e.almacen.ponerObjeto(clave, []byte("%PDF-1.7\n"), "application/pdf")
+	if _, err := e.pool.Exec(context.Background(), `
+		UPDATE media_assets SET status='ready', derived_pdf_key=$2
+		 WHERE resource_id = $1`, recursoID, clave); err != nil {
+		e.t.Fatalf("marcar el activo listo: %v", err)
+	}
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE resources SET processing_status='ready' WHERE id = $1`, recursoID); err != nil {
+		e.t.Fatalf("marcar el recurso listo: %v", err)
+	}
 }
 
 // consultarTexto devuelve un único valor de texto.

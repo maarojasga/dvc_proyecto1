@@ -125,6 +125,23 @@ export default function RecursoPage() {
         <VisorPDF src={contenido.url} titulo={contenido.title} descargable={contenido.downloadable} />
       )}
 
+      {/* Una presentación se previsualiza con el mismo visor: lo que llega es
+          el PDF que produjo la conversión, porque el navegador no abre un PPTX
+          ni un ODP. El original sigue disponible cuando el profesor lo marcó
+          descargable. */}
+      {contenido.type === "presentation" && contenido.url && (
+        <>
+          <VisorPDF src={contenido.url} titulo={contenido.title} descargable={false} />
+          {contenido.original_url && (
+            <p>
+              <a href={contenido.original_url} target="_blank" rel="noopener noreferrer">
+                Descargar la presentación original
+              </a>
+            </p>
+          )}
+        </>
+      )}
+
       {contenido.type === "image" && contenido.url && (
         // next/image exige declarar los hosts remotos en tiempo de
         // compilación, y aquí la URL viene firmada de un almacenamiento o un
