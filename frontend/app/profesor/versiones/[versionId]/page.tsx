@@ -7,25 +7,39 @@ import { api, type Version, type Module, type Unit, type Clasificacion, ApiError
 import { BlockEditor } from "@/components/BlockEditor";
 import { HistorialDeRevisiones } from "@/components/HistorialDeRevisiones";
 import { Coautoria } from "@/components/Coautoria";
-import { subirArchivo, hayCargaPendiente, olvidarCarga } from "@/lib/carga";
+import { subirArchivo, hayCargaPendiente, olvidarCarga, ErrorDeCarga } from "@/lib/carga";
+import { useI18n, type Clave, type Traducir } from "@/lib/i18n";
 
-const RESOURCE_TYPES = [
-  ["text", "Texto enriquecido"],
-  ["image", "Imagen"],
-  ["video", "Video"],
-  ["audio", "Audio"],
-  ["pdf", "PDF"],
-  ["presentation", "Presentación"],
-  ["file", "Archivo descargable"],
-  ["iframe", "Iframe autorizado"],
-  ["link", "Enlace externo"],
-  ["quiz", "Quiz"],
-] as const;
+// El valor es el que entiende la API; la clave, cómo se llama en pantalla.
+const RESOURCE_TYPES: ReadonlyArray<readonly [string, Clave]> = [
+  ["text", "tipo.text"],
+  ["image", "tipo.image"],
+  ["video", "tipo.video"],
+  ["audio", "tipo.audio"],
+  ["pdf", "tipo.pdf"],
+  ["presentation", "tipo.presentation"],
+  ["file", "tipo.file"],
+  ["iframe", "tipo.iframe"],
+  ["link", "tipo.link"],
+  ["quiz", "tipo.quiz"],
+];
+
+/**
+ * mensajeDeCarga traduce un fallo de la subida.
+ *
+ * lib/carga no ve el idioma, así que devuelve una clave con sus datos; aquí
+ * se convierte en el texto que lee el profesor.
+ */
+function mensajeDeCarga(e: unknown, t: Traducir): string {
+  if (e instanceof ErrorDeCarga) return t(`carga.error.${e.clave}`, e.datos);
+  return e instanceof Error ? e.message : t("carga.error.generico");
+}
 
 const BINARY_TYPES = new Set(["image", "video", "audio", "pdf", "presentation", "file"]);
 
 export default function VersionEditorPage() {
   const { versionId } = useParams<{ versionId: string }>();
+  const { t } = useI18n();
   const [version, setVersion] = useState<Version | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -36,9 +50,9 @@ export default function VersionEditorPage() {
       const v = await api.getVersion(versionId);
       setVersion(v);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo cargar la versión");
+      setError(e instanceof ApiError ? e.message : t("version.error"));
     }
-  }, [versionId]);
+  }, [versionId, t]);
 
   useEffect(() => {
     load();
@@ -49,13 +63,13 @@ export default function VersionEditorPage() {
     setNotice("");
     try {
       await api.publishVersion(versionId);
-      setNotice("¡Versión publicada!");
+      setNotice(t("version.publicada"));
       load();
     } catch (e) {
       if (e instanceof ApiError && e.details?.length) {
         setPublishErrors(e.details);
       } else {
-        setError(e instanceof ApiError ? e.message : "No se pudo publicar");
+        setError(e instanceof ApiError ? e.message : t("version.errorPublicar"));
       }
     }
   }
@@ -68,7 +82,7 @@ export default function VersionEditorPage() {
     );
   }
   if (!version) {
-    return <p>Cargando…</p>;
+    return <p>{t("comun.cargando")}</p>;
   }
 
   const isDraft = version.Status === "draft";
@@ -76,22 +90,25 @@ export default function VersionEditorPage() {
   return (
     <div>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1>{version.Title || "(sin título)"}</h1>
-        <Link href={`/profesor/versiones/${versionId}/previsualizacion`}>Previsualizar</Link>
+        <h1>{version.Title || t("version.sinTitulo")}</h1>
+        <Link href={`/profesor/versiones/${versionId}/previsualizacion`}>
+          {t("version.previsualizar")}
+        </Link>
       </div>
-      <p className="badge">Versión {version.VersionNumber} · {version.Status}</p>
+      <p className="badge">
+        {t("version.etiqueta", { n: version.VersionNumber, estado: version.Status })}
+      </p>
 
       {!isDraft && (
         <p className="warning-banner" role="status">
-          Esta versión está publicada y es inmutable. Para editarla hay que
-          despublicar el curso primero.
+          {t("version.inmutable")}
         </p>
       )}
 
       {notice && <p className="success-banner">{notice}</p>}
       {publishErrors.length > 0 && (
         <div className="error-banner" role="alert">
-          <strong>No se pudo publicar. Motivos:</strong>
+          <strong>{t("version.motivos")}</strong>
           <ul>
             {publishErrors.map((d, i) => (
               <li key={i}>{d}</li>
@@ -102,7 +119,7 @@ export default function VersionEditorPage() {
 
       {!isDraft && (
         <p className="error-banner">
-          Esta versión no es un borrador ({version.Status}); no se puede editar.
+          {t("version.noBorrador", { estado: version.Status })}
         </p>
       )}
 
@@ -113,11 +130,11 @@ export default function VersionEditorPage() {
       {isDraft && (
         <div className="card stack">
           <CambiosDelBorrador versionId={versionId} />
-          <button onClick={handlePublish}>Publicar versión</button>
+          <button onClick={handlePublish}>{t("version.publicar")}</button>
         </div>
       )}
 
-      <h2>Estructura</h2>
+      <h2>{t("version.estructura")}</h2>
       {isDraft && <AddModuleForm versionId={versionId} nextPosition={(version.Modules?.length ?? 0) + 1} onAdded={load} />}
 
       <ol className="stack">
@@ -130,6 +147,7 @@ export default function VersionEditorPage() {
 }
 
 function MetadataForm({ version, disabled, onSaved }: { version: Version; disabled: boolean; onSaved: () => void }) {
+  const { t } = useI18n();
   const [form, setForm] = useState(version);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -153,7 +171,7 @@ function MetadataForm({ version, disabled, onSaved }: { version: Version; disabl
       } as any);
       onSaved();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo guardar");
+      setError(e instanceof ApiError ? e.message : t("version.errorGuardar"));
     } finally {
       setSaving(false);
     }
@@ -161,14 +179,14 @@ function MetadataForm({ version, disabled, onSaved }: { version: Version; disabl
 
   return (
     <form onSubmit={handleSubmit} className="card stack">
-      <h2 style={{ marginTop: 0 }}>Metadatos</h2>
+      <h2 style={{ marginTop: 0 }}>{t("version.metadatos")}</h2>
       {error && <p className="error-banner">{error}</p>}
       <div className="form-field">
-        <label htmlFor="title">Título</label>
+        <label htmlFor="title">{t("comun.titulo")}</label>
         <input id="title" disabled={disabled} value={form.Title} onChange={(e) => setForm({ ...form, Title: e.target.value })} />
       </div>
       <div className="form-field">
-        <label htmlFor="summary">Resumen</label>
+        <label htmlFor="summary">{t("version.resumen")}</label>
         <input
           id="summary"
           disabled={disabled}
@@ -177,7 +195,7 @@ function MetadataForm({ version, disabled, onSaved }: { version: Version; disabl
         />
       </div>
       <div className="form-field">
-        <label htmlFor="description">Descripción (Markdown)</label>
+        <label htmlFor="description">{t("version.descripcion")}</label>
         <textarea
           id="description"
           rows={5}
@@ -188,21 +206,21 @@ function MetadataForm({ version, disabled, onSaved }: { version: Version; disabl
       </div>
       <div className="row">
         <div className="form-field">
-          <label htmlFor="category">Categoría</label>
+          <label htmlFor="category">{t("version.categoria")}</label>
           <input id="category" disabled={disabled} value={form.Category} onChange={(e) => setForm({ ...form, Category: e.target.value })} />
         </div>
         <div className="form-field">
-          <label htmlFor="level">Nivel</label>
+          <label htmlFor="level">{t("version.nivel")}</label>
           <input id="level" disabled={disabled} value={form.Level} onChange={(e) => setForm({ ...form, Level: e.target.value })} />
         </div>
         <div className="form-field">
-          <label htmlFor="language">Idioma</label>
+          <label htmlFor="language">{t("version.idioma")}</label>
           <input id="language" disabled={disabled} value={form.Language} onChange={(e) => setForm({ ...form, Language: e.target.value })} />
         </div>
       </div>
       <div className="row">
         <div className="form-field">
-          <label htmlFor="minscore">Nota mínima de aprobación (%)</label>
+          <label htmlFor="minscore">{t("version.notaMinima")}</label>
           <input
             id="minscore"
             type="number"
@@ -214,7 +232,7 @@ function MetadataForm({ version, disabled, onSaved }: { version: Version; disabl
           />
         </div>
         <div className="form-field">
-          <label htmlFor="reqpct">% de recursos obligatorios requeridos</label>
+          <label htmlFor="reqpct">{t("version.pctObligatorios")}</label>
           <input
             id="reqpct"
             type="number"
@@ -227,13 +245,14 @@ function MetadataForm({ version, disabled, onSaved }: { version: Version; disabl
         </div>
       </div>
       <button type="submit" disabled={disabled || saving}>
-        {saving ? "Guardando…" : "Guardar metadatos"}
+        {saving ? t("comun.guardando") : t("version.guardarMetadatos")}
       </button>
     </form>
   );
 }
 
 function AddModuleForm({ versionId, nextPosition, onAdded }: { versionId: string; nextPosition: number; onAdded: () => void }) {
+  const { t } = useI18n();
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
 
@@ -245,7 +264,7 @@ function AddModuleForm({ versionId, nextPosition, onAdded }: { versionId: string
       setTitle("");
       onAdded();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo agregar el módulo");
+      setError(e instanceof ApiError ? e.message : t("version.errorModulo"));
     }
   }
 
@@ -253,10 +272,10 @@ function AddModuleForm({ versionId, nextPosition, onAdded }: { versionId: string
     <form onSubmit={handleSubmit} className="row card">
       {error && <p className="error-banner">{error}</p>}
       <div className="form-field" style={{ flex: 1, marginBottom: 0 }}>
-        <label htmlFor="new-module">Nuevo módulo</label>
+        <label htmlFor="new-module">{t("version.nuevoModulo")}</label>
         <input id="new-module" required value={title} onChange={(e) => setTitle(e.target.value)} />
       </div>
-      <button type="submit">Agregar módulo</button>
+      <button type="submit">{t("version.agregarModulo")}</button>
     </form>
   );
 }
@@ -272,8 +291,10 @@ function ModuleCard({
   editable: boolean;
   onChange: () => void;
 }) {
+  const { t } = useI18n();
+
   async function handleDelete() {
-    if (!confirm(`¿Eliminar el módulo "${m.Title}" y todo su contenido?`)) return;
+    if (!confirm(t("version.confirmarModulo", { titulo: m.Title }))) return;
     await api.deleteModule(versionId, m.ID);
     onChange();
   }
@@ -284,7 +305,7 @@ function ModuleCard({
         <h3 style={{ flex: 1 }}>{m.Title}</h3>
         {editable && (
           <button className="danger" onClick={handleDelete}>
-            Eliminar módulo
+            {t("version.eliminarModulo")}
           </button>
         )}
       </div>
@@ -311,6 +332,7 @@ function AddUnitForm({
   nextPosition: number;
   onAdded: () => void;
 }) {
+  const { t } = useI18n();
   const [title, setTitle] = useState("");
 
   async function handleSubmit(e: React.FormEvent) {
@@ -323,10 +345,10 @@ function AddUnitForm({
   return (
     <form onSubmit={handleSubmit} className="row">
       <div className="form-field" style={{ flex: 1, marginBottom: "0.5rem" }}>
-        <label htmlFor={`new-unit-${moduleId}`}>Nueva unidad</label>
+        <label htmlFor={`new-unit-${moduleId}`}>{t("version.nuevaUnidad")}</label>
         <input id={`new-unit-${moduleId}`} required value={title} onChange={(e) => setTitle(e.target.value)} />
       </div>
-      <button type="submit">Agregar unidad</button>
+      <button type="submit">{t("version.agregarUnidad")}</button>
     </form>
   );
 }
@@ -342,8 +364,10 @@ function UnitCard({
   editable: boolean;
   onChange: () => void;
 }) {
+  const { t } = useI18n();
+
   async function handleDelete() {
-    if (!confirm(`¿Eliminar la unidad "${u.Title}" y sus recursos?`)) return;
+    if (!confirm(t("version.confirmarUnidad", { titulo: u.Title }))) return;
     await api.deleteUnit(versionId, u.ID);
     onChange();
   }
@@ -354,7 +378,7 @@ function UnitCard({
         <strong style={{ flex: 1 }}>{u.Title}</strong>
         {editable && (
           <button className="danger" onClick={handleDelete}>
-            Eliminar unidad
+            {t("version.eliminarUnidad")}
           </button>
         )}
       </div>
@@ -383,6 +407,7 @@ function ResourceRow({
   editable: boolean;
   onChange: () => void;
 }) {
+  const { t } = useI18n();
   const [uploading, setUploading] = useState(false);
   const [uploadPercent, setUploadPercent] = useState(0);
   const [uploadStatusText, setUploadStatusText] = useState("");
@@ -397,7 +422,7 @@ function ResourceRow({
   }, [r.ID]);
 
   async function handleDelete() {
-    if (!confirm(`¿Eliminar el recurso "${r.Title}"?`)) return;
+    if (!confirm(t("version.confirmarRecurso", { titulo: r.Title }))) return;
     await api.deleteResource(versionId, r.ID);
     onChange();
   }
@@ -406,16 +431,20 @@ function ResourceRow({
     setUploading(true);
     setError("");
     setUploadPercent(0);
-    setUploadStatusText("Preparando archivo…");
+    setUploadStatusText(t("carga.fase.preparando"));
 
     try {
       await subirArchivo({
         versionId,
         resourceId: r.ID,
         archivo: file,
-        alAvanzar: ({ porcentaje, texto }) => {
+        alAvanzar: ({ porcentaje, fase, numero, total }) => {
           setUploadPercent(porcentaje);
-          setUploadStatusText(texto);
+          setUploadStatusText(
+            numero === undefined || total === undefined
+              ? t(`carga.fase.${fase}`)
+              : t(`carga.fase.${fase}`, { numero, total }),
+          );
         },
       });
       setPendiente(false);
@@ -428,7 +457,7 @@ function ResourceRow({
       // La carga interrumpida sigue registrada: al volver a elegir el mismo
       // archivo se reanuda desde donde se quedó, sin reenviar lo que llegó.
       setPendiente(hayCargaPendiente(r.ID));
-      setError(e instanceof Error ? e.message : "No se pudo subir el archivo");
+      setError(mensajeDeCarga(e, t));
     } finally {
       setUploading(false);
     }
@@ -445,16 +474,26 @@ function ResourceRow({
       <div className="row" style={{ alignItems: "center" }}>
         <span style={{ flex: 1 }}>
           {r.Title} <span className="badge">{r.Type}</span>{" "}
-          {r.ProcessingStatus !== "none" && <span className="badge">procesamiento: {r.ProcessingStatus}</span>}
-          {!r.Visible && <span className="badge">oculto</span>}
+          {r.ProcessingStatus !== "none" && (
+            <span className="badge">
+              {t("version.procesamiento", { estado: r.ProcessingStatus })}
+            </span>
+          )}
+          {!r.Visible && <span className="badge">{t("version.oculto")}</span>}
         </span>
         {r.Type === "quiz" && (
-          <Link href={`/profesor/versiones/${versionId}/quiz/${r.ID}`}>Definir evaluación</Link>
+          <Link href={`/profesor/versiones/${versionId}/quiz/${r.ID}`}>
+            {t("version.definirEvaluacion")}
+          </Link>
         )}
         {editable && BINARY_TYPES.has(r.Type) && (
           <label className="row" style={{ marginBottom: 0 }}>
             <span className="badge" style={{ cursor: uploading ? "not-allowed" : "pointer", background: uploading ? "#3b82f6" : undefined, color: uploading ? "white" : undefined }}>
-              {uploading ? uploadStatusText || "Cargando…" : pendiente ? "Reanudar subida" : "Subir archivo"}
+              {uploading
+                ? uploadStatusText || t("comun.cargando")
+                : pendiente
+                  ? t("version.reanudarSubida")
+                  : t("version.subirArchivo")}
             </span>
             <input
               type="file"
@@ -469,7 +508,7 @@ function ResourceRow({
         )}
         {editable && (
           <button className="danger" onClick={handleDelete} disabled={uploading}>
-            Eliminar
+            {t("comun.eliminar")}
           </button>
         )}
       </div>
@@ -480,9 +519,9 @@ function ResourceRow({
 
       {pendiente && !uploading && (
         <p className="muted" role="status">
-          Hay una subida sin terminar. Vuelve a elegir el mismo archivo y continuará desde donde se quedó.{" "}
+          {t("version.cargaPendiente")}{" "}
           <button type="button" className="secondary" onClick={descartarCarga}>
-            Empezar de nuevo
+            {t("version.empezarDeNuevo")}
           </button>
         </p>
       )}
@@ -490,7 +529,7 @@ function ResourceRow({
       {uploading && (
         <div
           role="progressbar"
-          aria-label={`Subiendo ${r.Title}`}
+          aria-label={t("version.subiendoAria", { titulo: r.Title })}
           aria-valuenow={uploadPercent}
           aria-valuemin={0}
           aria-valuemax={100}
@@ -533,27 +572,28 @@ function EditorDeContenido({
   resource: import("@/lib/api").Resource;
   onChange: () => void;
 }) {
+  const { t } = useI18n();
   const [abierto, setAbierto] = useState(false);
   const [markdown, setMarkdown] = useState(resource.TextContentMD ?? "");
   const [estado, setEstado] = useState("");
   const [recarga, setRecarga] = useState(0);
 
   async function guardar() {
-    setEstado("Guardando…");
+    setEstado(t("comun.guardando"));
     try {
       await api.saveRevision(versionId, resource.ID, markdown);
-      setEstado("Guardado");
+      setEstado(t("version.guardado"));
       setRecarga((n) => n + 1);
       onChange();
     } catch (e) {
-      setEstado(e instanceof ApiError ? e.message : "No se pudo guardar");
+      setEstado(e instanceof ApiError ? e.message : t("version.errorGuardar"));
     }
   }
 
   if (!abierto) {
     return (
       <button className="secondary" onClick={() => setAbierto(true)}>
-        Editar contenido
+        {t("version.editarContenido")}
       </button>
     );
   }
@@ -567,9 +607,9 @@ function EditorDeContenido({
         onChange={setMarkdown}
       />
       <div className="row" style={{ alignItems: "center", gap: "0.5rem" }}>
-        <button onClick={guardar}>Guardar revisión</button>
+        <button onClick={guardar}>{t("version.guardarRevision")}</button>
         <button className="secondary" onClick={() => setAbierto(false)}>
-          Cerrar
+          {t("comun.cerrar")}
         </button>
         {estado && (
           <span className="muted" role="status">
@@ -608,6 +648,7 @@ function EditorDeContenido({
  * que completar.
  */
 function CambiosDelBorrador({ versionId }: { versionId: string }) {
+  const { t } = useI18n();
   const [clasificacion, setClasificacion] = useState<Clasificacion | null>(null);
 
   useEffect(() => {
@@ -620,28 +661,21 @@ function CambiosDelBorrador({ versionId }: { versionId: string }) {
   if (!clasificacion) return null;
 
   if (clasificacion.alcance === "ninguno") {
-    return <p className="muted">Este borrador es idéntico a la versión publicada.</p>;
+    return <p className="muted">{t("cambios.identico")}</p>;
   }
 
   const mayor = clasificacion.alcance === "mayor";
-  const afectados = clasificacion.cambios.filter((c) => c.afecta_progreso);
 
   return (
     <div className="stack">
-      <h3 style={{ margin: 0 }}>Cambios respecto a lo publicado</h3>
+      <h3 style={{ margin: 0 }}>{t("cambios.titulo")}</h3>
 
       {mayor ? (
         <p className="warning-banner" role="status">
-          Esta actualización cambia lo que hay que completar para aprobar. Al publicarla, el
-          avance de los {afectados.length === 1 ? "inscritos" : "inscritos"} se recalcula sobre la
-          nueva lista de recursos obligatorios. Lo que ya llevaban hecho se conserva, y a nadie se
-          le retira una aprobación ya obtenida.
+          {t("cambios.mayor")}
         </p>
       ) : (
-        <p className="muted">
-          Cambia el contenido o la presentación, pero no lo que hay que completar: el avance de los
-          inscritos sigue midiéndose igual.
-        </p>
+        <p className="muted">{t("cambios.menor")}</p>
       )}
 
       <ul className="lista-filas">
@@ -651,7 +685,7 @@ function CambiosDelBorrador({ versionId }: { versionId: string }) {
               <p>
                 <span className="badge">{c.tipo}</span> <span className="badge">{c.elemento}</span>{" "}
                 <strong>{c.titulo}</strong>
-                {c.afecta_progreso && <span className="badge"> afecta al progreso</span>}
+                {c.afecta_progreso && <span className="badge">{t("cambios.afectaProgreso")}</span>}
               </p>
               {c.detalle && <p className="muted">{c.detalle}</p>}
             </div>
@@ -670,6 +704,7 @@ function CambiosDelBorrador({ versionId }: { versionId: string }) {
  * puede ampliarla.
  */
 function DestinosAutorizados() {
+  const { t } = useI18n();
   const [hosts, setHosts] = useState<string[] | null>(null);
 
   useEffect(() => {
@@ -684,13 +719,10 @@ function DestinosAutorizados() {
   if (hosts === null) return null;
   if (hosts.length === 0) {
     return (
-      <p className="muted">
-        No hay dominios autorizados para incrustar. Pide a la administración que añada el que
-        necesitas.
-      </p>
+      <p className="muted">{t("version.sinDestinos")}</p>
     );
   }
-  return <p className="muted">Dominios autorizados: {hosts.join(", ")}.</p>;
+  return <p className="muted">{t("version.destinos", { hosts: hosts.join(", ") })}</p>;
 }
 
 function AddResourceForm({
@@ -704,6 +736,7 @@ function AddResourceForm({
   nextPosition: number;
   onAdded: () => void;
 }) {
+  const { t } = useI18n();
   const [type, setType] = useState<string>("text");
   const [title, setTitle] = useState("");
   const [textContent, setTextContent] = useState("");
@@ -731,7 +764,7 @@ function AddResourceForm({
       setExternalUrl("");
       onAdded();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo agregar el recurso");
+      setError(e instanceof ApiError ? e.message : t("version.errorRecurso"));
     }
   }
 
@@ -740,24 +773,24 @@ function AddResourceForm({
       {error && <p className="error-banner">{error}</p>}
       <div className="row">
         <div className="form-field" style={{ marginBottom: 0 }}>
-          <label htmlFor={`type-${unitId}`}>Tipo de recurso</label>
+          <label htmlFor={`type-${unitId}`}>{t("version.tipoRecurso")}</label>
           <select id={`type-${unitId}`} value={type} onChange={(e) => setType(e.target.value)}>
-            {RESOURCE_TYPES.map(([value, label]) => (
+            {RESOURCE_TYPES.map(([value, clave]) => (
               <option key={value} value={value}>
-                {label}
+                {t(clave)}
               </option>
             ))}
           </select>
         </div>
         <div className="form-field" style={{ flex: 1, marginBottom: 0 }}>
-          <label htmlFor={`title-${unitId}`}>Título del recurso</label>
+          <label htmlFor={`title-${unitId}`}>{t("version.tituloRecurso")}</label>
           <input id={`title-${unitId}`} required value={title} onChange={(e) => setTitle(e.target.value)} />
         </div>
       </div>
 
       {type === "text" && (
         <div className="form-field">
-          <label>Contenido del Recurso (Bloques)</label>
+          <label>{t("version.contenidoBloques")}</label>
           <BlockEditor
             initialMarkdown={textContent}
             draftKey={`draft_unit_${unitId}`}
@@ -767,7 +800,7 @@ function AddResourceForm({
       )}
       {(type === "link" || type === "iframe") && (
         <div className="form-field">
-          <label htmlFor={`url-${unitId}`}>URL</label>
+          <label htmlFor={`url-${unitId}`}>{t("version.url")}</label>
           <input id={`url-${unitId}`} type="url" value={externalUrl} onChange={(e) => setExternalUrl(e.target.value)} />
           {type === "iframe" && <DestinosAutorizados />}
         </div>
@@ -775,37 +808,16 @@ function AddResourceForm({
 
       <div className="row">
         <label className="row">
-          <input type="checkbox" checked={visible} onChange={(e) => setVisible(e.target.checked)} /> Visible
+          <input type="checkbox" checked={visible} onChange={(e) => setVisible(e.target.checked)} />{" "}
+          {t("version.visible")}
         </label>
         <label className="row">
-          <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} /> Obligatorio
+          <input type="checkbox" checked={required} onChange={(e) => setRequired(e.target.checked)} />{" "}
+          {t("version.obligatorio")}
         </label>
       </div>
 
-      <button type="submit">Agregar recurso</button>
+      <button type="submit">{t("version.agregarRecurso")}</button>
     </form>
   );
-}
-
-/**
- * El navegador sube el archivo directamente al almacén de objetos, no a la
- * API, así que un fallo ahí llega como un escueto "Failed to fetch" sin
- * cabeceras ni estado. La causa casi siempre es de configuración —la URL
- * prefirmada apunta a un host que solo existe dentro de la red de
- * contenedores, o el almacén no permite el origen del navegador—, y el
- * profesor no tiene por qué deducirla del devtools. La URL que se intentó
- * abrir es el dato que lo distingue, así que se muestra.
- */
-function mensajeDeSubida(e: unknown, uploadUrl: string): string {
-  if (e instanceof TypeError && uploadUrl) {
-    const host = (() => {
-      try {
-        return new URL(uploadUrl).host;
-      } catch {
-        return uploadUrl;
-      }
-    })();
-    return `No se pudo contactar con el almacenamiento en ${host}. Revisa que ese host sea alcanzable desde el navegador (S3_PUBLIC_ENDPOINT) y que permita peticiones desde este origen.`;
-  }
-  return e instanceof Error ? e.message : "No se pudo subir el archivo";
 }

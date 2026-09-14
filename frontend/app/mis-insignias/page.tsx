@@ -4,25 +4,28 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, type Badge, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n } from "@/lib/i18n";
 
 export default function MyBadgesPage() {
   const { user, loading: authLoading } = useAuth();
   const [items, setItems] = useState<Badge[] | null>(null);
   const [error, setError] = useState("");
+  const { t, locale } = useI18n();
 
   useEffect(() => {
     if (authLoading || !user) return;
     api
       .listMyBadges()
       .then((res) => setItems(res.items ?? []))
-      .catch((e) => setError(e instanceof ApiError ? e.message : "No se pudieron cargar tus insignias"));
-  }, [authLoading, user]);
+      .catch((e) => setError(e instanceof ApiError ? e.message : t("insignias.error")));
+  }, [authLoading, user, t]);
 
   if (!authLoading && !user) {
     return (
       <div className="estado-vacio columna-estrecha">
+        <p>{t("insignias.requiereSesion")}</p>
         <p>
-          Debes <Link href="/login">iniciar sesión</Link> para ver tus insignias.
+          <Link href="/login">{t("nav.entrar")}</Link>
         </p>
       </div>
     );
@@ -32,8 +35,8 @@ export default function MyBadgesPage() {
     <div>
       <header className="page-header">
         <div>
-          <h1>Mis insignias</h1>
-          <p>Insignias verificables emitidas al aprobar un curso.</p>
+          <h1>{t("nav.misInsignias")}</h1>
+          <p>{t("insignias.subtitulo")}</p>
         </div>
       </header>
 
@@ -42,12 +45,12 @@ export default function MyBadgesPage() {
           {error}
         </p>
       )}
-      {items === null && !error && <p role="status">Cargando…</p>}
+      {items === null && !error && <p role="status">{t("comun.cargando")}</p>}
 
       {items?.length === 0 && (
         <div className="estado-vacio">
-          <p>Todavía no tienes ninguna insignia.</p>
-          <p>Aprueba las evaluaciones obligatorias de un curso para obtener la tuya.</p>
+          <p>{t("insignias.vacio")}</p>
+          <p>{t("insignias.vacioAccion")}</p>
         </div>
       )}
 
@@ -58,7 +61,7 @@ export default function MyBadgesPage() {
               /* eslint-disable-next-line @next/next/no-img-element */
               <img
                 src={b.image_url}
-                alt={`Insignia emitida el ${new Date(b.issued_at).toLocaleDateString()}`}
+                alt={t("insignias.alt", { fecha: new Date(b.issued_at).toLocaleDateString(locale) })}
                 width={96}
                 height={96}
                 style={{ borderRadius: "8px" }}
@@ -66,14 +69,16 @@ export default function MyBadgesPage() {
             )}
             <div className="fila__datos">
               <p>
-                {b.valid ? <span className="badge">vigente</span> : <span className="badge">revocada</span>}{" "}
-                Emitida el {new Date(b.issued_at).toLocaleDateString()}
+                <span className="badge">
+                  {b.valid ? t("insignias.vigente") : t("insignias.revocada")}
+                </span>{" "}
+                {t("insignias.emitidaEl", { fecha: new Date(b.issued_at).toLocaleDateString(locale) })}
               </p>
               <p className="muted">
-                Código de verificación: <code>{b.code}</code>
+                {t("insignias.codigoVerificacion")} <code>{b.code}</code>
               </p>
             </div>
-            <Link href={`/insignias/${b.code}`}>Ver verificación pública</Link>
+            <Link href={`/insignias/${b.code}`}>{t("curso.verVerificacion")}</Link>
           </li>
         ))}
       </ul>

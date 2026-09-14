@@ -44,11 +44,21 @@ protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
 | Editor completo: tablas, fórmulas, tareas e historial de revisiones | Completo: ocho tipos de bloque con 29 pruebas de ida y vuelta, e historial numerado, atribuido y restaurable |
 | Borradores de actualización con clasificación de cambios y migración de progreso | Completo: alcance menor/mayor según si cambia lo exigido, y migración de las inscripciones al publicar |
 | Panel administrativo con métricas y resultados agregados por quiz | Completo: estado de la plataforma e informe por evaluación con distribución por opción |
-| Coautoría básica, exportación de datos personales e internacionalización | Completo: coeditores que no reparten acceso, descarga de datos propios, y español e inglés |
+| Coautoría básica, exportación de datos personales e internacionalización | Completo: coeditores que no reparten acceso, descarga de datos propios, y la interfaz entera en español e inglés |
 | Subtítulos, transcripciones, foros asíncronos y Open Badges 3.0 | Completo: WebVTT con transcripción derivada, foro por curso o lección, y credencial verificable firmada con Ed25519 |
 
-Tres notas sobre decisiones que conviene conocer antes de la demostración:
+Cuatro notas sobre decisiones que conviene conocer antes de la demostración:
 
+- **La internacionalización cubre la interfaz, no el contenido de los cursos.**
+  Las 463 cadenas de las pantallas están en español y en inglés, y el catálogo
+  va tipado contra las claves del español: añadir un texto sin traducirlo es un
+  error de compilación, no una frase suelta en el idioma equivocado. Lo que no
+  se traduce es lo que escribe cada profesor —ya declara su propio idioma en
+  `course_versions.language`— ni los identificadores del dominio que la
+  interfaz enseña tal cual (el rol de una cuenta, la acción de una entrada de
+  auditoría): traducirlos rompería la correspondencia con lo que la API acepta.
+  Las fechas y las horas sí siguen al idioma elegido, porque 14/09 y 09/14 no
+  son un detalle estético.
 - **Los `.ppt` heredados no se aceptan**, y no es un olvido: son contenedores
   OLE y el escáner antimalware los rechaza por admitir macros. El alcance pide
   PPTX y ODP, que son ZIP.

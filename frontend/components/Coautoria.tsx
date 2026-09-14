@@ -63,7 +63,7 @@ export function Coautoria({ courseId }: { courseId: string }) {
       await api.removeCollaborator(courseId, c.user_id);
       await cargar();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo quitar el acceso");
+      setError(err instanceof ApiError ? err.message : t("coautoria.errorQuitar"));
     } finally {
       setOcupado(false);
     }

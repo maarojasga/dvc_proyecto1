@@ -20,7 +20,7 @@ export function NavBar() {
       <Link href="/" className="brand">
         Plataforma MOOC
       </Link>
-      <nav aria-label="Principal">
+      <nav aria-label={t("nav.principal")}>
         <Link href="/">{t("nav.catalogo")}</Link>
         {!loading && user?.role === "student" && <Link href="/mis-cursos">{t("nav.misCursos")}</Link>}
         {!loading && user?.role === "student" && (

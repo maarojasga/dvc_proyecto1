@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, ApiError, type Revision } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * Historial visible de revisiones de un recurso.
@@ -26,6 +27,7 @@ export function HistorialDeRevisiones({
   /** Se llama tras restaurar, para que el editor recargue el contenido. */
   onRestaurado: () => void;
 }) {
+  const { t, locale } = useI18n();
   const [items, setItems] = useState<Revision[] | null>(null);
   const [abierta, setAbierta] = useState<Revision | null>(null);
   const [error, setError] = useState("");
@@ -36,9 +38,9 @@ export function HistorialDeRevisiones({
       const res = await api.listRevisions(versionId, resourceId);
       setItems(res.items ?? []);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo cargar el historial");
+      setError(e instanceof ApiError ? e.message : t("historial.error"));
     }
-  }, [versionId, resourceId]);
+  }, [versionId, resourceId, t]);
 
   useEffect(() => {
     cargar();
@@ -49,12 +51,12 @@ export function HistorialDeRevisiones({
     try {
       setAbierta(await api.getRevision(versionId, resourceId, numero));
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo abrir la revisión");
+      setError(e instanceof ApiError ? e.message : t("historial.errorAbrir"));
     }
   }
 
   async function restaurar(numero: number) {
-    if (!confirm(`¿Restaurar la revisión ${numero}? Se guardará como una revisión nueva.`)) return;
+    if (!confirm(t("historial.confirmar", { n: numero }))) return;
     setOcupado(true);
     setError("");
     try {
@@ -63,7 +65,7 @@ export function HistorialDeRevisiones({
       await cargar();
       onRestaurado();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo restaurar");
+      setError(e instanceof ApiError ? e.message : t("historial.errorRestaurar"));
     } finally {
       setOcupado(false);
     }
@@ -74,7 +76,7 @@ export function HistorialDeRevisiones({
   return (
     <section className="card stack">
       <header>
-        <h3 style={{ margin: 0 }}>Historial de revisiones</h3>
+        <h3 style={{ margin: 0 }}>{t("historial.titulo")}</h3>
       </header>
 
       {error && (
@@ -84,7 +86,7 @@ export function HistorialDeRevisiones({
       )}
 
       {items.length === 0 ? (
-        <p className="muted">Todavía no hay revisiones guardadas de este recurso.</p>
+        <p className="muted">{t("historial.vacio")}</p>
       ) : (
         <ul className="lista-filas">
           {items.map((rev) => (
@@ -92,19 +94,21 @@ export function HistorialDeRevisiones({
               <div className="fila__datos">
                 <p>
                   <span className="badge">#{rev.revision_number}</span>{" "}
-                  {new Date(rev.created_at).toLocaleString("es-CO")}
+                  {new Date(rev.created_at).toLocaleString(locale)}
                 </p>
-                {rev.author_email && <p className="muted">Guardada por {rev.author_email}</p>}
+                {rev.author_email && (
+                  <p className="muted">{t("historial.guardadaPor", { autor: rev.author_email })}</p>
+                )}
               </div>
               <button className="secondary" onClick={() => ver(rev.revision_number)}>
-                Ver
+                {t("comun.ver")}
               </button>
               <button
                 className="secondary"
                 disabled={ocupado}
                 onClick={() => restaurar(rev.revision_number)}
               >
-                Restaurar
+                {t("historial.restaurar")}
               </button>
             </li>
           ))}
@@ -114,9 +118,9 @@ export function HistorialDeRevisiones({
       {abierta && (
         <div className="card stack">
           <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-            <strong>Revisión #{abierta.revision_number}</strong>
+            <strong>{t("historial.revision", { n: abierta.revision_number })}</strong>
             <button className="secondary" onClick={() => setAbierta(null)}>
-              Cerrar
+              {t("comun.cerrar")}
             </button>
           </div>
           <pre

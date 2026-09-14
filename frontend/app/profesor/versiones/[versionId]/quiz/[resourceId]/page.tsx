@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, ApiError, type QuizQuestionDraft, type Resource, type ResultadosDeQuiz } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 type BorradorOpcion = { text_md: string; is_correct: boolean };
 type BorradorPregunta = {
@@ -36,6 +37,7 @@ function preguntaVacia(): BorradorPregunta {
  */
 export default function QuizAuthoringPage() {
   const { versionId, resourceId } = useParams<{ versionId: string; resourceId: string }>();
+  const { t } = useI18n();
   const [resource, setResource] = useState<Resource | null>(null);
   const [loadError, setLoadError] = useState("");
 
@@ -64,10 +66,10 @@ export default function QuizAuthoringPage() {
           setResource(encontrado);
           if (!title) setTitle(encontrado.Title);
         } else {
-          setLoadError("No se encontró el recurso en esta versión.");
+          setLoadError(t("quizAutoria.noEncontrado"));
         }
       })
-      .catch((e) => setLoadError(e instanceof ApiError ? e.message : "No se pudo cargar la versión"));
+      .catch((e) => setLoadError(e instanceof ApiError ? e.message : t("quizAutoria.errorVersion")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [versionId, resourceId]);
 
@@ -157,12 +159,12 @@ export default function QuizAuthoringPage() {
         max_attempts: maxAttempts ? Number(maxAttempts) : null,
         questions: payload,
       });
-      setNotice("Evaluación guardada.");
+      setNotice(t("quizAutoria.guardada"));
     } catch (e) {
       if (e instanceof ApiError && e.details?.length) {
         setError(e.details.join(" "));
       } else {
-        setError(e instanceof ApiError ? e.message : "No se pudo guardar la evaluación");
+        setError(e instanceof ApiError ? e.message : t("quizAutoria.errorGuardar"));
       }
     } finally {
       setSaving(false);
@@ -177,20 +179,18 @@ export default function QuizAuthoringPage() {
     );
   }
   if (!resource) {
-    return <p role="status">Cargando…</p>;
+    return <p role="status">{t("comun.cargando")}</p>;
   }
 
   return (
     <div>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1>Evaluación: {resource.Title}</h1>
-        <Link href={`/profesor/versiones/${versionId}`}>Volver a la versión</Link>
+        <h1>{t("quizAutoria.titulo", { recurso: resource.Title })}</h1>
+        <Link href={`/profesor/versiones/${versionId}`}>{t("quizAutoria.volver")}</Link>
       </div>
 
       <p className="warning-banner" role="status">
-        Guardar reemplaza por completo la evaluación anterior de este recurso.
-        Los intentos ya calificados no se ven afectados: conservan su propio
-        snapshot de preguntas y opciones.
+        {t("quizAutoria.aviso")}
       </p>
 
       {error && (
@@ -207,12 +207,12 @@ export default function QuizAuthoringPage() {
       <form onSubmit={handleSubmit} className="stack">
         <div className="card stack">
           <div className="form-field">
-            <label htmlFor="quiz-title">Título</label>
+            <label htmlFor="quiz-title">{t("comun.titulo")}</label>
             <input id="quiz-title" required value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
           <div className="row">
             <div className="form-field">
-              <label htmlFor="pass-score">Nota mínima para aprobar (%)</label>
+              <label htmlFor="pass-score">{t("quizAutoria.notaMinima")}</label>
               <input
                 id="pass-score"
                 type="number"
@@ -223,7 +223,7 @@ export default function QuizAuthoringPage() {
               />
             </div>
             <div className="form-field">
-              <label htmlFor="time-limit">Límite de tiempo (minutos, opcional)</label>
+              <label htmlFor="time-limit">{t("quizAutoria.limiteTiempo")}</label>
               <input
                 id="time-limit"
                 type="number"
@@ -233,7 +233,7 @@ export default function QuizAuthoringPage() {
               />
             </div>
             <div className="form-field">
-              <label htmlFor="max-attempts">Intentos máximos (opcional)</label>
+              <label htmlFor="max-attempts">{t("quizAutoria.intentosMaximos")}</label>
               <input
                 id="max-attempts"
                 type="number"
@@ -245,16 +245,16 @@ export default function QuizAuthoringPage() {
           </div>
           <div className="row">
             <div className="form-field">
-              <label htmlFor="feedback-policy">Retroalimentación</label>
+              <label htmlFor="feedback-policy">{t("quizAutoria.retroalimentacion")}</label>
               <select
                 id="feedback-policy"
                 value={feedbackPolicy}
                 onChange={(e) => setFeedbackPolicy(e.target.value as typeof feedbackPolicy)}
               >
-                <option value="immediate">Inmediata</option>
-                <option value="after_submit">Al enviar el intento</option>
-                <option value="after_close">Al cerrarse el quiz</option>
-                <option value="none">Nunca</option>
+                <option value="immediate">{t("quizAutoria.inmediata")}</option>
+                <option value="after_submit">{t("quizAutoria.alEnviar")}</option>
+                <option value="after_close">{t("quizAutoria.alCerrar")}</option>
+                <option value="none">{t("quizAutoria.nunca")}</option>
               </select>
             </div>
             <label className="row" style={{ alignItems: "center" }}>
@@ -263,26 +263,26 @@ export default function QuizAuthoringPage() {
                 checked={shuffleQuestions}
                 onChange={(e) => setShuffleQuestions(e.target.checked)}
               />
-              Mezclar el orden de las preguntas
+              {t("quizAutoria.mezclar")}
             </label>
           </div>
         </div>
 
-        <h2>Preguntas</h2>
+        <h2>{t("quizAutoria.preguntas")}</h2>
         <ol className="stack">
           {questions.map((q, qIndex) => (
             <li key={qIndex} className="card stack">
               <div className="row" style={{ justifyContent: "space-between" }}>
-                <strong>Pregunta {qIndex + 1}</strong>
+                <strong>{t("quizAutoria.pregunta", { n: qIndex + 1 })}</strong>
                 {questions.length > 1 && (
                   <button type="button" className="danger" onClick={() => removeQuestion(qIndex)}>
-                    Eliminar pregunta
+                    {t("quizAutoria.eliminarPregunta")}
                   </button>
                 )}
               </div>
 
               <div className="form-field">
-                <label htmlFor={`prompt-${qIndex}`}>Enunciado</label>
+                <label htmlFor={`prompt-${qIndex}`}>{t("quizAutoria.enunciado")}</label>
                 <textarea
                   id={`prompt-${qIndex}`}
                   required
@@ -294,18 +294,18 @@ export default function QuizAuthoringPage() {
 
               <div className="row">
                 <div className="form-field">
-                  <label htmlFor={`type-${qIndex}`}>Tipo</label>
+                  <label htmlFor={`type-${qIndex}`}>{t("quizAutoria.tipo")}</label>
                   <select
                     id={`type-${qIndex}`}
                     value={q.type}
                     onChange={(e) => changeQuestionType(qIndex, e.target.value as "single" | "multiple")}
                   >
-                    <option value="single">Respuesta única</option>
-                    <option value="multiple">Respuesta múltiple</option>
+                    <option value="single">{t("quizAutoria.unica")}</option>
+                    <option value="multiple">{t("quizAutoria.multiple")}</option>
                   </select>
                 </div>
                 <div className="form-field">
-                  <label htmlFor={`points-${qIndex}`}>Puntos</label>
+                  <label htmlFor={`points-${qIndex}`}>{t("quizAutoria.puntos")}</label>
                   <input
                     id={`points-${qIndex}`}
                     type="number"
@@ -318,7 +318,7 @@ export default function QuizAuthoringPage() {
               </div>
 
               <p className="muted" style={{ marginBottom: 0 }}>
-                Opciones (marca la correcta{q.type === "multiple" ? "s" : ""}):
+                {q.type === "multiple" ? t("quizAutoria.opcionesVarias") : t("quizAutoria.opcionesUna")}
               </p>
               <ul className="stack" style={{ gap: "0.35rem" }}>
                 {q.options.map((o, oIndex) => (
@@ -332,31 +332,31 @@ export default function QuizAuthoringPage() {
                     <input
                       style={{ flex: 1 }}
                       required
-                      placeholder={`Opción ${oIndex + 1}`}
+                      placeholder={t("quizAutoria.opcion", { n: oIndex + 1 })}
                       value={o.text_md}
                       onChange={(e) => updateOption(qIndex, oIndex, { text_md: e.target.value })}
                     />
                     {q.options.length > 2 && (
                       <button type="button" className="danger" onClick={() => removeOption(qIndex, oIndex)}>
-                        Quitar
+                        {t("comun.quitar")}
                       </button>
                     )}
                   </li>
                 ))}
               </ul>
               <button type="button" className="secondary" onClick={() => addOption(qIndex)}>
-                Agregar opción
+                {t("quizAutoria.agregarOpcion")}
               </button>
             </li>
           ))}
         </ol>
 
         <button type="button" className="secondary" onClick={addQuestion}>
-          Agregar pregunta
+          {t("quizAutoria.agregarPregunta")}
         </button>
 
         <button type="submit" disabled={saving || !puedeGuardar}>
-          {saving ? "Guardando…" : "Guardar evaluación"}
+          {saving ? t("comun.guardando") : t("quizAutoria.guardar")}
         </button>
       </form>
 
@@ -374,6 +374,7 @@ export default function QuizAuthoringPage() {
  * ambigua, y aquí se ve al lado del texto que hay que reescribir.
  */
 function ResultadosAgregados({ versionId, resourceId }: { versionId: string; resourceId: string }) {
+  const { t } = useI18n();
   const [datos, setDatos] = useState<ResultadosDeQuiz | null>(null);
 
   useEffect(() => {
@@ -390,9 +391,9 @@ function ResultadosAgregados({ versionId, resourceId }: { versionId: string; res
     return (
       <section className="card">
         <header>
-          <h2>Resultados</h2>
+          <h2>{t("resultados.titulo")}</h2>
         </header>
-        <p className="muted">Todavía no la ha presentado nadie.</p>
+        <p className="muted">{t("resultados.sinIntentos")}</p>
       </section>
     );
   }
@@ -400,17 +401,21 @@ function ResultadosAgregados({ versionId, resourceId }: { versionId: string; res
   return (
     <section className="card stack">
       <header>
-        <h2>Resultados</h2>
+        <h2>{t("resultados.titulo")}</h2>
         <p>
-          {r.intentos} {r.intentos === 1 ? "intento" : "intentos"} de {r.estudiantes}{" "}
-          {r.estudiantes === 1 ? "estudiante" : "estudiantes"}.
+          {r.intentos === 1 ? t("resultados.unIntento") : t("resultados.nIntentos", { n: r.intentos })}{" "}
+          {t("resultados.de")}{" "}
+          {r.estudiantes === 1
+            ? t("resultados.unEstudiante")
+            : t("resultados.nEstudiantes", { n: r.estudiantes })}
+          .
         </p>
       </header>
 
       <p className="row">
-        <span className="badge">Nota media: {r.nota_media}</span>
-        <span className="badge">Mediana: {r.nota_mediana}</span>
-        <span className="badge">Aprobados: {r.tasa_aprobado}%</span>
+        <span className="badge">{t("resultados.notaMedia", { n: r.nota_media })}</span>
+        <span className="badge">{t("resultados.mediana", { n: r.nota_mediana })}</span>
+        <span className="badge">{t("resultados.aprobados", { n: r.tasa_aprobado })}</span>
       </p>
 
       <ol className="stack">
@@ -418,12 +423,14 @@ function ResultadosAgregados({ versionId, resourceId }: { versionId: string; res
           <li key={p.stable_id} className="card">
             <p style={{ fontWeight: 600 }}>{p.prompt_md}</p>
             <p className="row">
-              <span className="badge">Acierto: {p.tasa_acierto}%</span>
-              {p.en_blanco > 0 && <span className="badge">En blanco: {p.en_blanco}</span>}
+              <span className="badge">{t("resultados.acierto", { n: p.tasa_acierto })}</span>
+              {p.en_blanco > 0 && (
+                <span className="badge">{t("resultados.enBlanco", { n: p.en_blanco })}</span>
+              )}
             </p>
             {p.tasa_acierto < 30 && (
               <p className="warning-banner" role="status">
-                La acierta menos de un tercio: puede estar mal planteada, no solo ser difícil.
+                {t("resultados.malPlanteada")}
               </p>
             )}
             <ul className="stack" style={{ gap: "0.35rem" }}>
@@ -431,7 +438,7 @@ function ResultadosAgregados({ versionId, resourceId }: { versionId: string; res
                 <li key={o.stable_id}>
                   <div className="row" style={{ alignItems: "center", gap: "0.5rem" }}>
                     <span style={{ flex: 1 }}>
-                      {o.es_correcta && <span className="badge">correcta</span>} {o.text_md}
+                      {o.es_correcta && <span className="badge">{t("resultados.correcta")}</span>} {o.text_md}
                     </span>
                     <span className="muted">
                       {o.elegida} ({o.porcentaje}%)

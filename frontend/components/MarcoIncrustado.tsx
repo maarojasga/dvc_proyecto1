@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ResourceContent } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 // Presenta un recurso de tipo iframe.
 //
@@ -15,18 +16,18 @@ import type { ResourceContent } from "@/lib/api";
 // exactamente lo que este recurso no debe ser.
 
 export function MarcoIncrustado({ contenido }: { contenido: ResourceContent }) {
+  const { t } = useI18n();
   const [cargado, setCargado] = useState(false);
 
   if (!contenido.external_url || !contenido.sandbox) {
     return (
       <p className="warning-banner" role="status">
-        Este contenido incrustado no se puede mostrar porque el servidor no
-        autorizó su presentación.
+        {t("marco.noAutorizado")}
       </p>
     );
   }
 
-  const host = hostDe(contenido.external_url);
+  const host = hostDe(contenido.external_url) || t("marco.sitioExterno");
 
   return (
     <figure className="stack" style={{ margin: 0 }}>
@@ -43,7 +44,7 @@ export function MarcoIncrustado({ contenido }: { contenido: ResourceContent }) {
       >
         {!cargado && (
           <p role="status" style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-            Cargando el contenido incrustado…
+            {t("marco.cargando")}
           </p>
         )}
         <iframe
@@ -61,19 +62,21 @@ export function MarcoIncrustado({ contenido }: { contenido: ResourceContent }) {
       {/* Quien mira tiene derecho a saber de quién es el contenido que se le
           está sirviendo dentro de la página del curso. */}
       <figcaption className="muted">
-        Contenido incrustado desde <strong>{host}</strong>.{" "}
+        {t("marco.origen")} <strong>{host}</strong>.{" "}
         <a href={contenido.external_url} target="_blank" rel="noopener noreferrer">
-          Abrirlo en una pestaña nueva
+          {t("marco.abrirPestana")}
         </a>
       </figcaption>
     </figure>
   );
 }
 
+// Devuelve "" cuando la URL no se puede interpretar, para que el texto de
+// respaldo lo ponga el catálogo y no esta función, que no ve el idioma.
 function hostDe(url: string): string {
   try {
     return new URL(url).hostname;
   } catch {
-    return "un sitio externo";
+    return "";
   }
 }

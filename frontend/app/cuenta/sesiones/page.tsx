@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, ApiError, type Session } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { DescargarMisDatos } from "@/components/DescargarMisDatos";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * Sesiones activas del usuario, con revocación.
@@ -15,6 +16,7 @@ import { DescargarMisDatos } from "@/components/DescargarMisDatos";
  */
 export default function SesionesPage() {
   const router = useRouter();
+  const { t, locale } = useI18n();
   const { user, loading: cargandoSesion, refresh } = useAuth();
   const [sesiones, setSesiones] = useState<Session[] | null>(null);
   const [error, setError] = useState("");
@@ -25,9 +27,9 @@ export default function SesionesPage() {
       const { items } = await api.listSessions();
       setSesiones(items);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudieron cargar las sesiones");
+      setError(e instanceof ApiError ? e.message : t("sesiones.error"));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (cargandoSesion) return;
@@ -51,7 +53,7 @@ export default function SesionesPage() {
       }
       await cargar();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo revocar la sesión");
+      setError(e instanceof ApiError ? e.message : t("sesiones.errorRevocar"));
     } finally {
       setOcupado(false);
     }
@@ -64,14 +66,14 @@ export default function SesionesPage() {
       await api.revokeOtherSessions();
       await cargar();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudieron revocar las sesiones");
+      setError(e instanceof ApiError ? e.message : t("sesiones.errorRevocarTodas"));
     } finally {
       setOcupado(false);
     }
   }
 
   if (cargandoSesion || sesiones === null) {
-    return <p role="status">Cargando sesiones…</p>;
+    return <p role="status">{t("sesiones.cargando")}</p>;
   }
 
   const otras = sesiones.filter((s) => !s.current).length;
@@ -80,12 +82,12 @@ export default function SesionesPage() {
     <div>
       <header className="page-header">
         <div>
-          <h1>Sesiones activas</h1>
-          <p>Cada dispositivo con la sesión abierta. Revocar una la invalida de inmediato.</p>
+          <h1>{t("sesiones.titulo")}</h1>
+          <p>{t("sesiones.subtitulo")}</p>
         </div>
         {otras > 0 && (
           <button className="secondary" disabled={ocupado} onClick={revocarLasDemas}>
-            Cerrar las demás ({otras})
+            {t("sesiones.cerrarLasDemas", { n: otras })}
           </button>
         )}
       </header>
@@ -96,9 +98,15 @@ export default function SesionesPage() {
         {sesiones.map((s) => (
           <li key={s.id} className="card fila">
             <div className="fila__datos">
-              <strong>{s.current ? "Este dispositivo" : "Otro dispositivo"}</strong>
-              <p className="muted">Iniciada: {new Date(s.created_at).toLocaleString("es-CO")}</p>
-              <p className="muted">Vence: {new Date(s.expires_at).toLocaleString("es-CO")}</p>
+              <strong>
+                {s.current ? t("sesiones.esteDispositivo") : t("sesiones.otroDispositivo")}
+              </strong>
+              <p className="muted">
+                {t("sesiones.iniciada", { fecha: new Date(s.created_at).toLocaleString(locale) })}
+              </p>
+              <p className="muted">
+                {t("sesiones.vence", { fecha: new Date(s.expires_at).toLocaleString(locale) })}
+              </p>
               {s.ip_address && <p className="muted">IP: {s.ip_address}</p>}
               {s.user_agent && (
                 <p className="muted" style={{ wordBreak: "break-all" }}>
@@ -107,7 +115,7 @@ export default function SesionesPage() {
               )}
             </div>
             <button className="secondary" disabled={ocupado} onClick={() => revocar(s)}>
-              {s.current ? "Cerrar esta sesión" : "Revocar"}
+              {s.current ? t("sesiones.cerrarEsta") : t("sesiones.revocar")}
             </button>
           </li>
         ))}

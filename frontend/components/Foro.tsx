@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, ApiError, type Hilo, type RespuestaDeForo } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * Foro asíncrono de un curso.
@@ -22,6 +23,7 @@ export function Foro({
   /** El profesor del curso puede cerrar hilos y borrar respuestas ajenas. */
   puedeModerar?: boolean;
 }) {
+  const { t, locale } = useI18n();
   const [hilos, setHilos] = useState<Hilo[] | null>(null);
   const [abierto, setAbierto] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -59,7 +61,7 @@ export function Foro({
       setCuerpo("");
       await cargar();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo abrir el hilo");
+      setError(err instanceof ApiError ? err.message : t("foro.errorAbrir"));
     } finally {
       setOcupado(false);
     }
@@ -68,7 +70,7 @@ export function Foro({
   return (
     <section className="card stack">
       <header>
-        <h2>{resourceStableId ? "Dudas sobre esta lección" : "Foro del curso"}</h2>
+        <h2>{resourceStableId ? t("foro.dudasLeccion") : t("foro.titulo")}</h2>
       </header>
 
       {error && (
@@ -79,17 +81,17 @@ export function Foro({
 
       <form className="stack" onSubmit={abrirHilo}>
         <div className="form-field">
-          <label htmlFor="hilo-titulo">Título</label>
+          <label htmlFor="hilo-titulo">{t("comun.titulo")}</label>
           <input
             id="hilo-titulo"
             value={titulo}
             onChange={(e) => setTitulo(e.target.value)}
-            placeholder="¿Cómo se calcula el progreso?"
+            placeholder={t("foro.tituloPlaceholder")}
             required
           />
         </div>
         <div className="form-field">
-          <label htmlFor="hilo-cuerpo">Mensaje</label>
+          <label htmlFor="hilo-cuerpo">{t("foro.mensaje")}</label>
           <textarea
             id="hilo-cuerpo"
             rows={3}
@@ -100,13 +102,13 @@ export function Foro({
         </div>
         <div>
           <button type="submit" disabled={ocupado || !titulo.trim() || !cuerpo.trim()}>
-            Abrir hilo
+            {t("foro.abrirHilo")}
           </button>
         </div>
       </form>
 
       {hilos.length === 0 ? (
-        <p className="muted">Todavía no hay conversaciones. Empieza tú.</p>
+        <p className="muted">{t("foro.vacio")}</p>
       ) : (
         <ul className="lista-filas">
           {hilos.map((h) => (
@@ -120,13 +122,13 @@ export function Foro({
                 >
                   <strong>{h.title}</strong>
                 </button>
-                {h.locked && <span className="badge">cerrado</span>}
+                {h.locked && <span className="badge">{t("foro.cerrado")}</span>}
                 <span className="badge">
-                  {h.replies} {h.replies === 1 ? "respuesta" : "respuestas"}
+                  {h.replies === 1 ? t("foro.unaRespuesta") : t("foro.nRespuestas", { n: h.replies })}
                 </span>
               </div>
               <p className="muted">
-                {h.author_name} · {new Date(h.last_activity_at).toLocaleString("es-CO")}
+                {h.author_name} · {new Date(h.last_activity_at).toLocaleString(locale)}
               </p>
               {abierto === h.id && (
                 <HiloAbierto threadId={h.id} puedeModerar={puedeModerar} onCambio={cargar} />
@@ -148,6 +150,7 @@ function HiloAbierto({
   puedeModerar: boolean;
   onCambio: () => void;
 }) {
+  const { t, locale } = useI18n();
   const [datos, setDatos] = useState<{ thread: Hilo; replies: RespuestaDeForo[] } | null>(null);
   const [texto, setTexto] = useState("");
   const [error, setError] = useState("");
@@ -157,9 +160,9 @@ function HiloAbierto({
     try {
       setDatos(await api.getThread(threadId));
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo abrir el hilo");
+      setError(e instanceof ApiError ? e.message : t("foro.errorAbrir"));
     }
-  }, [threadId]);
+  }, [threadId, t]);
 
   useEffect(() => {
     cargar();
@@ -177,7 +180,7 @@ function HiloAbierto({
       await cargar();
       onCambio();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo responder");
+      setError(err instanceof ApiError ? err.message : t("foro.errorResponder"));
     } finally {
       setOcupado(false);
     }
@@ -189,7 +192,7 @@ function HiloAbierto({
       await cargar();
       onCambio();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo cambiar el estado del hilo");
+      setError(err instanceof ApiError ? err.message : t("foro.errorEstado"));
     }
   }
 
@@ -198,7 +201,7 @@ function HiloAbierto({
       await api.deleteForumPost(postId);
       await cargar();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "No se pudo borrar");
+      setError(err instanceof ApiError ? err.message : t("foro.errorBorrar"));
     }
   }
 
@@ -219,15 +222,15 @@ function HiloAbierto({
               // La respuesta borrada conserva su lugar: quitarla dejaría sin
               // sentido a las que le respondían.
               <p className="muted">
-                <em>Mensaje eliminado.</em>
+                <em>{t("foro.eliminado")}</em>
               </p>
             ) : (
               <>
                 <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{r.body_md}</p>
                 <p className="muted" style={{ margin: "0.25rem 0 0" }}>
-                  {r.author_name} · {new Date(r.created_at).toLocaleString("es-CO")}{" "}
+                  {r.author_name} · {new Date(r.created_at).toLocaleString(locale)}{" "}
                   <button className="secondary" onClick={() => borrar(r.id)}>
-                    Borrar
+                    {t("foro.borrar")}
                   </button>
                 </p>
               </>
@@ -237,11 +240,11 @@ function HiloAbierto({
       </ul>
 
       {datos.thread.locked ? (
-        <p className="muted">Este hilo está cerrado a nuevas respuestas.</p>
+        <p className="muted">{t("foro.hiloCerrado")}</p>
       ) : (
         <form className="stack" onSubmit={responder}>
           <div className="form-field">
-            <label htmlFor={`respuesta-${threadId}`}>Responder</label>
+            <label htmlFor={`respuesta-${threadId}`}>{t("foro.responder")}</label>
             <textarea
               id={`respuesta-${threadId}`}
               rows={2}
@@ -252,7 +255,7 @@ function HiloAbierto({
           </div>
           <div>
             <button type="submit" disabled={ocupado || !texto.trim()}>
-              Responder
+              {t("foro.responder")}
             </button>
           </div>
         </form>
@@ -261,7 +264,7 @@ function HiloAbierto({
       {puedeModerar && (
         <div>
           <button className="secondary" onClick={() => cerrar(!datos.thread.locked)}>
-            {datos.thread.locked ? "Reabrir el hilo" : "Cerrar el hilo"}
+            {datos.thread.locked ? t("foro.reabrir") : t("foro.cerrarHilo")}
           </button>
         </div>
       )}

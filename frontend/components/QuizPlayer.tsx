@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type QuizAttempt, type QuizQuestion } from "@/lib/api";
+import { useI18n, useTraductorEstable } from "@/lib/i18n";
 
 /**
  * Reproductor de un quiz para el estudiante.
@@ -15,6 +16,9 @@ import { api, ApiError, type QuizAttempt, type QuizQuestion } from "@/lib/api";
  * las opciones, nunca cuál es la correcta.
  */
 export function QuizPlayer({ resourceId }: { resourceId: string }) {
+  const { t } = useI18n();
+  // Abrir el intento no debe repetirse porque alguien cambie de idioma.
+  const traducir = useTraductorEstable();
   const [attempt, setAttempt] = useState<QuizAttempt | null>(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -29,13 +33,13 @@ export function QuizPlayer({ resourceId }: { resourceId: string }) {
       })
       .catch((e) => {
         if (!cancelado) {
-          setError(e instanceof ApiError ? e.message : "No se pudo abrir el intento");
+          setError(e instanceof ApiError ? e.message : traducir("quiz.errorAbrir"));
         }
       });
     return () => {
       cancelado = true;
     };
-  }, [resourceId]);
+  }, [resourceId, traducir]);
 
   async function handleSelect(question: QuizQuestion, optionStableId: string) {
     if (!attempt) return;
@@ -57,7 +61,7 @@ export function QuizPlayer({ resourceId }: { resourceId: string }) {
       await api.saveQuizAnswer(attempt.attempt_id, question.stable_id, seleccion);
     } catch (e) {
       setAttempt({ ...attempt, answers: { ...attempt.answers, [question.stable_id]: previa } });
-      setError(e instanceof ApiError ? e.message : "No se pudo guardar la respuesta");
+      setError(e instanceof ApiError ? e.message : t("quiz.errorGuardarRespuesta"));
     } finally {
       setSavingQuestion(null);
     }
@@ -72,7 +76,10 @@ export function QuizPlayer({ resourceId }: { resourceId: string }) {
   async function handleSubmit() {
     if (!attempt) return;
     const faltantes = attempt.questions.filter((q) => (attempt.answers[q.stable_id] ?? []).length === 0);
-    if (faltantes.length > 0 && !confirm(`Faltan ${faltantes.length} pregunta(s) sin responder. ¿Enviar de todas formas?`)) {
+    if (
+      faltantes.length > 0 &&
+      !confirm(t("quiz.confirmarFaltantes", { n: faltantes.length }))
+    ) {
       return;
     }
     setSubmitting(true);
@@ -86,7 +93,7 @@ export function QuizPlayer({ resourceId }: { resourceId: string }) {
       // resumen justo después del envío ya vea el resultado actualizado.
       void api.recordProgress(resourceId, "close", true).catch(() => undefined);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo enviar el intento");
+      setError(e instanceof ApiError ? e.message : t("quiz.errorEnviar"));
     } finally {
       setSubmitting(false);
     }
@@ -100,7 +107,7 @@ export function QuizPlayer({ resourceId }: { resourceId: string }) {
     );
   }
   if (!attempt) {
-    return <p role="status">Abriendo el intento…</p>;
+    return <p role="status">{t("quiz.abriendo")}</p>;
   }
 
   const cerrado = attempt.status !== "in_progress";
@@ -115,12 +122,14 @@ export function QuizPlayer({ resourceId }: { resourceId: string }) {
 
       {cerrado && (
         <div className={attempt.passed ? "success-banner" : "warning-banner"} role="status">
-          <strong>Intento {attempt.status === "expired" ? "expirado" : "calificado"}.</strong>
+          <strong>
+            {attempt.status === "expired" ? t("quiz.intentoExpirado") : t("quiz.intentoCalificado")}
+          </strong>
           {typeof attempt.score === "number" && (
             <>
               {" "}
-              Nota: {attempt.score.toFixed(1)} / 100.{" "}
-              {attempt.passed ? "Aprobaste." : "No alcanzaste el mínimo para aprobar."}
+              {t("quiz.nota", { nota: attempt.score.toFixed(1) })}{" "}
+              {attempt.passed ? t("quiz.aprobaste") : t("quiz.noAprobaste")}
             </>
           )}
         </div>
@@ -134,7 +143,7 @@ export function QuizPlayer({ resourceId }: { resourceId: string }) {
                 {i + 1}. {q.prompt_md}
               </strong>{" "}
               <span className="muted">
-                ({q.points} {q.points === 1 ? "punto" : "puntos"})
+                ({q.points === 1 ? t("quiz.unPunto") : t("quiz.nPuntos", { n: q.points })})
               </span>
             </p>
             <fieldset disabled={cerrado || savingQuestion === q.stable_id} style={{ border: "none", padding: 0, margin: 0 }}>
@@ -163,7 +172,7 @@ export function QuizPlayer({ resourceId }: { resourceId: string }) {
 
       {!cerrado && (
         <button onClick={handleSubmit} disabled={submitting}>
-          {submitting ? "Enviando…" : "Enviar evaluación"}
+          {submitting ? t("quiz.enviando") : t("quiz.enviar")}
         </button>
       )}
     </div>

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 export default function RegisterPage() {
   const [fullName, setFullName] = useState("");
@@ -11,6 +12,7 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const { t } = useI18n();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -20,7 +22,7 @@ export default function RegisterPage() {
       await api.register({ email, password, full_name: fullName });
       setDone(true);
     } catch (e) {
-      setError(e instanceof ApiError ? [e.message, ...(e.details ?? [])].join(" ") : "No se pudo completar el registro");
+      setError(e instanceof ApiError ? [e.message, ...(e.details ?? [])].join(" ") : t("auth.registro.error"));
     } finally {
       setSubmitting(false);
     }
@@ -29,21 +31,17 @@ export default function RegisterPage() {
   if (done) {
     return (
       <div className="columna-estrecha">
-        <h1>Revisa tu correo</h1>
-        <p className="success-banner">
-          Si <strong>{email}</strong> está disponible, enviamos un enlace de verificación.
-          Confírmalo para poder iniciar sesión. En desarrollo, revisa Mailpit en
-          http://localhost:8025.
-        </p>
-        <Link href="/login">Ir a iniciar sesión</Link>
+        <h1>{t("auth.registro.revisaTitulo")}</h1>
+        <p className="success-banner">{t("auth.registro.revisaTexto", { email })}</p>
+        <Link href="/login">{t("auth.irALogin")}</Link>
       </div>
     );
   }
 
   return (
     <div className="columna-estrecha">
-      <h1>Crear cuenta de estudiante</h1>
-      <p className="muted">El registro público crea cuentas de estudiante. Los profesores se dan de alta por administración.</p>
+      <h1>{t("auth.registro.titulo")}</h1>
+      <p className="muted">{t("auth.registro.subtitulo")}</p>
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -51,11 +49,11 @@ export default function RegisterPage() {
       )}
       <form onSubmit={handleSubmit} className="stack">
         <div className="form-field">
-          <label htmlFor="full_name">Nombre completo</label>
+          <label htmlFor="full_name">{t("auth.nombreCompleto")}</label>
           <input id="full_name" required value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </div>
         <div className="form-field">
-          <label htmlFor="email">Correo electrónico</label>
+          <label htmlFor="email">{t("auth.correo")}</label>
           <input
             id="email"
             type="email"
@@ -66,7 +64,7 @@ export default function RegisterPage() {
           />
         </div>
         <div className="form-field">
-          <label htmlFor="password">Contraseña</label>
+          <label htmlFor="password">{t("auth.contrasena")}</label>
           <input
             id="password"
             type="password"
@@ -77,14 +75,14 @@ export default function RegisterPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          <span id="password-help" className="badge">Mínimo 10 caracteres</span>
+          <span id="password-help" className="badge">{t("auth.registro.minimo")}</span>
         </div>
         <button type="submit" disabled={submitting}>
-          {submitting ? "Creando cuenta…" : "Registrarme"}
+          {submitting ? t("auth.registro.enviando") : t("auth.registro.enviar")}
         </button>
       </form>
       <p>
-        ¿Ya tienes cuenta? <Link href="/login">Inicia sesión</Link>
+        {t("auth.registro.yaTienes")} <Link href="/login">{t("auth.registro.iniciaSesion")}</Link>
       </p>
     </div>
   );

@@ -4,18 +4,23 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, type Enrollment, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n, type Clave } from "@/lib/i18n";
 
-const statusLabel: Record<Enrollment["Status"], string> = {
-  active: "En curso",
-  withdrawn: "Retirado",
-  completed: "Completado",
-  approved: "Aprobado",
+// El estado de la inscripción llega como identificador del dominio; la clave
+// del catálogo se deriva de él para que un estado nuevo en la API falle al
+// compilar en vez de aparecer sin traducir.
+const claveDeEstado: Record<Enrollment["Status"], Clave> = {
+  active: "estado.active",
+  withdrawn: "estado.withdrawn",
+  completed: "estado.completed",
+  approved: "estado.approved",
 };
 
 export default function MyCoursesPage() {
   const { user, loading: authLoading } = useAuth();
   const [items, setItems] = useState<Enrollment[] | null>(null);
   const [error, setError] = useState("");
+  const { t } = useI18n();
 
   useEffect(() => {
     if (!authLoading && user) {
@@ -29,7 +34,7 @@ export default function MyCoursesPage() {
       const res = await api.listMyEnrollments();
       setItems(res.items ?? []);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudieron cargar tus cursos");
+      setError(e instanceof ApiError ? e.message : t("misCursos.error"));
     }
   }
 
@@ -38,15 +43,16 @@ export default function MyCoursesPage() {
       await api.withdraw(courseId);
       load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo retirar la inscripción");
+      setError(e instanceof ApiError ? e.message : t("misCursos.errorRetirar"));
     }
   }
 
   if (!authLoading && !user) {
     return (
       <div className="estado-vacio columna-estrecha">
+        <p>{t("misCursos.requiereSesion")}</p>
         <p>
-          Debes <Link href="/login">iniciar sesión</Link> para ver tus cursos.
+          <Link href="/login">{t("nav.entrar")}</Link>
         </p>
       </div>
     );
@@ -56,8 +62,8 @@ export default function MyCoursesPage() {
     <div>
       <header className="page-header">
         <div>
-          <h1>Mis cursos</h1>
-          <p>Los cursos a los que estás inscrito y su estado.</p>
+          <h1>{t("nav.misCursos")}</h1>
+          <p>{t("misCursos.subtitulo")}</p>
         </div>
       </header>
 
@@ -66,13 +72,13 @@ export default function MyCoursesPage() {
           {error}
         </p>
       )}
-      {items === null && <p role="status">Cargando…</p>}
+      {items === null && <p role="status">{t("comun.cargando")}</p>}
 
       {items?.length === 0 && (
         <div className="estado-vacio">
-          <p>Aún no te has inscrito a ningún curso.</p>
+          <p>{t("misCursos.vacio")}</p>
           <p>
-            <Link href="/">Explora el catálogo</Link> para empezar.
+            <Link href="/">{t("misCursos.explorar")}</Link>
           </p>
         </div>
       )}
@@ -81,14 +87,14 @@ export default function MyCoursesPage() {
         {items?.map((e) => (
           <li key={e.ID} className="card fila">
             <div className="fila__datos">
-              <Link href={`/cursos/${e.CourseID}`}>Ver curso</Link>
+              <Link href={`/cursos/${e.CourseID}`}>{t("misCursos.verCurso")}</Link>
               <p>
-                <span className="badge">{statusLabel[e.Status]}</span>
+                <span className="badge">{t(claveDeEstado[e.Status])}</span>
               </p>
             </div>
             {e.Status === "active" && (
               <button className="secondary" onClick={() => handleWithdraw(e.CourseID)}>
-                Retirarme
+                {t("misCursos.retirarme")}
               </button>
             )}
           </li>
