@@ -194,6 +194,26 @@ export interface BadgeVerification {
   image_url?: string;
 }
 
+// Clasificación de los cambios de un borrador de actualización.
+//
+// El alcance resume el impacto sobre el progreso ya registrado: "menor" no
+// cambia lo que hay que completar, "mayor" sí.
+export interface Cambio {
+  tipo: "agregado" | "eliminado" | "modificado" | "movido";
+  elemento: "modulo" | "unidad" | "recurso";
+  stable_id: string;
+  titulo: string;
+  detalle?: string;
+  afecta_progreso: boolean;
+}
+
+export interface Clasificacion {
+  alcance: "ninguno" | "menor" | "mayor";
+  cambios: Cambio[];
+  obligatorios_agregados?: string[];
+  obligatorios_eliminados?: string[];
+}
+
 // Una parte ya recibida por el almacen. El ETag es lo que el cliente reenvia
 // al completar, y lo que delata una parte que no llego intacta.
 export interface ParteCargada {
@@ -296,6 +316,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  // Clasificación de lo que un borrador cambia respecto a lo publicado.
+  versionChanges: (versionId: string) =>
+    request<Clasificacion>(`/api/v1/courses/versions/${versionId}/changes`),
   publishVersion: (versionId: string) =>
     request<{ status: string }>(`/api/v1/courses/versions/${versionId}/publish`, { method: "POST" }),
 

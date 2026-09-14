@@ -457,6 +457,27 @@ func (r *CourseRepo) PublishVersionAtomic(ctx context.Context, courseID uuid.UUI
 		courseID, newVersionID, now); err != nil {
 		return err
 	}
+
+	// Migracion del progreso (alcance opcional 5.2). Las inscripciones apuntan
+	// a la version que el estudiante esta cursando, y es esa la que decide
+	// sobre que recursos se mide su avance. Sin esta linea, quien ya estaba
+	// inscrito se queda en la version anterior: el material nuevo no le
+	// aparece nunca y el avance se sigue calculando sobre un arbol retirado.
+	//
+	// El progreso en si no se toca: vive indexado por stable_id, que el
+	// borrador de actualizacion conserva, asi que lo que el estudiante llevaba
+	// hecho sigue contando. Lo que cambia es la lista de lo exigido.
+	//
+	// Va en la misma transaccion a proposito: si la migracion fallara aparte,
+	// el curso quedaria publicado con sus estudiantes midiendose contra otra
+	// version.
+	if _, err := tx.Exec(ctx, `
+		UPDATE enrollments SET course_version_id = $2
+		 WHERE course_id = $1 AND course_version_id <> $2`,
+		courseID, newVersionID); err != nil {
+		return err
+	}
+
 	return tx.Commit(ctx)
 }
 

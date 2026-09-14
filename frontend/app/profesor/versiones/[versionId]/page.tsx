@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { api, type Version, type Module, type Unit, ApiError } from "@/lib/api";
+import { api, type Version, type Module, type Unit, type Clasificacion, ApiError } from "@/lib/api";
 import { BlockEditor } from "@/components/BlockEditor";
 import { subirArchivo, hayCargaPendiente, olvidarCarga } from "@/lib/carga";
 
@@ -107,7 +107,8 @@ export default function VersionEditorPage() {
       <MetadataForm version={version} disabled={!isDraft} onSaved={load} />
 
       {isDraft && (
-        <div className="card">
+        <div className="card stack">
+          <CambiosDelBorrador versionId={versionId} />
           <button onClick={handlePublish}>Publicar versión</button>
         </div>
       )}
@@ -501,6 +502,69 @@ function ResourceRow({
 
       {error && <span className="error-banner">{error}</span>}
     </li>
+  );
+}
+
+/**
+ * Lo que este borrador cambia respecto a la versión publicada.
+ *
+ * Se enseña junto al botón de publicar y no en una pantalla aparte porque el
+ * momento en que importa es justo antes de publicar: es cuando el profesor
+ * puede todavía decidir que no quiere alterar lo que sus estudiantes tienen
+ * que completar.
+ */
+function CambiosDelBorrador({ versionId }: { versionId: string }) {
+  const [clasificacion, setClasificacion] = useState<Clasificacion | null>(null);
+
+  useEffect(() => {
+    api
+      .versionChanges(versionId)
+      .then(setClasificacion)
+      .catch(() => setClasificacion(null));
+  }, [versionId]);
+
+  if (!clasificacion) return null;
+
+  if (clasificacion.alcance === "ninguno") {
+    return <p className="muted">Este borrador es idéntico a la versión publicada.</p>;
+  }
+
+  const mayor = clasificacion.alcance === "mayor";
+  const afectados = clasificacion.cambios.filter((c) => c.afecta_progreso);
+
+  return (
+    <div className="stack">
+      <h3 style={{ margin: 0 }}>Cambios respecto a lo publicado</h3>
+
+      {mayor ? (
+        <p className="warning-banner" role="status">
+          Esta actualización cambia lo que hay que completar para aprobar. Al publicarla, el
+          avance de los {afectados.length === 1 ? "inscritos" : "inscritos"} se recalcula sobre la
+          nueva lista de recursos obligatorios. Lo que ya llevaban hecho se conserva, y a nadie se
+          le retira una aprobación ya obtenida.
+        </p>
+      ) : (
+        <p className="muted">
+          Cambia el contenido o la presentación, pero no lo que hay que completar: el avance de los
+          inscritos sigue midiéndose igual.
+        </p>
+      )}
+
+      <ul className="lista-filas">
+        {clasificacion.cambios.map((c) => (
+          <li key={`${c.elemento}-${c.stable_id}`} className="fila">
+            <div className="fila__datos">
+              <p>
+                <span className="badge">{c.tipo}</span> <span className="badge">{c.elemento}</span>{" "}
+                <strong>{c.titulo}</strong>
+                {c.afecta_progreso && <span className="badge"> afecta al progreso</span>}
+              </p>
+              {c.detalle && <p className="muted">{c.detalle}</p>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

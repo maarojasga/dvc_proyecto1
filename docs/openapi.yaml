@@ -536,6 +536,28 @@ paths:
         "200": { description: Metadatos actualizados. }
         "409": { description: La versión no es un borrador. }
 
+  /courses/versions/{versionId}/changes:
+    get:
+      tags: [Autoría]
+      summary: Clasifica lo que un borrador cambia respecto a lo publicado
+      description: >
+        Se compara por `stable_id`, que es lo que un borrador de actualización
+        conserva para que el progreso sobreviva a la publicación. El alcance
+        resume el impacto: "menor" no altera el conjunto de recursos
+        obligatorios visibles, así que lo que cada estudiante lleva hecho sigue
+        valiendo lo mismo; "mayor" sí lo altera, y al publicar el avance de
+        todos los inscritos se recalcula sobre esa nueva lista.
+      operationId: versionChanges
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Clasificación de los cambios.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClasificacionDeCambios" }
+        "403": { $ref: "#/components/responses/Problema" }
+
   /courses/versions/{versionId}/publish:
     post:
       summary: Valida y publica una versión en borrador
@@ -1367,6 +1389,37 @@ components:
       type: http
       scheme: bearer
   schemas:
+    ClasificacionDeCambios:
+      type: object
+      required: [alcance, cambios]
+      properties:
+        alcance:
+          type: string
+          enum: [ninguno, menor, mayor]
+        cambios:
+          type: array
+          items:
+            type: object
+            required: [tipo, elemento, stable_id, titulo, afecta_progreso]
+            properties:
+              tipo: { type: string, enum: [agregado, eliminado, modificado, movido] }
+              elemento: { type: string, enum: [modulo, unidad, recurso] }
+              stable_id: { type: string, format: uuid }
+              titulo: { type: string }
+              detalle: { type: string }
+              afecta_progreso:
+                type: boolean
+                description: >
+                  Cierto solo cuando el cambio altera el conjunto de recursos
+                  obligatorios visibles, que es lo único que cambia lo que un
+                  estudiante debe completar.
+        obligatorios_agregados:
+          type: array
+          items: { type: string, format: uuid }
+        obligatorios_eliminados:
+          type: array
+          items: { type: string, format: uuid }
+
     DestinoIframe:
       type: object
       required: [id, host, include_subdomains]

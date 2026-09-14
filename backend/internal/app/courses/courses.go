@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/cambios"
 	domain "github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/course"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
@@ -343,6 +344,15 @@ func (s *Service) MarkResourceProcessingStatus(ctx context.Context, actor *user.
 	return s.repo.SetResourceProcessingStatus(ctx, versionID, resourceID, status)
 }
 
+// UpdateResource guarda los campos de autoría de un recurso.
+//
+// La clave del objeto y el estado de procesamiento NO se toman de la petición:
+// los gobierna la ingesta —la subida y el worker—, no el formulario de
+// autoría. Tomarlos del cliente tenía dos consecuencias, y las dos estaban
+// ocurriendo: el estado llegaba vacío y violaba la restricción de la columna,
+// así que toda edición respondía 500; y si hubiera pasado, habría borrado la
+// clave del objeto, dejando sin archivo a un recurso ya subido por el simple
+// hecho de corregirle el título.
 func (s *Service) UpdateResource(ctx context.Context, actor *user.User, versionID uuid.UUID, res *domain.Resource) error {
 	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
 		return err
@@ -350,6 +360,14 @@ func (s *Service) UpdateResource(ctx context.Context, actor *user.User, versionI
 	if err := s.validarIframe(ctx, res); err != nil {
 		return err
 	}
+
+	actual, err := s.repo.GetResource(ctx, versionID, res.ID)
+	if err != nil {
+		return err
+	}
+	res.ObjectKey = actual.ObjectKey
+	res.ProcessingStatus = actual.ProcessingStatus
+
 	return s.repo.UpdateResource(ctx, versionID, res)
 }
 
@@ -358,6 +376,35 @@ func (s *Service) DeleteResource(ctx context.Context, actor *user.User, versionI
 		return err
 	}
 	return s.repo.DeleteResource(ctx, versionID, resourceID)
+}
+
+// CambiosDelBorrador clasifica lo que un borrador cambia respecto a la
+// versión publicada vigente del curso.
+//
+// Existe para que el profesor vea, antes de publicar, qué está a punto de
+// cambiar y —sobre todo— si el cambio altera lo que sus estudiantes tienen que
+// completar. La clasificación la hace el dominio; aquí solo se cargan los dos
+// árboles y se comprueba la propiedad.
+func (s *Service) CambiosDelBorrador(ctx context.Context, actor *user.User, versionID uuid.UUID) (cambios.Clasificacion, error) {
+	c, v, err := s.GetOwnedVersion(ctx, actor, versionID)
+	if err != nil {
+		return cambios.Clasificacion{}, err
+	}
+
+	borrador, err := s.repo.LoadTree(ctx, v.ID)
+	if err != nil {
+		return cambios.Clasificacion{}, err
+	}
+
+	// Sin versión publicada no hay con qué comparar: es el primer borrador.
+	var publicado []domain.Module
+	if c.CurrentPublishedVersionID != nil && *c.CurrentPublishedVersionID != v.ID {
+		publicado, err = s.repo.LoadTree(ctx, *c.CurrentPublishedVersionID)
+		if err != nil {
+			return cambios.Clasificacion{}, err
+		}
+	}
+	return cambios.Comparar(publicado, borrador), nil
 }
 
 // PublishVersion valida exhaustivamente y publica una versión en borrador,
