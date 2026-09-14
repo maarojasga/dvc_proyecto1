@@ -46,6 +46,11 @@
 #     X-Request-Id, pero no métricas ni trazas. Sin ellas no se puede ver
 #     DÓNDE se va el p95 cuando se rompe un umbral.
 #   - Cursores y ETag en las colecciones.
+#   - Fijar MINIO_IMAGE a una release concreta. MinIO dejó de publicar su
+#     imagen de forma publica en Docker Hub, asi que el compose apunta a
+#     quay.io con la etiqueta movil :latest. Las demas imagenes si llevan
+#     version; esta es la unica que no.
+#
 #   - ENCENDER las alertas de Dependabot en el repositorio. El archivo
 #     .github/dependabot.yml ya está, pero solo configura las actualizaciones
 #     de VERSIÓN (las programadas). Las de SEGURIDAD hay que activarlas en

@@ -26,7 +26,19 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    # quay.io y no Docker Hub: MinIO dejó de publicar la imagen ahí de forma
+    # pública, y `docker pull minio/minio` responde "pull access denied ...
+    # repository does not exist or may require 'docker login'". No es un fallo
+    # transitorio ni un límite de descargas: el repositorio existe pero ya
+    # exige autenticación. quay.io es el registro propio de MinIO, el que usa
+    # su documentación.
+    #
+    # La referencia es una variable para que una mudanza de registro sea un
+    # cambio en el .env y no una edición de este archivo. Va sin fijar a una
+    # release concreta, que es deuda consciente: conviene fijar
+    # MINIO_IMAGE a una etiqueta RELEASE.* comprobada, por el mismo motivo por
+    # el que las demás imágenes de aquí llevan versión.
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:latest}
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -44,7 +56,9 @@ services:
       - minio_data:/data
 
   mailpit:
-    image: axllent/mailpit:latest
+    # Con versión, no :latest: una etiqueta móvil hace que dos ejecuciones
+    # del mismo commit puedan no ser la misma cosa.
+    image: axllent/mailpit:v1.22
     ports:
       - "8025:8025"
       - "1025:1025"
@@ -59,7 +73,7 @@ services:
   # Sin esto opera el escáner integrado de la API, que reconoce el vector de
   # prueba estándar y los ejecutables, pero no lleva firmas.
   clamav:
-    image: clamav/clamav:stable
+    image: clamav/clamav:1.4.3
     profiles: ["antivirus"]
     ports:
       - "3310:3310"
@@ -196,7 +210,10 @@ services:
         condition: service_healthy
 
   k6:
-    image: grafana/k6:latest
+    # La misma versión con la que se midió la Etapa 1 documentada en
+    # load/README.md: comparar cifras obtenidas con generadores distintos
+    # no dice gran cosa.
+    image: grafana/k6:1.8.1
     profiles: ["carga"]
     environment:
       # Contra el proxy, no contra una instancia: la prueba tiene que medir

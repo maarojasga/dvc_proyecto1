@@ -313,6 +313,18 @@ docker compose --profile carga run --rm seed   # 500 cuentas, un curso, sesiones
 docker compose --profile carga run --rm k6     # prueba de carga de Etapa 1
 ```
 
+**MinIO se descarga de quay.io, no de Docker Hub.** MinIO dejó de publicar su
+imagen de forma pública allí: `docker pull minio/minio` responde ahora «pull
+access denied … may require 'docker login'». No es un límite de descargas ni un
+fallo pasajero, y tumbó una corrida del CI. El compose apunta al registro propio
+de MinIO a través de `MINIO_IMAGE`, para que otra mudanza sea un cambio en el
+`.env` y no una edición del compose.
+
+Las demás imágenes llevan versión fija —`mailpit:v1.22`, `clamav:1.4.3`,
+`k6:1.8.1`, `nginx:1.27-alpine`— porque una etiqueta móvil hace que dos
+ejecuciones del mismo commit puedan no ser la misma cosa. La de MinIO es la
+única que sigue en `:latest`, y está anotada como deuda.
+
 La API dejó de publicar el puerto 8080 en el host: ahora lo hace un proxy nginx
 y las instancias quedan detrás, así que `docker compose up -d --scale api=3`
 funciona y el escalamiento a múltiples instancias que pide el criterio de
