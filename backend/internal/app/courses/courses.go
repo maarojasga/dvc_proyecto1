@@ -31,12 +31,13 @@ type ListaDeIframes interface {
 }
 
 type Service struct {
-	repo    *postgres.CourseRepo
-	iframes ListaDeIframes
+	repo          *postgres.CourseRepo
+	iframes       ListaDeIframes
+	colaboradores Colaboradores
 }
 
-func NewService(repo *postgres.CourseRepo, iframes ListaDeIframes) *Service {
-	return &Service{repo: repo, iframes: iframes}
+func NewService(repo *postgres.CourseRepo, iframes ListaDeIframes, colaboradores Colaboradores) *Service {
+	return &Service{repo: repo, iframes: iframes, colaboradores: colaboradores}
 }
 
 // validarIframe comprueba el destino de un recurso incrustado contra la lista
@@ -101,7 +102,7 @@ func (s *Service) CreateUpdateDraft(ctx context.Context, actor *user.User, cours
 	if err != nil {
 		return nil, err
 	}
-	if err := s.authorizeOwner(actor, c); err != nil {
+	if err := s.authorizeOwner(ctx, actor, c); err != nil {
 		return nil, err
 	}
 
@@ -162,14 +163,47 @@ func (s *Service) CreateUpdateDraft(ctx context.Context, actor *user.User, cours
 	return draft, nil
 }
 
-func (s *Service) authorizeOwner(actor *user.User, c *domain.Course) error {
+// Colaboradores resuelve la coautoría de un curso.
+type Colaboradores interface {
+	PuedeEditar(ctx context.Context, courseID, userID uuid.UUID) (bool, error)
+	CursosDondeColabora(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
+}
+
+// authorizeOwner comprueba quién puede tocar un curso.
+//
+// El dueño y la administración siempre; un colaborador, si lo es. La consulta
+// de coautoría va al final a propósito: es la única que toca la base, y la
+// mayoría de las peticiones las hace el propio dueño, que sale antes.
+func (s *Service) authorizeOwner(ctx context.Context, actor *user.User, c *domain.Course) error {
 	if actor.IsAdmin() {
 		return nil
 	}
-	if actor.IsTeacher() && actor.ID == c.TeacherID {
+	if !actor.IsTeacher() {
+		return ErrForbidden
+	}
+	if actor.ID == c.TeacherID {
 		return nil
 	}
-	return ErrForbidden
+	if s.colaboradores == nil {
+		return ErrForbidden
+	}
+	puede, err := s.colaboradores.PuedeEditar(ctx, c.ID, actor.ID)
+	if err != nil {
+		return err
+	}
+	if !puede {
+		return ErrForbidden
+	}
+	return nil
+}
+
+// EsDueno distingue al dueño de un colaborador.
+//
+// Hace falta porque repartir el acceso no se delega: un colaborador edita el
+// curso, pero no puede añadir ni quitar a otros. Esa es la línea que separa la
+// coautoría básica de una gestión de permisos completa.
+func (s *Service) EsDueno(actor *user.User, c *domain.Course) bool {
+	return actor.IsAdmin() || actor.ID == c.TeacherID
 }
 
 // GetOwnedVersion recupera una versión validando que el actor sea el
@@ -183,10 +217,23 @@ func (s *Service) GetOwnedVersion(ctx context.Context, actor *user.User, version
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.authorizeOwner(actor, c); err != nil {
+	if err := s.authorizeOwner(ctx, actor, c); err != nil {
 		return nil, nil, err
 	}
 	return c, v, nil
+}
+
+// GetCourse recupera un curso comprobando que el actor puede editarlo (dueño,
+// colaborador o administración).
+func (s *Service) GetCourse(ctx context.Context, actor *user.User, courseID uuid.UUID) (*domain.Course, error) {
+	c, err := s.repo.GetCourse(ctx, courseID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.authorizeOwner(ctx, actor, c); err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 // PreviewVersion carga el árbol completo de una versión (propia) para
@@ -435,7 +482,7 @@ func (s *Service) UnpublishVersion(ctx context.Context, actor *user.User, course
 	if err != nil {
 		return err
 	}
-	if err := s.authorizeOwner(actor, c); err != nil {
+	if err := s.authorizeOwner(ctx, actor, c); err != nil {
 		return err
 	}
 	if c.CurrentPublishedVersionID == nil {
@@ -444,8 +491,33 @@ func (s *Service) UnpublishVersion(ctx context.Context, actor *user.User, course
 	return s.repo.UnpublishVersionAtomic(ctx, c.ID, *c.CurrentPublishedVersionID, time.Now().UTC())
 }
 
+// ListMine son los cursos que este profesor puede editar: los suyos y aquellos
+// en los que colabora.
+//
+// Sin incluir los segundos, un colaborador tendría acceso pero ninguna forma de
+// llegar al curso desde la interfaz, que en la práctica es no tenerlo.
 func (s *Service) ListMine(ctx context.Context, teacher *user.User) ([]*domain.Course, error) {
-	return s.repo.ListByTeacher(ctx, teacher.ID)
+	propios, err := s.repo.ListByTeacher(ctx, teacher.ID)
+	if err != nil {
+		return nil, err
+	}
+	if s.colaboradores == nil {
+		return propios, nil
+	}
+	ajenos, err := s.colaboradores.CursosDondeColabora(ctx, teacher.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ajenos {
+		c, err := s.repo.GetCourse(ctx, id)
+		if err != nil {
+			// Un curso borrado entre una consulta y la otra no debe tumbar la
+			// lista entera.
+			continue
+		}
+		propios = append(propios, c)
+	}
+	return propios, nil
 }
 
 func (s *Service) ListCatalog(ctx context.Context, f postgres.CatalogFilter) ([]*domain.Version, error) {

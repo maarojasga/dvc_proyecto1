@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/admin"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
@@ -126,6 +127,11 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusUnprocessableEntity, "malware_detected", nil
 	case errors.Is(err, ErrTipoNoCorresponde):
 		return http.StatusUnprocessableEntity, "mime_mismatch", nil
+	case errors.Is(err, admin.ErrNoEsProfesor):
+		// Ni 404 ni un mensaje distinto según el motivo: separar "no existe"
+		// de "no es profesor" convertiría invitar a un colaborador en una
+		// forma de averiguar qué correos hay registrados.
+		return http.StatusUnprocessableEntity, "teacher_not_found", nil
 	case errors.Is(err, documento.ErrFormatoNoSoportado):
 		return http.StatusUnprocessableEntity, "presentation_format_unsupported", nil
 	case errors.Is(err, iframe.ErrHostNoAutorizado):

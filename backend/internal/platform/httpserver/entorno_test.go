@@ -144,7 +144,8 @@ func nuevoEntorno(t *testing.T) *entorno {
 
 	cursos := postgres.NewCourseRepo(pool)
 	marcos := postgres.NewIframeRepo(pool)
-	cursosSvc := courses.NewService(cursos, marcos)
+	colaboradores := postgres.NewColaboradoresRepo(pool)
+	cursosSvc := courses.NewService(cursos, marcos, colaboradores)
 	inscripciones := postgres.NewEnrollmentRepo(pool)
 	avance := postgres.NewProgressRepo(pool)
 	evaluaciones := postgres.NewQuizRepo(pool)
@@ -154,23 +155,25 @@ func nuevoEntorno(t *testing.T) *entorno {
 	cola := nuevaColaFalsa()
 	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, almacen, users)
 	handler := httpserver.NewRouter(httpserver.Deps{
-		Auth:         authSvc,
-		Admin:        admin.NewService(users),
-		Courses:      cursosSvc,
-		Enrollments:  enrollments.NewService(inscripciones, cursos, avance, marcos),
-		Quizzes:      quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
-		Progreso:     progresoSvc,
-		Storage:      almacen,
-		Media:        postgres.NewMediaRepo(pool),
-		Queue:        cola,
-		Iframes:      marcos,
-		Metricas:     postgres.NewMetricasRepo(pool),
-		Revisiones:   postgres.NewRevisionesRepo(pool),
-		Auditor:      users,
-		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
-		Redis:        rdb,
-		CORSOrigin:   "http://localhost:3000",
-		CookieSecure: false,
+		Auth:          authSvc,
+		Admin:         admin.NewService(users),
+		Courses:       cursosSvc,
+		Enrollments:   enrollments.NewService(inscripciones, cursos, avance, marcos),
+		Quizzes:       quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
+		Progreso:      progresoSvc,
+		Storage:       almacen,
+		Media:         postgres.NewMediaRepo(pool),
+		Queue:         cola,
+		Iframes:       marcos,
+		Metricas:      postgres.NewMetricasRepo(pool),
+		Revisiones:    postgres.NewRevisionesRepo(pool),
+		Colaboradores: colaboradores,
+		Exportacion:   postgres.NewExportacionRepo(pool),
+		Auditor:       users,
+		Entrega:       entregaPorCDN{base: "https://cdn.pruebas.local"},
+		Redis:         rdb,
+		CORSOrigin:    "http://localhost:3000",
+		CookieSecure:  false,
 	})
 	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos, almacen: almacen, cola: cola}
 }

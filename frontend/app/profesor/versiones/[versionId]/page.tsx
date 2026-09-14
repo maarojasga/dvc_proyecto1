@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { api, type Version, type Module, type Unit, type Clasificacion, ApiError } from "@/lib/api";
 import { BlockEditor } from "@/components/BlockEditor";
 import { HistorialDeRevisiones } from "@/components/HistorialDeRevisiones";
+import { Coautoria } from "@/components/Coautoria";
 import { subirArchivo, hayCargaPendiente, olvidarCarga } from "@/lib/carga";
 
 const RESOURCE_TYPES = [
@@ -106,6 +107,8 @@ export default function VersionEditorPage() {
       )}
 
       <MetadataForm version={version} disabled={!isDraft} onSaved={load} />
+
+      <Coautoria courseId={version.CourseID} />
 
       {isDraft && (
         <div className="card stack">

@@ -272,6 +272,15 @@ export interface Revision {
   created_at: string;
 }
 
+// Profesor con acceso de edición a un curso ajeno.
+export interface Colaborador {
+  user_id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  added_at: string;
+}
+
 // Una parte ya recibida por el almacen. El ETag es lo que el cliente reenvia
 // al completar, y lo que delata una parte que no llego intacta.
 export interface ParteCargada {
@@ -490,6 +499,19 @@ export const api = {
       `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions/${numero}/restore`,
       { method: "POST" },
     ),
+
+  // Coautoría de un curso. Va bajo /collaborators y no bajo
+  // /courses/{id}/collaborators por un conflicto de patrones en el router del
+  // servidor, que la API documenta.
+  listCollaborators: (courseId: string) =>
+    request<{ items: Colaborador[] }>(`/api/v1/collaborators/${courseId}`),
+  addCollaborator: (courseId: string, email: string) =>
+    request<{ user_id: string; email: string }>(`/api/v1/collaborators/${courseId}`, {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  removeCollaborator: (courseId: string, userId: string) =>
+    request<void>(`/api/v1/collaborators/${courseId}/${userId}`, { method: "DELETE" }),
 
   listCatalog: (params: Record<string, string> = {}) =>
     request<{ items: Version[] }>(`/api/v1/catalog?${new URLSearchParams(params)}`),

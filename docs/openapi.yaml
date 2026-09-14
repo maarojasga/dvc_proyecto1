@@ -908,6 +908,94 @@ paths:
                     description: Valor del atributo sandbox con que se sirve todo marco.
                   referrer_policy: { type: string }
 
+  /me/export:
+    get:
+      tags: [Cuenta]
+      summary: Exportación de los datos personales de quien la pide
+      description: >
+        Sin restricción de rol: el derecho a llevarse los propios datos no
+        depende de para qué se use la plataforma. El identificador sale de la
+        sesión y no de la petición, así que cada quien exporta los suyos y solo
+        los suyos.
+
+        No sale lo que no es un dato personal: el hash del token de sesión es
+        la llave de la cuenta, y el snapshot de un intento son las preguntas y
+        la clave correcta del profesor.
+
+        Se entrega como descarga y con `Cache-Control: no-store`.
+      operationId: exportMyData
+      responses:
+        "200":
+          description: Paquete con cuenta, sesiones, inscripciones, progreso, evaluaciones e insignias.
+          content:
+            application/json:
+              schema: { type: object }
+        "401": { $ref: "#/components/responses/Problema" }
+
+  /collaborators/{courseId}:
+    get:
+      tags: [Autoría]
+      summary: Coautores de un curso
+      description: >
+        Solo el dueño (o la administración). Un colaborador edita el curso pero
+        no reparte acceso: si pudiera, invitar a alguien equivaldría a cederle
+        el curso.
+
+        La ruta cuelga de /collaborators y no de /courses/{courseId}/collaborators
+        porque ese prefijo ya tiene /courses/versions/{versionId} y el router
+        rechaza en el arranque dos patrones donde un comodín compite con un
+        literal en la misma posición.
+      operationId: listCollaborators
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Coautores del curso.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Colaborador" }
+        "403": { $ref: "#/components/responses/Problema" }
+    post:
+      tags: [Autoría]
+      summary: Da acceso de edición a un profesor
+      description: >
+        Se identifica por correo, que es lo que el dueño tiene a mano. La
+        respuesta no distingue "no existe" de "no es profesor": separarlas
+        convertiría este endpoint en una forma de averiguar qué correos están
+        registrados.
+      operationId: addCollaborator
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "201": { description: Acceso concedido. }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /collaborators/{courseId}/{userId}:
+    delete:
+      tags: [Autoría]
+      summary: Retira el acceso de un coautor
+      operationId: removeCollaborator
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Acceso retirado. }
+        "404": { $ref: "#/components/responses/Problema" }
+
   /admin/metrics:
     get:
       tags: [Administración]
@@ -1526,6 +1614,16 @@ components:
       type: http
       scheme: bearer
   schemas:
+    Colaborador:
+      type: object
+      required: [user_id, email, role]
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        role: { type: string, enum: [editor] }
+        added_at: { type: string, format: date-time }
+
     Revision:
       type: object
       required: [id, resource_id, revision_number, created_at]

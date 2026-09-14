@@ -42,6 +42,10 @@ type Deps struct {
 	Metricas Metricas
 	// Revisiones guarda el historial de contenido de los recursos de texto.
 	Revisiones Revisiones
+	// Colaboradores gestiona la coautoría de un curso.
+	Colaboradores Colaboradores
+	// Exportacion reúne los datos personales de una cuenta.
+	Exportacion Exportacion
 	// Auditor deja constancia en la bitácora inmutable de las acciones que no
 	// pasan por un servicio de aplicación.
 	Auditor Auditor
@@ -73,6 +77,8 @@ func NewRouter(d Deps) http.Handler {
 	h.registerIframes(mux)
 	h.registerMetricas(mux)
 	h.registerRevisiones(mux)
+	h.registerColaboradores(mux)
+	h.registerExportacion(mux)
 	h.registerOperacion(mux)
 
 	return Chain(mux,

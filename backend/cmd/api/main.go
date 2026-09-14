@@ -78,7 +78,8 @@ func main() {
 	authSvc := auth.NewService(userRepo, m, cfg.PublicBaseURL, cfg.SessionTTL)
 	adminSvc := admin.NewService(userRepo)
 	iframeRepo := postgres.NewIframeRepo(pool)
-	coursesSvc := courses.NewService(courseRepo, iframeRepo)
+	colaboradoresRepo := postgres.NewColaboradoresRepo(pool)
+	coursesSvc := courses.NewService(courseRepo, iframeRepo, colaboradoresRepo)
 	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, progressRepo, iframeRepo)
 	progresoSvc := progreso.NewService(progressRepo, enrollmentRepo, courseRepo, quizRepo, badgeRepo, storageClient, userRepo)
 	// El servicio de quizzes avisa al de progreso al cerrar un intento, porque
@@ -100,12 +101,14 @@ func main() {
 		Auth: authSvc, Admin: adminSvc, Courses: coursesSvc, Enrollments: enrollmentsSvc,
 		Quizzes: quizzesSvc, Progreso: progresoSvc,
 		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
-		Antimalware: escaner,
-		Iframes:     iframeRepo,
-		Metricas:    postgres.NewMetricasRepo(pool),
-		Revisiones:  postgres.NewRevisionesRepo(pool),
-		Auditor:     userRepo,
-		Redis:       rdb, Queue: queue.NuevoEncolador(queueClient),
+		Antimalware:   escaner,
+		Iframes:       iframeRepo,
+		Metricas:      postgres.NewMetricasRepo(pool),
+		Revisiones:    postgres.NewRevisionesRepo(pool),
+		Colaboradores: colaboradoresRepo,
+		Exportacion:   postgres.NewExportacionRepo(pool),
+		Auditor:       userRepo,
+		Redis:         rdb, Queue: queue.NuevoEncolador(queueClient),
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
 	})

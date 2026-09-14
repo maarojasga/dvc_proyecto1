@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, type Session } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { DescargarMisDatos } from "@/components/DescargarMisDatos";
 
 /**
  * Sesiones activas del usuario, con revocación.
@@ -111,6 +112,7 @@ export default function SesionesPage() {
           </li>
         ))}
       </ul>
+      <DescargarMisDatos />
     </div>
   );
 }
