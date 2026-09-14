@@ -1,5 +1,7 @@
 "use client";
 
+import { useI18n } from "@/lib/i18n";
+
 /**
  * Visor de PDF.
  *
@@ -19,11 +21,12 @@ export function VisorPDF({
   titulo: string;
   descargable: boolean;
 }) {
+  const { t } = useI18n();
   return (
     <div className="stack">
       <iframe
         src={src}
-        title={`Documento: ${titulo}`}
+        title={t("pdf.documento", { titulo })}
         style={{
           width: "100%",
           height: "min(75vh, 900px)",
@@ -34,11 +37,9 @@ export function VisorPDF({
       />
       <p className="muted">
         <a href={src} target="_blank" rel="noopener noreferrer">
-          Abrir el documento en una pestaña nueva
+          {t("pdf.abrir")}
         </a>
-        {descargable
-          ? " · Desde ahí puedes descargarlo."
-          : " · El autor no habilitó la descarga."}
+        {descargable ? t("pdf.descargable") : t("pdf.noDescargable")}
       </p>
     </div>
   );

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n } from "@/lib/i18n";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -14,6 +15,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const router = useRouter();
   const { refresh } = useAuth();
+  const { t } = useI18n();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -26,7 +28,7 @@ export default function LoginPage() {
       else if (user.role === "teacher") router.push("/profesor");
       else router.push("/mis-cursos");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo iniciar sesión");
+      setError(e instanceof ApiError ? e.message : t("auth.login.error"));
     } finally {
       setSubmitting(false);
     }
@@ -34,8 +36,8 @@ export default function LoginPage() {
 
   return (
     <div className="columna-estrecha">
-      <h1>Iniciar sesión</h1>
-      <p className="muted">Entra con el correo y la clave de tu cuenta.</p>
+      <h1>{t("auth.login.titulo")}</h1>
+      <p className="muted">{t("auth.login.subtitulo")}</p>
       {error && (
         <p className="error-banner" role="alert">
           {error}
@@ -43,7 +45,7 @@ export default function LoginPage() {
       )}
       <form onSubmit={handleSubmit} className="stack">
         <div className="form-field">
-          <label htmlFor="email">Correo electrónico</label>
+          <label htmlFor="email">{t("auth.correo")}</label>
           <input
             id="email"
             type="email"
@@ -55,13 +57,13 @@ export default function LoginPage() {
         </div>
         <div className="form-field">
           <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
-            <label htmlFor="password" style={{ marginBottom: 0 }}>Contraseña</label>
+            <label htmlFor="password" style={{ marginBottom: 0 }}>{t("auth.contrasena")}</label>
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               style={{ background: "transparent", border: "none", color: "#3b82f6", cursor: "pointer", fontSize: "0.8rem", padding: "0 4px", textDecoration: "underline" }}
             >
-              {showPassword ? "Ocultar" : "Mostrar"}
+              {showPassword ? t("auth.ocultar") : t("auth.mostrar")}
             </button>
           </div>
           <input
@@ -74,14 +76,14 @@ export default function LoginPage() {
           />
         </div>
         <button type="submit" disabled={submitting}>
-          {submitting ? "Ingresando…" : "Ingresar"}
+          {submitting ? t("auth.login.enviando") : t("auth.login.enviar")}
         </button>
       </form>
       <p>
-        <Link href="/restablecer-contrasena">¿Olvidaste tu contraseña?</Link>
+        <Link href="/restablecer-contrasena">{t("auth.login.olvide")}</Link>
       </p>
       <p>
-        ¿No tienes cuenta? <Link href="/registro">Regístrate</Link>
+        {t("auth.login.sinCuenta")} <Link href="/registro">{t("auth.login.registrate")}</Link>
       </p>
     </div>
   );

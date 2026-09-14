@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, type Course, ApiError } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 export default function TeacherDashboardPage() {
   const [courses, setCourses] = useState<Course[] | null>(null);
@@ -10,6 +11,7 @@ export default function TeacherDashboardPage() {
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const { t } = useI18n();
 
   useEffect(() => {
     load();
@@ -20,7 +22,7 @@ export default function TeacherDashboardPage() {
       const res = await api.listMyCourses();
       setCourses(res.items ?? []);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudieron cargar tus cursos");
+      setError(e instanceof ApiError ? e.message : t("profesor.error"));
     }
   }
 
@@ -32,7 +34,7 @@ export default function TeacherDashboardPage() {
       const res = await api.createCourse({ slug, title });
       window.location.href = `/profesor/versiones/${res.version_id}`;
     } catch (e) {
-      setError(e instanceof ApiError ? [e.message, ...(e.details ?? [])].join(" ") : "No se pudo crear el curso");
+      setError(e instanceof ApiError ? [e.message, ...(e.details ?? [])].join(" ") : t("profesor.errorCrear"));
     } finally {
       setSubmitting(false);
     }
@@ -42,15 +44,15 @@ export default function TeacherDashboardPage() {
     <div>
       <header className="page-header">
         <div>
-          <h1>Autoría de cursos</h1>
-          <p>Crea borradores y publica versiones. Una versión publicada es inmutable.</p>
+          <h1>{t("profesor.titulo")}</h1>
+          <p>{t("profesor.subtitulo")}</p>
         </div>
       </header>
 
       <section className="card">
         <header>
-          <h2>Nuevo curso</h2>
-          <p>El curso nace como borrador editable.</p>
+          <h2>{t("profesor.nuevoCurso")}</h2>
+          <p>{t("profesor.nuevoCursoAyuda")}</p>
         </header>
         {error && (
           <p className="error-banner" role="alert">
@@ -59,37 +61,37 @@ export default function TeacherDashboardPage() {
         )}
         <form onSubmit={handleCreate} className="stack">
           <div className="form-field">
-            <label htmlFor="title">Título</label>
+            <label htmlFor="title">{t("comun.titulo")}</label>
             <input id="title" required value={title} onChange={(e) => setTitle(e.target.value)} />
           </div>
           <div className="form-field">
-            <label htmlFor="slug">Slug (identificador en la URL)</label>
+            <label htmlFor="slug">{t("profesor.slug")}</label>
             <input
               id="slug"
               required
               pattern="[a-z0-9-]+"
-              placeholder="introduccion-a-cloud"
+              placeholder={t("profesor.slugPlaceholder")}
               value={slug}
               onChange={(e) => setSlug(e.target.value)}
             />
           </div>
           <button type="submit" disabled={submitting}>
-            {submitting ? "Creando…" : "Crear borrador"}
+            {submitting ? t("profesor.creando") : t("profesor.crearBorrador")}
           </button>
         </form>
       </section>
 
-      <h2>Mis cursos</h2>
-      {courses === null && <p role="status">Cargando…</p>}
-      {courses?.length === 0 && <p>Aún no has creado ningún curso.</p>}
+      <h2>{t("nav.misCursos")}</h2>
+      {courses === null && <p role="status">{t("comun.cargando")}</p>}
+      {courses?.length === 0 && <p>{t("profesor.sinCursos")}</p>}
       <ul className="stack" style={{ listStyle: "none", padding: 0 }}>
         {courses?.map((c) => (
           <li key={c.ID} className="card">
             <strong>{c.Slug}</strong>
-            <p className="badge">{c.CurrentPublishedVersionID ? "Publicado" : "Sin publicar"}</p>
+            <p className="badge">{c.CurrentPublishedVersionID ? t("profesor.publicado") : t("profesor.sinPublicar")}</p>
             {c.CurrentPublishedVersionID && (
               <p>
-                <Link href={`/profesor/versiones/${c.CurrentPublishedVersionID}`}>Ver versión publicada</Link>
+                <Link href={`/profesor/versiones/${c.CurrentPublishedVersionID}`}>{t("profesor.verPublicada")}</Link>
               </p>
             )}
           </li>

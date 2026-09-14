@@ -109,9 +109,51 @@ export async function checksum(archivo: File): Promise<string> {
   }
 }
 
+/**
+ * FaseDeCarga es en qué punto está la subida.
+ *
+ * Se emite la fase y no el texto porque este módulo no es un componente y no
+ * ve el idioma elegido: quien pinta la barra traduce la fase con el catálogo,
+ * y así el progreso de una subida se lee en el mismo idioma que el resto de
+ * la pantalla.
+ */
+export type FaseDeCarga =
+  | "huella"
+  | "preparando"
+  | "subiendo"
+  | "verificando"
+  | "encolado"
+  | "listo"
+  | "retomando"
+  | "iniciando"
+  | "parteSubida"
+  | "parteEnCurso";
+
 export interface AvanceDeCarga {
   porcentaje: number;
-  texto: string;
+  fase: FaseDeCarga;
+  /** Número de parte y total, solo en las fases multipart. */
+  numero?: number;
+  total?: number;
+}
+
+/** ClaveDeErrorDeCarga identifica el fallo, por el mismo motivo que la fase. */
+export type ClaveDeErrorDeCarga = "subida" | "parte" | "etag";
+
+/**
+ * ErrorDeCarga es un fallo de la subida con los datos para explicarlo.
+ *
+ * El mensaje que hereda de Error queda en la clave, que no se enseña: el texto
+ * legible lo produce el catálogo a partir de `clave` y `datos`.
+ */
+export class ErrorDeCarga extends Error {
+  constructor(
+    readonly clave: ClaveDeErrorDeCarga,
+    readonly datos: Record<string, string | number> = {},
+  ) {
+    super(clave);
+    this.name = "ErrorDeCarga";
+  }
 }
 
 export interface OpcionesDeCarga {
@@ -131,9 +173,10 @@ export interface OpcionesDeCarga {
  */
 export async function subirArchivo(opciones: OpcionesDeCarga): Promise<CargaVerificada> {
   const { versionId, resourceId, archivo, alAvanzar, senal } = opciones;
-  const avisar = (porcentaje: number, texto: string) => alAvanzar?.({ porcentaje, texto });
+  const avisar: Avisar = (porcentaje, fase, partes) =>
+    alAvanzar?.({ porcentaje, fase, ...partes });
 
-  avisar(0, "Calculando la huella del archivo…");
+  avisar(0, "huella");
   const huella = await checksum(archivo);
 
   if (archivo.size <= MINIMO_MULTIPART) {
@@ -147,22 +190,28 @@ interface Contexto {
   resourceId: string;
   archivo: File;
   huella: string;
-  avisar: (porcentaje: number, texto: string) => void;
+  avisar: Avisar;
   senal?: AbortSignal;
 }
 
+type Avisar = (
+  porcentaje: number,
+  fase: FaseDeCarga,
+  partes?: { numero: number; total: number },
+) => void;
+
 async function subidaSimple(ctx: Contexto): Promise<CargaVerificada> {
   const { versionId, resourceId, archivo, huella, avisar, senal } = ctx;
-  avisar(10, "Preparando la subida…");
+  avisar(10, "preparando");
   const { upload_url } = await api.requestUploadUrl(versionId, resourceId, archivo.type || "application/octet-stream");
 
-  avisar(30, "Subiendo…");
+  avisar(30, "subiendo");
   const res = await fetch(upload_url, { method: "PUT", body: archivo, signal: senal });
-  if (!res.ok) throw new Error(`La subida falló (HTTP ${res.status}).`);
+  if (!res.ok) throw new ErrorDeCarga("subida", { status: res.status });
 
-  avisar(85, "Verificando integridad y seguridad…");
+  avisar(85, "verificando");
   const resultado = await api.confirmUpload(versionId, resourceId, huella);
-  avisar(100, resultado.status === "queued" ? "En cola de procesamiento" : "Archivo listo");
+  avisar(100, resultado.status === "queued" ? "encolado" : "listo");
   return resultado;
 }
 
@@ -178,7 +227,7 @@ async function subidaMultipart(ctx: Contexto): Promise<CargaVerificada> {
   // servidor en vez de fiarse del registro local, que puede estar desfasado.
   const recibidas = new Map<number, ParteCargada>();
   if (uploadId) {
-    avisar(0, "Retomando la subida interrumpida…");
+    avisar(0, "retomando");
     try {
       const { parts } = await api.listMultipartParts(versionId, resourceId, uploadId);
       for (const p of parts) recibidas.set(p.part_number, p);
@@ -190,7 +239,7 @@ async function subidaMultipart(ctx: Contexto): Promise<CargaVerificada> {
   }
 
   if (!uploadId) {
-    avisar(0, "Iniciando la subida…");
+    avisar(0, "iniciando");
     const inicio = await api.initiateMultipart(versionId, resourceId, archivo.type || "application/octet-stream");
     uploadId = inicio.upload_id;
     recordarCarga(resourceId, {
@@ -208,33 +257,31 @@ async function subidaMultipart(ctx: Contexto): Promise<CargaVerificada> {
 
     const porcentaje = Math.round((i / total) * 90);
     if (recibidas.has(numero)) {
-      avisar(porcentaje, `Parte ${numero} de ${total} ya estaba subida`);
+      avisar(porcentaje, "parteSubida", { numero, total });
       continue;
     }
 
-    avisar(porcentaje, `Subiendo parte ${numero} de ${total}…`);
+    avisar(porcentaje, "parteEnCurso", { numero, total });
     const trozo = archivo.slice(i * tamanoDeParte, Math.min((i + 1) * tamanoDeParte, archivo.size));
     const { upload_url } = await api.getMultipartPartUrl(versionId, resourceId, uploadId, numero);
     const res = await fetch(upload_url, { method: "PUT", body: trozo, signal: senal });
-    if (!res.ok) throw new Error(`Falló la parte ${numero} (HTTP ${res.status}). Vuelve a intentarlo: se reanudará aquí.`);
+    if (!res.ok) throw new ErrorDeCarga("parte", { numero, status: res.status });
 
     // Sin el ETag real el almacén no puede ensamblar, y un valor inventado
     // haría fallar el cierre con un error mucho menos claro. En origen cruzado
     // el navegador solo lo expone si el almacén publica Access-Control-Expose-Headers.
     const etag = res.headers.get("ETag");
     if (!etag) {
-      throw new Error(
-        "El almacenamiento no expuso el ETag de la parte. Añade ETag a Access-Control-Expose-Headers en MinIO o el CDN.",
-      );
+      throw new ErrorDeCarga("etag");
     }
     recibidas.set(numero, { part_number: numero, etag });
   }
 
-  avisar(95, "Verificando integridad y seguridad…");
+  avisar(95, "verificando");
   const partes = Array.from(recibidas.values()).sort((a, b) => a.part_number - b.part_number);
   const resultado = await api.completeMultipart(versionId, resourceId, uploadId, partes, huella);
 
   olvidarCarga(resourceId);
-  avisar(100, resultado.status === "queued" ? "En cola de procesamiento" : "Archivo listo");
+  avisar(100, resultado.status === "queued" ? "encolado" : "listo");
   return resultado;
 }

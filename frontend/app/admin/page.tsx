@@ -11,11 +11,13 @@ import {
   type Session,
   type User,
 } from "@/lib/api";
+import { useI18n, type Clave } from "@/lib/i18n";
 
 const ROLES: User["role"][] = ["student", "teacher", "admin"];
 const STATUSES: User["status"][] = ["pending_verification", "active", "suspended"];
 
 export default function AdminDashboardPage() {
+  const { t, locale } = useI18n();
   const [users, setUsers] = useState<User[] | null>(null);
   const [q, setQ] = useState("");
   const [error, setError] = useState("");
@@ -32,7 +34,7 @@ export default function AdminDashboardPage() {
       const res = await api.listUsers(search ? { q: search } : {});
       setUsers(res.items ?? []);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo cargar la lista de usuarios");
+      setError(e instanceof ApiError ? e.message : t("admin.errorUsuarios"));
     }
   }
 
@@ -42,7 +44,7 @@ export default function AdminDashboardPage() {
       await api.updateUserRole(id, role);
       load(q);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo actualizar el rol");
+      setError(e instanceof ApiError ? e.message : t("admin.errorRol"));
     }
   }
 
@@ -52,7 +54,7 @@ export default function AdminDashboardPage() {
       await api.updateUserStatus(id, status);
       load(q);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo actualizar el estado");
+      setError(e instanceof ApiError ? e.message : t("admin.errorEstado"));
     }
   }
 
@@ -60,8 +62,8 @@ export default function AdminDashboardPage() {
     <div>
       <header className="page-header">
         <div>
-          <h1>Administración</h1>
-          <p>Cuentas, roles, sesiones y la bitácora inmutable de la plataforma.</p>
+          <h1>{t("nav.administracion")}</h1>
+          <p>{t("admin.subtitulo")}</p>
         </div>
       </header>
 
@@ -72,12 +74,17 @@ export default function AdminDashboardPage() {
       )}
       {notice && <p className="success-banner">{notice}</p>}
 
-      <InviteTeacherForm onInvited={() => { setNotice("Profesor creado. Se le envió un correo para establecer su contraseña."); load(q); }} />
+      <InviteTeacherForm
+        onInvited={() => {
+          setNotice(t("admin.profesorCreado"));
+          load(q);
+        }}
+      />
 
       <section className="card">
         <header>
-          <h2>Usuarios</h2>
-          <p>Cambia el rol o el estado de una cuenta, y revisa sus sesiones abiertas.</p>
+          <h2>{t("admin.usuarios")}</h2>
+          <p>{t("admin.usuariosAyuda")}</p>
         </header>
         <form
           role="search"
@@ -88,23 +95,23 @@ export default function AdminDashboardPage() {
           }}
         >
           <div className="form-field">
-            <label htmlFor="q">Buscar por nombre o correo</label>
+            <label htmlFor="q">{t("admin.buscarUsuario")}</label>
             <input id="q" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
-          <button type="submit">Buscar</button>
+          <button type="submit">{t("comun.buscar")}</button>
         </form>
 
-        {users === null && <p>Cargando…</p>}
+        {users === null && <p>{t("comun.cargando")}</p>}
         {users && (
           <div style={{ overflowX: "auto" }}>
             <table>
               <thead>
                 <tr>
-                  <th>Nombre</th>
-                  <th>Correo</th>
-                  <th>Rol</th>
-                  <th>Estado</th>
-                  <th>Sesiones</th>
+                  <th>{t("admin.colNombre")}</th>
+                  <th>{t("admin.colCorreo")}</th>
+                  <th>{t("admin.colRol")}</th>
+                  <th>{t("admin.colEstado")}</th>
+                  <th>{t("admin.colSesiones")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -114,7 +121,7 @@ export default function AdminDashboardPage() {
                     <td>{u.email}</td>
                     <td>
                       <label className="visually-hidden" htmlFor={`role-${u.id}`}>
-                        Rol de {u.full_name}
+                        {t("admin.rolDe", { nombre: u.full_name })}
                       </label>
                       <select id={`role-${u.id}`} value={u.role} onChange={(e) => handleRoleChange(u.id, e.target.value)}>
                         {ROLES.map((r) => (
@@ -126,7 +133,7 @@ export default function AdminDashboardPage() {
                     </td>
                     <td>
                       <label className="visually-hidden" htmlFor={`status-${u.id}`}>
-                        Estado de {u.full_name}
+                        {t("admin.estadoDe", { nombre: u.full_name })}
                       </label>
                       <select id={`status-${u.id}`} value={u.status} onChange={(e) => handleStatusChange(u.id, e.target.value)}>
                         {STATUSES.map((s) => (
@@ -164,43 +171,44 @@ export default function AdminDashboardPage() {
  * tocar el cliente.
  */
 function PanelDeMetricas({ onError }: { onError: (m: string) => void }) {
+  const { t, locale } = useI18n();
   const [metricas, setMetricas] = useState<Metricas | null>(null);
 
   useEffect(() => {
     api
       .platformMetrics()
       .then(setMetricas)
-      .catch((e) => onError(e instanceof ApiError ? e.message : "No se pudieron cargar las métricas"));
-  }, [onError]);
+      .catch((e) => onError(e instanceof ApiError ? e.message : t("admin.errorMetricas")));
+  }, [onError, t]);
 
   if (!metricas) return null;
 
-  const bloques: [string, Conteo][] = [
-    ["Usuarios", metricas.usuarios],
-    ["Versiones de curso", metricas.cursos],
-    ["Inscripciones", metricas.inscripciones],
-    ["Insignias", metricas.insignias],
-    ["Multimedia", metricas.multimedia],
-    ["Intentos de evaluación", metricas.evaluaciones],
+  const bloques: [Clave, Conteo][] = [
+    ["admin.metricaUsuarios", metricas.usuarios],
+    ["admin.metricaCursos", metricas.cursos],
+    ["admin.metricaInscripciones", metricas.inscripciones],
+    ["admin.metricaInsignias", metricas.insignias],
+    ["admin.metricaMultimedia", metricas.multimedia],
+    ["admin.metricaEvaluaciones", metricas.evaluaciones],
   ];
 
   return (
     <section className="card">
       <header>
-        <h2>Métricas de la plataforma</h2>
+        <h2>{t("admin.metricas")}</h2>
       </header>
       <ul className="rejilla">
-        {bloques.map(([titulo, conteo]) => (
-          <li key={titulo}>
+        {bloques.map(([clave, conteo]) => (
+          <li key={clave}>
             <article className="card">
-              <h3 style={{ margin: 0 }}>{titulo}</h3>
+              <h3 style={{ margin: 0 }}>{t(clave)}</h3>
               <p style={{ fontSize: "2rem", margin: "0.25rem 0", fontWeight: 600 }}>{conteo.total}</p>
               {Object.keys(conteo.desglose).length === 0 ? (
-                <p className="muted">Sin registros todavía.</p>
+                <p className="muted">{t("admin.sinRegistros")}</p>
               ) : (
                 <ul className="stack" style={{ gap: "0.2rem" }}>
                   {Object.entries(conteo.desglose)
-                    .sort(([a], [b]) => a.localeCompare(b, "es"))
+                    .sort(([a], [b]) => a.localeCompare(b, locale))
                     .map(([clave, n]) => (
                       <li key={clave} className="muted">
                         {clave}: <strong>{n}</strong>
@@ -225,6 +233,7 @@ function PanelDeMetricas({ onError }: { onError: (m: string) => void }) {
  * surte efecto de inmediato sobre los cursos ya publicados.
  */
 function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
+  const { t } = useI18n();
   const [items, setItems] = useState<IframeDestino[] | null>(null);
   const [sandbox, setSandbox] = useState("");
   const [host, setHost] = useState("");
@@ -239,9 +248,9 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
       setItems(res.items ?? []);
       setSandbox(res.sandbox);
     } catch (e) {
-      onError(e instanceof ApiError ? e.message : "No se pudo cargar la lista de destinos");
+      onError(e instanceof ApiError ? e.message : t("admin.errorDestinos"));
     }
-  }, [onError]);
+  }, [onError, t]);
 
   useEffect(() => {
     cargar();
@@ -263,14 +272,14 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
       setSubdominios(false);
       await cargar();
     } catch (err) {
-      onError(err instanceof ApiError ? err.message : "No se pudo autorizar el destino");
+      onError(err instanceof ApiError ? err.message : t("admin.errorAutorizar"));
     } finally {
       setOcupado(false);
     }
   }
 
   async function quitar(d: IframeDestino) {
-    if (!confirm(`¿Quitar ${d.host} de la lista? Los recursos ya publicados que lo usen dejarán de mostrarse.`)) {
+    if (!confirm(t("admin.confirmarQuitarDestino", { host: d.host }))) {
       return;
     }
     setOcupado(true);
@@ -278,7 +287,7 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
       await api.removeIframeDestino(d.id);
       await cargar();
     } catch (err) {
-      onError(err instanceof ApiError ? err.message : "No se pudo quitar el destino");
+      onError(err instanceof ApiError ? err.message : t("admin.errorQuitarDestino"));
     } finally {
       setOcupado(false);
     }
@@ -287,16 +296,13 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
   return (
     <section className="card">
       <header>
-        <h2>Destinos incrustables</h2>
-        <p>
-          Solo estos dominios pueden aparecer en un recurso de tipo iframe. Todo lo demás se
-          rechaza al guardarlo y al servirlo.
-        </p>
+        <h2>{t("admin.destinos")}</h2>
+        <p>{t("admin.destinosAyuda")}</p>
       </header>
 
       <form className="barra-busqueda" onSubmit={agregar}>
         <div className="form-field">
-          <label htmlFor="iframe-host">Dominio</label>
+          <label htmlFor="iframe-host">{t("admin.dominio")}</label>
           <input
             id="iframe-host"
             value={host}
@@ -306,7 +312,7 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
           />
         </div>
         <div className="form-field">
-          <label htmlFor="iframe-permisos">Permisos concedidos</label>
+          <label htmlFor="iframe-permisos">{t("admin.permisos")}</label>
           <input
             id="iframe-permisos"
             value={permisos}
@@ -315,12 +321,12 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
           />
         </div>
         <div className="form-field">
-          <label htmlFor="iframe-desc">Para qué</label>
+          <label htmlFor="iframe-desc">{t("admin.paraQue")}</label>
           <input
             id="iframe-desc"
             value={descripcion}
             onChange={(e) => setDescripcion(e.target.value)}
-            placeholder="Reproductor de vídeo"
+            placeholder={t("admin.paraQuePlaceholder")}
           />
         </div>
         <div className="form-field">
@@ -331,26 +337,25 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
               checked={subdominios}
               onChange={(e) => setSubdominios(e.target.checked)}
             />{" "}
-            Incluir subdominios
+            {t("admin.incluirSubdominios")}
           </label>
         </div>
         <button type="submit" disabled={ocupado || !host.trim()}>
-          Autorizar
+          {t("admin.autorizar")}
         </button>
       </form>
 
       {subdominios && (
         <p className="warning-banner" role="status">
-          Incluir subdominios autoriza también los que ese tercero cree en el futuro, incluido
-          cualquiera que aloje contenido de sus usuarios.
+          {t("admin.avisoSubdominios")}
         </p>
       )}
 
-      {items === null && <p role="status">Cargando…</p>}
+      {items === null && <p role="status">{t("comun.cargando")}</p>}
       {items?.length === 0 && (
         <div className="estado-vacio">
-          <p>No hay ningún destino autorizado.</p>
-          <p>Mientras la lista esté vacía, no se puede guardar ningún recurso incrustado.</p>
+          <p>{t("admin.sinDestinos")}</p>
+          <p>{t("admin.sinDestinosAyuda")}</p>
         </div>
       )}
 
@@ -361,17 +366,17 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
               <div className="fila__datos">
                 <p>
                   <strong>{d.host}</strong>{" "}
-                  {d.include_subdomains && <span className="badge">y subdominios</span>}{" "}
+                  {d.include_subdomains && <span className="badge">{t("admin.ySubdominios")}</span>}{" "}
                   {d.permissions ? (
                     <span className="badge">{d.permissions}</span>
                   ) : (
-                    <span className="badge">sin permisos extra</span>
+                    <span className="badge">{t("admin.sinPermisosExtra")}</span>
                   )}
                 </p>
                 {d.description && <p className="muted">{d.description}</p>}
               </div>
               <button className="secondary" disabled={ocupado} onClick={() => quitar(d)}>
-                Quitar
+                {t("comun.quitar")}
               </button>
             </li>
           ))}
@@ -380,8 +385,8 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
 
       {sandbox && (
         <p className="muted">
-          Todo marco se sirve con <code>sandbox=&quot;{sandbox}&quot;</code>, que le niega navegar la
-          ventana principal, abrir descargas y mostrar diálogos modales.
+          {t("admin.sandboxAntes")} <code>sandbox=&quot;{sandbox}&quot;</code>
+          {t("admin.sandboxDespues")}
         </p>
       )}
     </section>
@@ -396,6 +401,7 @@ function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
  * está en falta.
  */
 function SesionesDeUsuario({ usuario, onError }: { usuario: User; onError: (m: string) => void }) {
+  const { t } = useI18n();
   const [sesiones, setSesiones] = useState<Session[] | null>(null);
   const [ocupado, setOcupado] = useState(false);
 
@@ -405,7 +411,7 @@ function SesionesDeUsuario({ usuario, onError }: { usuario: User; onError: (m: s
       const { items } = await api.listUserSessions(usuario.id);
       setSesiones(items ?? []);
     } catch (e) {
-      onError(e instanceof ApiError ? e.message : "No se pudieron cargar las sesiones");
+      onError(e instanceof ApiError ? e.message : t("sesiones.error"));
     } finally {
       setOcupado(false);
     }
@@ -417,7 +423,7 @@ function SesionesDeUsuario({ usuario, onError }: { usuario: User; onError: (m: s
       await api.revokeUserSessions(usuario.id);
       await cargar();
     } catch (e) {
-      onError(e instanceof ApiError ? e.message : "No se pudieron revocar las sesiones");
+      onError(e instanceof ApiError ? e.message : t("sesiones.errorRevocarTodas"));
     } finally {
       setOcupado(false);
     }
@@ -426,17 +432,17 @@ function SesionesDeUsuario({ usuario, onError }: { usuario: User; onError: (m: s
   if (sesiones === null) {
     return (
       <button className="secondary" disabled={ocupado} onClick={cargar}>
-        Ver
+        {t("comun.ver")}
       </button>
     );
   }
 
   return (
     <span className="row">
-      <span className="badge">{sesiones.length} activas</span>
+      <span className="badge">{t("admin.sesionesActivas", { n: sesiones.length })}</span>
       {sesiones.length > 0 && (
         <button className="secondary" disabled={ocupado} onClick={revocar}>
-          Cerrar todas
+          {t("admin.cerrarTodas")}
         </button>
       )}
     </span>
@@ -445,6 +451,7 @@ function SesionesDeUsuario({ usuario, onError }: { usuario: User; onError: (m: s
 
 /** Bitácora inmutable de acciones administrativas y de identidad. */
 function Auditoria({ onError }: { onError: (m: string) => void }) {
+  const { t, locale } = useI18n();
   const [entradas, setEntradas] = useState<AuditEntry[] | null>(null);
   const [accion, setAccion] = useState("");
 
@@ -454,10 +461,10 @@ function Auditoria({ onError }: { onError: (m: string) => void }) {
         const { items } = await api.listAudit(filtro ? { action: filtro, limit: 50 } : { limit: 50 });
         setEntradas(items ?? []);
       } catch (e) {
-        onError(e instanceof ApiError ? e.message : "No se pudo cargar la auditoría");
+        onError(e instanceof ApiError ? e.message : t("admin.errorAuditoria"));
       }
     },
-    [onError],
+    [onError, t],
   );
 
   useEffect(() => {
@@ -467,8 +474,8 @@ function Auditoria({ onError }: { onError: (m: string) => void }) {
   return (
     <section className="card">
       <header>
-        <h2>Auditoría</h2>
-        <p>Registro inmutable: la base rechaza modificarlo o borrarlo.</p>
+        <h2>{t("admin.auditoria")}</h2>
+        <p>{t("admin.auditoriaAyuda")}</p>
       </header>
 
       <form
@@ -480,7 +487,7 @@ function Auditoria({ onError }: { onError: (m: string) => void }) {
         }}
       >
         <div className="form-field">
-          <label htmlFor="audit-action">Filtrar por acción</label>
+          <label htmlFor="audit-action">{t("admin.filtrarAccion")}</label>
           <input
             id="audit-action"
             value={accion}
@@ -488,13 +495,13 @@ function Auditoria({ onError }: { onError: (m: string) => void }) {
             placeholder="user.status_updated"
           />
         </div>
-        <button type="submit">Filtrar</button>
+        <button type="submit">{t("admin.filtrar")}</button>
       </form>
 
-      {entradas === null && <p>Cargando…</p>}
+      {entradas === null && <p>{t("comun.cargando")}</p>}
       {entradas && entradas.length === 0 && (
         <div className="estado-vacio">
-          <p>Sin entradas para ese filtro.</p>
+          <p>{t("admin.sinEntradas")}</p>
         </div>
       )}
       {entradas && entradas.length > 0 && (
@@ -502,17 +509,17 @@ function Auditoria({ onError }: { onError: (m: string) => void }) {
           <table>
             <thead>
               <tr>
-                <th>Cuándo</th>
-                <th>Acción</th>
-                <th>Actor</th>
-                <th>Entidad</th>
-                <th>IP</th>
+                <th>{t("admin.colCuando")}</th>
+                <th>{t("admin.colAccion")}</th>
+                <th>{t("admin.colActor")}</th>
+                <th>{t("admin.colEntidad")}</th>
+                <th>{t("admin.colIP")}</th>
               </tr>
             </thead>
             <tbody>
               {entradas.map((e) => (
                 <tr key={e.id}>
-                  <td>{new Date(e.created_at).toLocaleString("es-CO")}</td>
+                  <td>{new Date(e.created_at).toLocaleString(locale)}</td>
                   <td><code>{e.action}</code></td>
                   <td>{e.actor_email || "—"}</td>
                   <td>{e.entity_type}</td>
@@ -528,6 +535,7 @@ function Auditoria({ onError }: { onError: (m: string) => void }) {
 }
 
 function InviteTeacherForm({ onInvited }: { onInvited: () => void }) {
+  const { t } = useI18n();
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [error, setError] = useState("");
@@ -543,7 +551,7 @@ function InviteTeacherForm({ onInvited }: { onInvited: () => void }) {
       setFullName("");
       onInvited();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo crear el profesor");
+      setError(e instanceof ApiError ? e.message : t("admin.errorProfesor"));
     } finally {
       setSubmitting(false);
     }
@@ -552,22 +560,22 @@ function InviteTeacherForm({ onInvited }: { onInvited: () => void }) {
   return (
     <form onSubmit={handleSubmit} className="card stack">
       <header>
-        <h2>Invitar profesor</h2>
-        <p>Los profesores no se autorregistran: reciben un enlace para fijar su clave.</p>
+        <h2>{t("admin.invitarProfesor")}</h2>
+        <p>{t("admin.invitarAyuda")}</p>
       </header>
       {error && <p className="error-banner">{error}</p>}
       <div className="row">
         <div className="form-field" style={{ flex: 1 }}>
-          <label htmlFor="teacher-name">Nombre completo</label>
+          <label htmlFor="teacher-name">{t("auth.nombreCompleto")}</label>
           <input id="teacher-name" required value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </div>
         <div className="form-field" style={{ flex: 1 }}>
-          <label htmlFor="teacher-email">Correo</label>
+          <label htmlFor="teacher-email">{t("admin.colCorreo")}</label>
           <input id="teacher-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
         </div>
       </div>
       <button type="submit" disabled={submitting}>
-        {submitting ? "Creando…" : "Crear profesor"}
+        {submitting ? t("profesor.creando") : t("admin.crearProfesor")}
       </button>
     </form>
   );

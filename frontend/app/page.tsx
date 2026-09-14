@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, type Version, ApiError } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { useI18n, useTraductorEstable } from "@/lib/i18n";
 
 // Los filtros del catálogo (punto 10 del alcance mínimo) los resuelve la API:
 // aquí solo se recogen y se mandan como parámetros de consulta. Filtrar en el
@@ -20,6 +20,7 @@ const SIN_FILTROS: Filtros = { q: "", category: "", level: "" };
 
 export default function HomePage() {
   const { t } = useI18n();
+  const traducir = useTraductorEstable();
   const [courses, setCourses] = useState<Version[] | null>(null);
   const [error, setError] = useState("");
   const [filtros, setFiltros] = useState<Filtros>(SIN_FILTROS);
@@ -42,9 +43,9 @@ export default function HomePage() {
       const res = await api.listCatalog(params);
       setCourses(res.items ?? []);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo cargar el catálogo");
+      setError(e instanceof ApiError ? e.message : traducir("catalogo.error"));
     }
-  }, []);
+  }, [traducir]);
 
   useEffect(() => {
     cargar(SIN_FILTROS);

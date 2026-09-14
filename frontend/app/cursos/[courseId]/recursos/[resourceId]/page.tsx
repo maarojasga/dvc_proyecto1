@@ -10,6 +10,7 @@ import { VisorPDF } from "@/components/VisorPDF";
 import { QuizPlayer } from "@/components/QuizPlayer";
 import { MarcoIncrustado } from "@/components/MarcoIncrustado";
 import { useProgressReporting } from "@/lib/useProgressReporting";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * Consumo de un recurso por parte del estudiante.
@@ -21,6 +22,7 @@ import { useProgressReporting } from "@/lib/useProgressReporting";
 export default function RecursoPage() {
   const params = useParams<{ courseId: string; resourceId: string }>();
   const { courseId, resourceId } = params;
+  const { t } = useI18n();
   // Las pistas se piden aparte del contenido: el servidor las autoriza por la
   // misma vía, y un recurso sin subtítulos no debería fallar por eso.
   const [pistas, setPistas] = useState<PistaDeSubtitulos[]>([]);
@@ -45,18 +47,18 @@ export default function RecursoPage() {
       } catch (e) {
         if (cancelado) return;
         if (e instanceof ApiError && e.code === "media_not_ready") {
-          setAviso("Este recurso todavía se está procesando. Vuelve en unos minutos.");
+          setAviso(t("recurso.procesando"));
         } else if (e instanceof ApiError && e.status === 404) {
-          setError("El recurso no existe o no tienes acceso a él.");
+          setError(t("recurso.sinAcceso"));
         } else {
-          setError(e instanceof ApiError ? e.message : "No se pudo cargar el recurso");
+          setError(e instanceof ApiError ? e.message : t("recurso.error"));
         }
       }
     })();
     return () => {
       cancelado = true;
     };
-  }, [resourceId]);
+  }, [resourceId, t]);
 
   // Solo se reporta progreso una vez confirmado el acceso: reportarlo antes
   // filtraría, por temporización, que el recurso existe aunque el estudiante
@@ -82,7 +84,7 @@ export default function RecursoPage() {
           {error}
         </p>
         <p>
-          <Link href={`/cursos/${courseId}`}>Volver al curso</Link>
+          <Link href={`/cursos/${courseId}`}>{t("recurso.volver")}</Link>
         </p>
       </div>
     );
@@ -95,14 +97,14 @@ export default function RecursoPage() {
           {aviso}
         </p>
         <p>
-          <Link href={`/cursos/${courseId}`}>Volver al curso</Link>
+          <Link href={`/cursos/${courseId}`}>{t("recurso.volver")}</Link>
         </p>
       </div>
     );
   }
 
   if (!contenido) {
-    return <p role="status">Cargando recurso…</p>;
+    return <p role="status">{t("recurso.cargando")}</p>;
   }
 
   return (
@@ -114,7 +116,7 @@ export default function RecursoPage() {
             <span className="badge">{contenido.type}</span>
           </p>
         </div>
-        <Link href={`/cursos/${courseId}`}>Volver al curso</Link>
+        <Link href={`/cursos/${courseId}`}>{t("recurso.volver")}</Link>
       </header>
 
       {(contenido.type === "video" || contenido.type === "audio") && contenido.url && (
@@ -128,7 +130,7 @@ export default function RecursoPage() {
             pistas={pistas}
           />
           {(contenido.position_seconds ?? 0) > 0 && (
-            <p className="muted">Se reanuda donde lo dejaste.</p>
+            <p className="muted">{t("recurso.reanuda")}</p>
           )}
           <Transcripcion resourceId={resourceId} pistas={pistas} />
         </>
@@ -148,7 +150,7 @@ export default function RecursoPage() {
           {contenido.original_url && (
             <p>
               <a href={contenido.original_url} target="_blank" rel="noopener noreferrer">
-                Descargar la presentación original
+                {t("recurso.descargarOriginal")}
               </a>
             </p>
           )}
@@ -178,7 +180,7 @@ export default function RecursoPage() {
       {contenido.type === "link" && contenido.external_url && (
         <p>
           <a href={contenido.external_url} target="_blank" rel="noopener noreferrer">
-            Abrir el recurso externo
+            {t("recurso.abrirExterno")}
           </a>
         </p>
       )}
@@ -190,7 +192,7 @@ export default function RecursoPage() {
       {contenido.type === "file" && contenido.url && (
         <p>
           <a href={contenido.url} target="_blank" rel="noopener noreferrer">
-            Abrir el archivo
+            {t("recurso.abrirArchivo")}
           </a>
         </p>
       )}
@@ -213,6 +215,7 @@ export default function RecursoPage() {
  * dentro de una clase grabada con la búsqueda del navegador.
  */
 function Transcripcion({ resourceId, pistas }: { resourceId: string; pistas: PistaDeSubtitulos[] }) {
+  const { t } = useI18n();
   const [abierta, setAbierta] = useState(false);
   const [texto, setTexto] = useState<string | null>(null);
   const idioma = pistas[0]?.language;
@@ -231,15 +234,15 @@ function Transcripcion({ resourceId, pistas }: { resourceId: string; pistas: Pis
     <section className="stack">
       <div>
         <button className="secondary" onClick={() => setAbierta(!abierta)} aria-expanded={abierta}>
-          {abierta ? "Ocultar la transcripción" : "Ver la transcripción"}
+          {abierta ? t("recurso.ocultarTranscripcion") : t("recurso.verTranscripcion")}
         </button>
       </div>
       {abierta && (
         <div className="card">
           {texto === null ? (
-            <p role="status">Cargando la transcripción…</p>
+            <p role="status">{t("recurso.cargandoTranscripcion")}</p>
           ) : texto === "" ? (
-            <p className="muted">Este material todavía no tiene transcripción.</p>
+            <p className="muted">{t("recurso.sinTranscripcion")}</p>
           ) : (
             <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{texto}</p>
           )}

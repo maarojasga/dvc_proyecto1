@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from "react";
 
+import { useI18n } from "@/lib/i18n";
+
 /** PistaDeSubtitulos es un <track> ya resuelto por el servidor. */
 export interface PistaDeSubtitulos {
   language: string;
@@ -40,6 +42,7 @@ export function ReproductorHLS({
   /** Subtítulos disponibles, ya autorizados por el servidor. */
   pistas?: PistaDeSubtitulos[];
 }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLMediaElement | null>(null);
   // El callback se guarda en una referencia para que cambiarlo no reinicie la
   // reproducción: el efecto solo debe rehacerse si cambia la fuente.
@@ -103,7 +106,7 @@ export function ReproductorHLS({
         ref={ref as React.RefObject<HTMLAudioElement>}
         controls
         preload="metadata"
-        aria-label={`Audio: ${titulo}`}
+        aria-label={t("media.audio", { titulo })}
         style={{ width: "100%" }}
       >
         {pistas.map((p) => (
@@ -119,7 +122,7 @@ export function ReproductorHLS({
       controls
       playsInline
       preload="metadata"
-      aria-label={`Video: ${titulo}`}
+      aria-label={t("media.video", { titulo })}
       style={{ width: "100%", maxHeight: "70vh", background: "#000", borderRadius: "var(--radius)" }}
     >
       {/* Los subtítulos van como <track> nativos: el navegador ya sabe

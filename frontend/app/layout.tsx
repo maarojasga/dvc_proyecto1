@@ -3,6 +3,7 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { I18nProvider } from "@/lib/i18n";
 import { NavBar } from "@/components/NavBar";
+import { SaltarAlContenido } from "@/components/SaltarAlContenido";
 
 export const metadata: Metadata = {
   title: "Plataforma MOOC",
@@ -21,10 +22,8 @@ export default function RootLayout({
   return (
     <html lang="es">
       <body>
-        <a href="#main-content" className="skip-link">
-          Saltar al contenido principal
-        </a>
         <I18nProvider>
+          <SaltarAlContenido />
           <AuthProvider>
             <NavBar />
             <main id="main-content" className="container">

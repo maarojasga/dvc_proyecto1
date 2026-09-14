@@ -5,17 +5,19 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Version, type CourseProgress, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n, type Clave } from "@/lib/i18n";
 
-const progressStatusLabel: Record<CourseProgress["status"], string> = {
-  active: "En curso",
-  withdrawn: "Retirado",
-  completed: "Completado",
-  approved: "Aprobado",
+const claveDeEstado: Record<CourseProgress["status"], Clave> = {
+  active: "estado.active",
+  withdrawn: "estado.withdrawn",
+  completed: "estado.completed",
+  approved: "estado.approved",
 };
 
 export default function CourseDetailPage() {
   const { courseId } = useParams<{ courseId: string }>();
   const { user } = useAuth();
+  const { t } = useI18n();
   const [version, setVersion] = useState<Version | null>(null);
   const [error, setError] = useState("");
   const [enrollMessage, setEnrollMessage] = useState("");
@@ -25,8 +27,8 @@ export default function CourseDetailPage() {
     api
       .getPublishedCourse(courseId)
       .then(setVersion)
-      .catch((e) => setError(e instanceof ApiError ? e.message : "No se pudo cargar el curso"));
-  }, [courseId]);
+      .catch((e) => setError(e instanceof ApiError ? e.message : t("curso.error")));
+  }, [courseId, t]);
 
   const loadProgress = useCallback(() => {
     if (user?.role !== "student") return;
@@ -43,10 +45,10 @@ export default function CourseDetailPage() {
     setEnrollMessage("");
     try {
       await api.enroll(courseId);
-      setEnrollMessage("¡Inscripción realizada! Consulta 'Mis cursos'.");
+      setEnrollMessage(t("curso.inscrito"));
       loadProgress();
     } catch (e) {
-      setEnrollMessage(e instanceof ApiError ? e.message : "No se pudo completar la inscripción");
+      setEnrollMessage(e instanceof ApiError ? e.message : t("curso.errorInscripcion"));
     }
   }
 
@@ -58,7 +60,7 @@ export default function CourseDetailPage() {
     );
   }
   if (!version) {
-    return <p>Cargando curso…</p>;
+    return <p>{t("curso.cargando")}</p>;
   }
 
   return (
@@ -75,7 +77,7 @@ export default function CourseDetailPage() {
         </div>
         {user?.role === "student" && !progress && (
           <div>
-            <button onClick={handleEnroll}>Inscribirme</button>
+            <button onClick={handleEnroll}>{t("curso.inscribirme")}</button>
           </div>
         )}
       </header>
@@ -88,29 +90,32 @@ export default function CourseDetailPage() {
 
       {progress && (
         <div className="card">
-          <h2 style={{ marginTop: 0 }}>Tu avance</h2>
+          <h2 style={{ marginTop: 0 }}>{t("curso.tuAvance")}</h2>
           <p className="row" style={{ alignItems: "center" }}>
-            <span className="badge">{progressStatusLabel[progress.status]}</span>
+            <span className="badge">{t(claveDeEstado[progress.status])}</span>
             <span>
-              {progress.required_completed} / {progress.required_total} recursos obligatorios
-              completados ({progress.required_percent.toFixed(0)}%)
+              {t("curso.recursosCompletados", {
+                hechos: progress.required_completed,
+                total: progress.required_total,
+                pct: progress.required_percent.toFixed(0),
+              })}
             </span>
           </p>
           {progress.quizzes_pending > 0 && (
             <p className="muted">
-              Evaluaciones pendientes de aprobar: {progress.quizzes_pending}
+              {t("curso.evaluacionesPendientes", { n: progress.quizzes_pending })}
             </p>
           )}
           {progress.badge_code && (
             <p className="success-banner" role="status">
-              ¡Insignia obtenida!{" "}
-              <Link href={`/insignias/${progress.badge_code}`}>Ver verificación pública</Link>
+              {t("curso.insigniaObtenida")}{" "}
+              <Link href={`/insignias/${progress.badge_code}`}>{t("curso.verVerificacion")}</Link>
             </p>
           )}
         </div>
       )}
 
-      <h2>Contenido</h2>
+      <h2>{t("curso.contenido")}</h2>
       <ol className="stack">
         {version.Modules?.map((m) => (
           <li key={m.ID} className="card">
@@ -127,7 +132,7 @@ export default function CourseDetailPage() {
                             muestra igual para que se vea qué trae el curso. */}
                         <Link href={`/cursos/${courseId}/recursos/${r.ID}`}>{r.Title}</Link>{" "}
                         <span className="badge">{r.Type}</span>
-                        {r.Required && <span className="badge">obligatorio</span>}
+                        {r.Required && <span className="badge">{t("curso.obligatorio")}</span>}
                       </li>
                     ))}
                   </ul>

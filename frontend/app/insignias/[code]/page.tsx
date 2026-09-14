@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api, ApiError, type BadgeVerification } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * El curso se resuelve aparte porque es un dato secundario: si el catálogo
@@ -29,6 +30,7 @@ function useCourseTitle(courseId: string | undefined) {
  * expone el nombre ni el correo del estudiante, solo el curso y el estado.
  */
 export default function VerificacionInsigniaPage() {
+  const { t, locale } = useI18n();
   const { code } = useParams<{ code: string }>();
   const [insignia, setInsignia] = useState<BadgeVerification | null>(null);
   const [error, setError] = useState("");
@@ -45,19 +47,19 @@ export default function VerificacionInsigniaPage() {
         if (cancelado) return;
         setError(
           e instanceof ApiError && e.status === 404
-            ? "No existe ninguna insignia con este código."
-            : "No se pudo verificar la insignia.",
+            ? t("verificacion.noExiste")
+            : t("verificacion.error"),
         );
       });
     return () => {
       cancelado = true;
     };
-  }, [code]);
+  }, [code, t]);
 
   return (
     <div className="columna-estrecha">
       <header className="page-header">
-        <h1>Verificación de insignia</h1>
+        <h1>{t("verificacion.titulo")}</h1>
       </header>
 
       {error && (
@@ -66,7 +68,7 @@ export default function VerificacionInsigniaPage() {
         </p>
       )}
 
-      {!error && !insignia && <p role="status">Verificando…</p>}
+      {!error && !insignia && <p role="status">{t("verificacion.enCurso")}</p>}
 
       {insignia && (
         <div className="card">
@@ -74,7 +76,7 @@ export default function VerificacionInsigniaPage() {
             /* eslint-disable-next-line @next/next/no-img-element */
             <img
               src={insignia.image_url}
-              alt={`Insignia del curso ${courseTitle ?? "verificada"}`}
+              alt={courseTitle ? t("verificacion.alt", { curso: courseTitle }) : t("verificacion.altSinCurso")}
               width={200}
               height={200}
               style={{ display: "block", margin: "0 auto 1rem" }}
@@ -82,32 +84,32 @@ export default function VerificacionInsigniaPage() {
           )}
           {insignia.valid ? (
             <p className="success-banner" role="status">
-              Esta insignia es válida.
+              {t("verificacion.valida")}
             </p>
           ) : (
             <p className="warning-banner" role="status">
-              Esta insignia fue revocada y ya no es válida.
+              {t("verificacion.revocada")}
             </p>
           )}
           <dl className="stack">
             <div>
-              <dt className="muted">Código</dt>
+              <dt className="muted">{t("verificacion.codigo")}</dt>
               <dd>
                 <code>{insignia.code}</code>
               </dd>
             </div>
             <div>
-              <dt className="muted">Curso</dt>
+              <dt className="muted">{t("verificacion.curso")}</dt>
               <dd>{courseTitle ?? insignia.course_id}</dd>
             </div>
             <div>
-              <dt className="muted">Emitida el</dt>
-              <dd>{new Date(insignia.issued_at).toLocaleDateString()}</dd>
+              <dt className="muted">{t("verificacion.emitida")}</dt>
+              <dd>{new Date(insignia.issued_at).toLocaleDateString(locale)}</dd>
             </div>
             {insignia.revoked_at && (
               <div>
-                <dt className="muted">Revocada el</dt>
-                <dd>{new Date(insignia.revoked_at).toLocaleDateString()}</dd>
+                <dt className="muted">{t("verificacion.revocadaEl")}</dt>
+                <dd>{new Date(insignia.revoked_at).toLocaleDateString(locale)}</dd>
               </div>
             )}
           </dl>
@@ -119,10 +121,10 @@ export default function VerificacionInsigniaPage() {
           {insignia.valid && (
             <p className="row">
               <a href={api.openBadgeURL(insignia.code)} target="_blank" rel="noopener noreferrer">
-                Ver la credencial Open Badges 3.0
+                {t("verificacion.credencial")}
               </a>
               <a href={api.openBadgeJWTURL(insignia.code)} target="_blank" rel="noopener noreferrer">
-                Descargarla firmada
+                {t("verificacion.firmada")}
               </a>
             </p>
           )}

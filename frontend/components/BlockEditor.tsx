@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 import { aBloques, aMarkdown, bloqueVacio, nuevoID, type Block, type TipoDeBloque } from "@/lib/markdown";
+import { useI18n, type Traducir } from "@/lib/i18n";
 
 // El editor delega la conversión a lib/markdown, que es lógica pura y tiene
 // pruebas de ida y vuelta por tipo de nodo. Aquí solo queda la interfaz.
@@ -23,19 +24,21 @@ function conBloqueInicial(bloques: Block[]): Block[] {
 }
 
 // contenidoInicial da a los bloques estructurados algo con lo que arrancar.
-// Una tabla vacía no se puede editar: no tiene celdas donde escribir.
-function contenidoInicial(tipo: TipoDeBloque): string {
+// Una tabla vacía no se puede editar: no tiene celdas donde escribir. El texto
+// de arranque se traduce porque acaba dentro del curso, no solo en la interfaz.
+function contenidoInicial(tipo: TipoDeBloque, t: Traducir): string {
   switch (tipo) {
     case "table":
-      return "Columna 1|Columna 2\n|";
+      return `${t("editor.columnaN", { n: 1 })}|${t("editor.columnaN", { n: 2 })}\n|`;
     case "task":
-      return "Primera tarea";
+      return t("editor.primeraTarea");
     default:
       return "";
   }
 }
 
 export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft", onChange }: BlockEditorProps) {
+  const { t, locale } = useI18n();
   const [blocks, setBlocks] = useState<Block[]>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem(draftKey);
@@ -48,12 +51,12 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
     return conBloqueInicial(aBloques(initialMarkdown));
   });
 
-  const [autosaveStatus, setAutosaveStatus] = useState<string>("Borrador guardado");
+  const [autosaveStatus, setAutosaveStatus] = useState<string>(() => t("editor.borradorGuardado"));
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const triggerAutosave = useCallback(
     (newBlocks: Block[]) => {
-      setAutosaveStatus("Guardando...");
+      setAutosaveStatus(t("editor.guardando"));
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
       saveTimeoutRef.current = setTimeout(() => {
@@ -63,14 +66,18 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
           }
           const md = aMarkdown(newBlocks);
           onChange(md);
-          const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-          setAutosaveStatus(`Autoguardado a las ${timeStr}`);
+          const hora = new Date().toLocaleTimeString(locale, {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
+          setAutosaveStatus(t("editor.autoguardado", { hora }));
         } catch {
-          setAutosaveStatus("Error al autoguardar");
+          setAutosaveStatus(t("editor.errorAutoguardar"));
         }
       }, 800);
     },
-    [draftKey, onChange],
+    [draftKey, onChange, t, locale],
   );
 
   useEffect(() => {
@@ -90,7 +97,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
       id: nuevoID(),
       type,
       level: type === "heading" ? 2 : undefined,
-      content: contenidoInicial(type),
+      content: contenidoInicial(type, t),
       language: type === "code" ? "javascript" : undefined,
       done: type === "task" ? [false] : undefined,
     };
@@ -139,7 +146,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
   return (
     <div className="stack" style={{ background: "var(--color-bg-subtle, #f8f9fa)", padding: "1rem", borderRadius: "8px", border: "1px solid var(--color-border, #e5e7eb)" }}>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-        <strong style={{ fontSize: "0.9rem" }}>Editor de Bloques (Markdown Canónico)</strong>
+        <strong style={{ fontSize: "0.9rem" }}>{t("editor.titulo")}</strong>
         <span className="badge" style={{ fontSize: "0.75rem", opacity: 0.8 }}>
           {autosaveStatus}
         </span>
@@ -176,7 +183,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
                 {block.type === "code" && (
                   <input
                     type="text"
-                    placeholder="lenguaje (ej: python, go)"
+                    placeholder={t("editor.lenguajePlaceholder")}
                     value={block.language || ""}
                     onChange={(e) => updateBlock(block.id, { language: e.target.value })}
                     style={{ fontSize: "0.75rem", padding: "2px 6px", width: "120px" }}
@@ -190,7 +197,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
                   onClick={() => moveBlock(index, "up")}
                   disabled={index === 0}
                   style={{ padding: "2px 6px", fontSize: "0.75rem" }}
-                  title="Mover arriba"
+                  title={t("editor.moverArriba")}
                 >
                   ↑
                 </button>
@@ -199,7 +206,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
                   onClick={() => moveBlock(index, "down")}
                   disabled={index === blocks.length - 1}
                   style={{ padding: "2px 6px", fontSize: "0.75rem" }}
-                  title="Mover abajo"
+                  title={t("editor.moverAbajo")}
                 >
                   ↓
                 </button>
@@ -207,7 +214,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
                   type="button"
                   onClick={() => removeBlock(block.id)}
                   style={{ padding: "2px 6px", fontSize: "0.75rem", color: "#dc2626" }}
-                  title="Eliminar bloque"
+                  title={t("editor.eliminarBloque")}
                 >
                   ✕
                 </button>
@@ -218,7 +225,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
               <input
                 type="text"
                 value={block.content}
-                placeholder="Texto del encabezado..."
+                placeholder={t("editor.encabezadoPlaceholder")}
                 onChange={(e) => updateBlock(block.id, { content: e.target.value })}
                 style={{
                   width: "100%",
@@ -230,7 +237,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
               <textarea
                 rows={4}
                 value={block.content}
-                placeholder="// Código aquí..."
+                placeholder={t("editor.codigoPlaceholder")}
                 onChange={(e) => updateBlock(block.id, { content: e.target.value })}
                 style={{ width: "100%", fontFamily: "monospace", fontSize: "0.85rem", background: "#1e1e1e", color: "#f8f8f2", borderRadius: "4px" }}
               />
@@ -238,7 +245,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
               <textarea
                 rows={2}
                 value={block.content}
-                placeholder="Nota importante o advertencia..."
+                placeholder={t("editor.calloutPlaceholder")}
                 onChange={(e) => updateBlock(block.id, { content: e.target.value })}
                 style={{ width: "100%", borderLeft: "4px solid #3b82f6", background: "#eff6ff" }}
               />
@@ -252,8 +259,8 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
                   style={{ width: "100%", fontFamily: "monospace", fontSize: "0.9rem" }}
                 />
                 <p className="muted" style={{ fontSize: "0.75rem", margin: "0.25rem 0 0" }}>
-                  Notación LaTeX. Se guarda entre <code>$$</code>, que es lo que reconocen los
-                  renderizadores de fórmulas.
+                  {t("editor.formulaAntes")} <code>$$</code>
+                  {t("editor.formulaDespues")}
                 </p>
               </>
             ) : block.type === "table" ? (
@@ -271,7 +278,11 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
               <textarea
                 rows={3}
                 value={block.content}
-                placeholder={block.type === "list" ? "Un elemento por línea..." : "Escribe el contenido del párrafo..."}
+                placeholder={
+                  block.type === "list"
+                    ? t("editor.listaPlaceholder")
+                    : t("editor.parrafoPlaceholder")
+                }
                 onChange={(e) => updateBlock(block.id, { content: e.target.value })}
                 style={{ width: "100%" }}
               />
@@ -282,31 +293,31 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
 
       <div className="row" style={{ gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
         <button type="button" onClick={() => addBlock("paragraph")}>
-          + Párrafo
+          {t("editor.parrafo")}
         </button>
         <button type="button" onClick={() => addBlock("heading")}>
-          + Encabezado
+          {t("editor.encabezado")}
         </button>
         <button type="button" onClick={() => addBlock("code")}>
-          + Código
+          {t("editor.codigo")}
         </button>
         <button type="button" onClick={() => addBlock("callout")}>
-          + Nota / Cita
+          {t("editor.nota")}
         </button>
         <button type="button" onClick={() => addBlock("list")}>
-          + Lista
+          {t("editor.lista")}
         </button>
         <button type="button" onClick={() => addBlock("task")}>
-          + Tareas
+          {t("editor.tareas")}
         </button>
         <button type="button" onClick={() => addBlock("table")}>
-          + Tabla
+          {t("editor.tabla")}
         </button>
         <button type="button" onClick={() => addBlock("formula")}>
-          + Fórmula
+          {t("editor.formula")}
         </button>
         <button type="button" onClick={clearDraft} style={{ marginLeft: "auto", fontSize: "0.75rem", opacity: 0.7 }}>
-          Limpiar borrador
+          {t("editor.limpiar")}
         </button>
       </div>
     </div>
@@ -328,6 +339,7 @@ function EditorDeTabla({
   contenido: string;
   onChange: (contenido: string) => void;
 }) {
+  const { t } = useI18n();
   const filas = contenido.split("\n").map((f) => f.split("|"));
   const columnas = Math.max(1, ...filas.map((f) => f.length));
 
@@ -351,7 +363,9 @@ function EditorDeTabla({
                 {Array.from({ length: columnas }).map((_, j) => (
                   <td key={j} style={{ border: "1px solid var(--color-border, #e5e7eb)", padding: 0 }}>
                     <label className="visually-hidden" htmlFor={`celda-${i}-${j}`}>
-                      {i === 0 ? `Encabezado de la columna ${j + 1}` : `Fila ${i}, columna ${j + 1}`}
+                      {i === 0
+                        ? t("editor.encabezadoColumna", { n: j + 1 })
+                        : t("editor.celda", { fila: i, columna: j + 1 })}
                     </label>
                     <input
                       id={`celda-${i}-${j}`}
@@ -378,23 +392,23 @@ function EditorDeTabla({
           className="secondary"
           onClick={() => emitir([...filas, Array(columnas).fill("")])}
         >
-          + Fila
+          {t("editor.masFila")}
         </button>
         <button
           type="button"
           className="secondary"
           onClick={() => emitir(filas.map((f) => [...f, ""]))}
         >
-          + Columna
+          {t("editor.masColumna")}
         </button>
         {filas.length > 1 && (
           <button type="button" className="secondary" onClick={() => emitir(filas.slice(0, -1))}>
-            − Fila
+            {t("editor.menosFila")}
           </button>
         )}
       </div>
       <p className="muted" style={{ fontSize: "0.75rem", margin: 0 }}>
-        La primera fila es el encabezado.
+        {t("editor.primeraFilaEncabezado")}
       </p>
     </div>
   );
@@ -416,6 +430,7 @@ function EditorDeTareas({
   hechas: boolean[];
   onChange: (contenido: string, hechas: boolean[]) => void;
 }) {
+  const { t } = useI18n();
   const lineas = contenido.split("\n");
 
   const cambiarTexto = (i: number, valor: string) => {
@@ -439,12 +454,14 @@ function EditorDeTareas({
             type="checkbox"
             checked={hechas[i] ?? false}
             onChange={() => alternar(i)}
-            aria-label={`Marcar "${linea || `tarea ${i + 1}`}" como hecha`}
+            aria-label={t("editor.marcarHecha", {
+              tarea: linea || t("editor.tareaN", { n: i + 1 }),
+            })}
           />
           <input
             value={linea}
             onChange={(e) => cambiarTexto(i, e.target.value)}
-            placeholder="Descripción de la tarea"
+            placeholder={t("editor.descripcionTarea")}
             style={{ flex: 1 }}
           />
           {lineas.length > 1 && (
@@ -457,7 +474,7 @@ function EditorDeTareas({
                   hechas.filter((_, j) => j !== i),
                 )
               }
-              aria-label={`Quitar la tarea ${i + 1}`}
+              aria-label={t("editor.quitarTarea", { n: i + 1 })}
             >
               ✕
             </button>
@@ -469,7 +486,7 @@ function EditorDeTareas({
         className="secondary"
         onClick={() => onChange([...lineas, ""].join("\n"), [...hechas, false])}
       >
-        + Tarea
+        {t("editor.masTarea")}
       </button>
     </div>
   );
