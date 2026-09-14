@@ -3,6 +3,11 @@ backend/bin/
 *.exe
 *.test
 *.out
+# Binarios que deja `go build ./cmd/...` en la raíz del módulo: toman el
+# nombre del paquete, así que no hay un patrón que los cubra por extensión.
+backend/api
+backend/worker
+backend/seed
 
 # Node / Next.js
 frontend/node_modules/
