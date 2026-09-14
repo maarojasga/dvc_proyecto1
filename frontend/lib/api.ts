@@ -214,6 +214,53 @@ export interface Clasificacion {
   obligatorios_eliminados?: string[];
 }
 
+// Métricas del panel administrativo. El desglose es un mapa abierto para que
+// añadir un estado en la base no obligue a tocar el cliente.
+export interface Conteo {
+  total: number;
+  desglose: Record<string, number>;
+}
+
+export interface Metricas {
+  usuarios: Conteo;
+  cursos: Conteo;
+  inscripciones: Conteo;
+  insignias: Conteo;
+  multimedia: Conteo;
+  evaluaciones: Conteo;
+}
+
+export interface ResumenDeOpcion {
+  stable_id: string;
+  text_md: string;
+  es_correcta: boolean;
+  elegida: number;
+  porcentaje: number;
+}
+
+export interface ResumenDePregunta {
+  stable_id: string;
+  prompt_md: string;
+  respondida: number;
+  en_blanco: number;
+  aciertos: number;
+  tasa_acierto: number;
+  opciones: ResumenDeOpcion[];
+}
+
+export interface ResultadosDeQuiz {
+  quiz_id: string;
+  title: string;
+  resultados: {
+    intentos: number;
+    estudiantes: number;
+    nota_media: number;
+    nota_mediana: number;
+    tasa_aprobado: number;
+    preguntas: ResumenDePregunta[];
+  };
+}
+
 // Una parte ya recibida por el almacen. El ETag es lo que el cliente reenvia
 // al completar, y lo que delata una parte que no llego intacta.
 export interface ParteCargada {
@@ -405,6 +452,13 @@ export const api = {
     }),
   removeIframeDestino: (id: string) =>
     request<void>(`/api/v1/admin/iframe-allowlist/${id}`, { method: "DELETE" }),
+
+  platformMetrics: () => request<Metricas>("/api/v1/admin/metrics"),
+  // Resultados agregados de una evaluación: los ve su autor o la administración.
+  quizResults: (versionId: string, resourceId: string) =>
+    request<ResultadosDeQuiz>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/results`,
+    ),
 
   listCatalog: (params: Record<string, string> = {}) =>
     request<{ items: Version[] }>(`/api/v1/catalog?${new URLSearchParams(params)}`),

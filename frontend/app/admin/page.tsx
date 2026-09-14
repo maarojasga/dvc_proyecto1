@@ -1,7 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type AuditEntry, type IframeDestino, type Session, type User } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  type AuditEntry,
+  type Conteo,
+  type IframeDestino,
+  type Metricas,
+  type Session,
+  type User,
+} from "@/lib/api";
 
 const ROLES: User["role"][] = ["student", "teacher", "admin"];
 const STATUSES: User["status"][] = ["pending_verification", "active", "suspended"];
@@ -138,10 +147,72 @@ export default function AdminDashboardPage() {
         )}
       </section>
 
+      <PanelDeMetricas onError={setError} />
+
       <ListaBlancaDeIframes onError={setError} />
 
       <Auditoria onError={setError} />
     </div>
+  );
+}
+
+/**
+ * Métricas agregadas de la plataforma.
+ *
+ * El desglose se pinta recorriendo el mapa que devuelve la API en lugar de
+ * enumerar estados aquí: así añadir un estado en la base aparece solo, sin
+ * tocar el cliente.
+ */
+function PanelDeMetricas({ onError }: { onError: (m: string) => void }) {
+  const [metricas, setMetricas] = useState<Metricas | null>(null);
+
+  useEffect(() => {
+    api
+      .platformMetrics()
+      .then(setMetricas)
+      .catch((e) => onError(e instanceof ApiError ? e.message : "No se pudieron cargar las métricas"));
+  }, [onError]);
+
+  if (!metricas) return null;
+
+  const bloques: [string, Conteo][] = [
+    ["Usuarios", metricas.usuarios],
+    ["Versiones de curso", metricas.cursos],
+    ["Inscripciones", metricas.inscripciones],
+    ["Insignias", metricas.insignias],
+    ["Multimedia", metricas.multimedia],
+    ["Intentos de evaluación", metricas.evaluaciones],
+  ];
+
+  return (
+    <section className="card">
+      <header>
+        <h2>Métricas de la plataforma</h2>
+      </header>
+      <ul className="rejilla">
+        {bloques.map(([titulo, conteo]) => (
+          <li key={titulo}>
+            <article className="card">
+              <h3 style={{ margin: 0 }}>{titulo}</h3>
+              <p style={{ fontSize: "2rem", margin: "0.25rem 0", fontWeight: 600 }}>{conteo.total}</p>
+              {Object.keys(conteo.desglose).length === 0 ? (
+                <p className="muted">Sin registros todavía.</p>
+              ) : (
+                <ul className="stack" style={{ gap: "0.2rem" }}>
+                  {Object.entries(conteo.desglose)
+                    .sort(([a], [b]) => a.localeCompare(b, "es"))
+                    .map(([clave, n]) => (
+                      <li key={clave} className="muted">
+                        {clave}: <strong>{n}</strong>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </article>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

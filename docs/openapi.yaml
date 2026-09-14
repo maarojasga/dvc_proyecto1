@@ -908,6 +908,56 @@ paths:
                     description: Valor del atributo sandbox con que se sirve todo marco.
                   referrer_policy: { type: string }
 
+  /admin/metrics:
+    get:
+      tags: [Administración]
+      summary: Métricas agregadas de la plataforma
+      description: >
+        Cada bloque trae un total y su desglose por estado. El desglose es un
+        mapa abierto a propósito: añadir un estado en la base no debería
+        obligar a tocar el contrato ni el cliente.
+      operationId: platformMetrics
+      responses:
+        "200":
+          description: Foto de la plataforma.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { $ref: "#/components/schemas/Conteo" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/results:
+    get:
+      tags: [Evaluación]
+      summary: Resultados agregados de una evaluación
+      description: >
+        Los ve el profesor dueño o la administración. La agregación se hace
+        sobre el snapshot de cada intento y no sobre la definición vigente: un
+        quiz se puede editar después de presentarse, y contar contra la
+        definición actual haría aparecer como fallos respuestas que en su
+        momento fueron correctas.
+
+        La respuesta señala cuál era la opción correcta. No es una filtración
+        —quien la ve ya la conoce— y sin ella el informe no serviría para lo
+        que existe: detectar el distractor que se está llevando a media clase.
+      operationId: quizResults
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Resultados agregados.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quiz_id: { type: string, format: uuid }
+                  title: { type: string }
+                  resultados: { $ref: "#/components/schemas/ResultadosDeQuiz" }
+        "403": { $ref: "#/components/responses/Problema" }
+        "404": { $ref: "#/components/responses/Problema" }
+
   /admin/iframe-allowlist:
     post:
       tags: [Administración]
@@ -1389,6 +1439,61 @@ components:
       type: http
       scheme: bearer
   schemas:
+    Conteo:
+      type: object
+      required: [total, desglose]
+      properties:
+        total: { type: integer }
+        desglose:
+          type: object
+          additionalProperties: { type: integer }
+
+    ResultadosDeQuiz:
+      type: object
+      required: [intentos, estudiantes, preguntas]
+      properties:
+        intentos: { type: integer }
+        estudiantes:
+          type: integer
+          description: >
+            Inscripciones distintas, no intentos: con tres intentos por persona
+            contar intentos triplicaría la población.
+        nota_media: { type: number }
+        nota_mediana:
+          type: number
+          description: >
+            Dice más que la media cuando la distribución es bimodal, que es el
+            caso típico de un quiz.
+        tasa_aprobado: { type: number }
+        preguntas:
+          type: array
+          items:
+            type: object
+            properties:
+              stable_id: { type: string, format: uuid }
+              prompt_md: { type: string }
+              respondida: { type: integer }
+              en_blanco:
+                type: integer
+                description: Dejarla en blanco no es lo mismo que fallarla.
+              aciertos: { type: integer }
+              tasa_acierto:
+                type: number
+                description: >
+                  Sobre los intentos que la vieron, no sobre los que la
+                  respondieron: una pregunta que casi nadie contesta es tan
+                  problemática como una que casi nadie acierta.
+              opciones:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    stable_id: { type: string, format: uuid }
+                    text_md: { type: string }
+                    es_correcta: { type: boolean }
+                    elegida: { type: integer }
+                    porcentaje: { type: number }
+
     ClasificacionDeCambios:
       type: object
       required: [alcance, cambios]

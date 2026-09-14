@@ -38,6 +38,8 @@ type Deps struct {
 	Antimalware antimalware.Escaner
 	// Iframes administra la lista blanca de destinos incrustables.
 	Iframes ListaBlancaDeIframes
+	// Metricas alimenta el panel administrativo y los informes de evaluación.
+	Metricas Metricas
 	// Auditor deja constancia en la bitácora inmutable de las acciones que no
 	// pasan por un servicio de aplicación.
 	Auditor Auditor
@@ -67,6 +69,7 @@ func NewRouter(d Deps) http.Handler {
 	h.registerProgress(mux)
 	h.registerMedia(mux)
 	h.registerIframes(mux)
+	h.registerMetricas(mux)
 	h.registerOperacion(mux)
 
 	return Chain(mux,

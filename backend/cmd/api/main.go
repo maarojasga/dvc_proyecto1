@@ -102,6 +102,7 @@ func main() {
 		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
 		Antimalware: escaner,
 		Iframes:     iframeRepo,
+		Metricas:    postgres.NewMetricasRepo(pool),
 		Auditor:     userRepo,
 		Redis:       rdb, Queue: queue.NuevoEncolador(queueClient),
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
