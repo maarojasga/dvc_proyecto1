@@ -137,7 +137,7 @@ func (p *Processor) transcodeVideo(ctx context.Context, payload queue.MediaProce
 	}
 
 	masterPath := filepath.Join(workDir, "master.m3u8")
-	if err := os.WriteFile(masterPath, []byte(masterDeVideo(calidades, ancho, alto)), 0o644); err != nil {
+	if err := os.WriteFile(masterPath, []byte(masterDeVideo(calidades, ancho, alto)), 0o600); err != nil {
 		return "", err
 	}
 
@@ -206,7 +206,7 @@ func (p *Processor) transcodeAudio(ctx context.Context, payload queue.MediaProce
 	}
 
 	masterPath := filepath.Join(workDir, "master.m3u8")
-	if err := os.WriteFile(masterPath, []byte(masterDeAudio()), 0o644); err != nil {
+	if err := os.WriteFile(masterPath, []byte(masterDeAudio()), 0o600); err != nil {
 		return "", err
 	}
 

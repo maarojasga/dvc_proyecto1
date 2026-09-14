@@ -67,6 +67,9 @@ type Deps struct {
 	Inspector    *asynq.Inspector
 	CORSOrigin   string
 	CookieSecure bool
+	// AuthRateLimitPerMinute acota los intentos de autenticación por IP. Cero
+	// deja el valor por defecto seguro.
+	AuthRateLimitPerMinute int
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -115,6 +118,15 @@ func (h *handlers) auth() func(http.Handler) http.Handler {
 	return RequireAuth(h.deps.Auth)
 }
 
-func loginRateLimit(rdb *redis.Client) func(http.Handler) http.Handler {
-	return RateLimit(rdb, "auth", 10, time.Minute)
+// limiteDeAutenticacionPorDefecto es lo que aplica si el despliegue no dice
+// otra cosa. Diez intentos por minuto y por IP frenan la fuerza bruta sin
+// estorbar a una persona que se equivoca de contraseña.
+const limiteDeAutenticacionPorDefecto = 10
+
+func (h *handlers) loginRateLimit() func(http.Handler) http.Handler {
+	limite := h.deps.AuthRateLimitPerMinute
+	if limite <= 0 {
+		limite = limiteDeAutenticacionPorDefecto
+	}
+	return RateLimit(h.deps.Redis, "auth", limite, time.Minute)
 }

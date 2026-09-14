@@ -109,8 +109,11 @@ services:
       COOKIE_SECURE: "false"
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-    ports:
-      - "8080:8080"
+    # No publica puerto en el host: lo hace el proxy. Publicarlo aquí ataría
+    # el servicio a un puerto fijo y `--scale api=N` fallaría por choque, que
+    # es justo el escalamiento que el criterio de arquitectura pide demostrar.
+    expose:
+      - "8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -140,15 +143,74 @@ services:
       minio:
         condition: service_started
 
+  # Punto de entrada de la API. Reparte entre las instancias que haya
+  # levantadas, así que `docker compose up -d --scale api=3` no exige tocar
+  # nada más.
+  proxy:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx/api.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz-proxy"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
   frontend:
     build:
       context: ./frontend
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8080
+      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8080}
     ports:
       - "3000:3000"
     depends_on:
-      - api
+      - proxy
+
+  # ---------------------------------------------------------------------
+  # Prueba de carga de Etapa 1 (sección 10, segmento 9).
+  #
+  # Bajo perfil: `docker compose up` cotidiano no debe sembrar 500 cuentas ni
+  # arrancar un generador de carga.
+  #
+  #   docker compose --profile carga run --rm seed
+  #   docker compose --profile carga run --rm k6
+  # ---------------------------------------------------------------------
+  seed:
+    build:
+      context: ./backend
+      target: seed
+    profiles: ["carga"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-mooc}:${POSTGRES_PASSWORD:-mooc}@postgres:5432/${POSTGRES_DB:-mooc}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      SEED_STUDENTS: ${SEED_STUDENTS:-500}
+      SEED_OUT: /salida/escenario.json
+    volumes:
+      - ./load/salida:/salida
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  k6:
+    image: grafana/k6:latest
+    profiles: ["carga"]
+    environment:
+      # Contra el proxy, no contra una instancia: la prueba tiene que medir
+      # el camino real, repartidor incluido.
+      BASE_URL: http://proxy:8080
+      ESCENARIO: /salida/escenario.json
+      VUS_OBJETIVO: ${VUS_OBJETIVO:-200}
+      MESETA: ${MESETA:-3m}
+    volumes:
+      - ./load:/scripts:ro
+      - ./load/salida:/salida
+    entrypoint: ["k6", "run", "/scripts/etapa1.js"]
+    depends_on:
+      - proxy
 
 volumes:
   postgres_data:

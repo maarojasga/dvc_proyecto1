@@ -61,7 +61,19 @@ export default function LoginPage() {
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              style={{ background: "transparent", border: "none", color: "#3b82f6", cursor: "pointer", fontSize: "0.8rem", padding: "0 4px", textDecoration: "underline" }}
+              // var(--color-primary) y no un azul fijo: #3b82f6 sobre blanco da
+              // 3,67:1 a este tamaño, por debajo del 4,5:1 que exige WCAG 2.2
+              // AA para texto normal. El token ya cumple y además tiene
+              // variante para el tema oscuro.
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--color-primary)",
+                cursor: "pointer",
+                fontSize: "0.8rem",
+                padding: "0 4px",
+                textDecoration: "underline",
+              }}
             >
               {showPassword ? t("auth.ocultar") : t("auth.mostrar")}
             </button>
