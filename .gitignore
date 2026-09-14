@@ -1,3 +1,73 @@
+# =====================================================================
+# ADVERTENCIAS ANTES DE PRESENTAR O DESPLEGAR ESTE PROYECTO
+#
+# Van aquí porque este es el primer archivo que se abre al clonar. El
+# detalle completo está en README.md, docs/demostracion.md y load/README.md;
+# esto es el resumen que no conviene descubrir a mitad de la demostración.
+#
+# ---------------------------------------------------------------------
+# LO QUE ESTÁ ACREDITADO (condición de aceptación, sección 10)
+# ---------------------------------------------------------------------
+#   - Los nueve flujos críticos, con 34 pruebas E2E en frontend/e2e/.
+#   - Prueba de carga de Etapa 1 ejecutada: 42.175 peticiones a 200 VU,
+#     0 % de error, p95 de 3 a 7 ms.
+#   - Auditoría de accesibilidad con axe-core (WCAG 2.2 A y AA) sobre 13
+#     pantallas, en español y en inglés: cero violaciones.
+#   - Pipeline de CI con build, lint, análisis de seguridad, migraciones,
+#     pruebas, E2E, accesibilidad y carga.
+#
+# ---------------------------------------------------------------------
+# LO QUE NO SE PUEDE AFIRMAR, AUNQUE LO PAREZCA
+# ---------------------------------------------------------------------
+#   - NO decir "aguanta 2.000 usuarios concurrentes". No se ha medido. Lo
+#     medido es 200 VU con dos órdenes de magnitud de margen, lo que
+#     sugiere holgura pero no la acredita: el techo real sigue sin
+#     conocerse. Para medirlo hacen falta 2.000 cuentas sembradas y una
+#     máquina que no sea la de desarrollo.
+#
+#   - NO decir "la plataforma es accesible". Lo acreditado es que no tiene
+#     los defectos que una máquina detecta. axe cubre del orden de la mitad
+#     de los problemas reales; el orden de foco, el texto alternativo que es
+#     correcto pero inútil y el recorrido con lector de pantalla siguen
+#     necesitando a una persona.
+#
+#   - NO decir que la recuperación cumple RPO <= 15 min y RTO <= 4 h. No hay
+#     backup, ni restauración, ni prueba que lo acredite.
+#
+#   - NO presentar la prueba de carga como caracterización del sistema. Con
+#     los márgenes actuales, sus umbrales detectan una regresión grosera y
+#     poco más. El único número informativo es el p95 del login (272 ms), y
+#     lo que mide es Argon2id, que cuesta a propósito.
+#
+# ---------------------------------------------------------------------
+# PENDIENTE (restricciones técnicas de la sección 7 y segmento 9)
+# ---------------------------------------------------------------------
+#   - OpenTelemetry: hoy hay logs estructurados y correlación por
+#     X-Request-Id, pero no métricas ni trazas. Sin ellas no se puede ver
+#     DÓNDE se va el p95 cuando se rompe un umbral.
+#   - Cursores y ETag en las colecciones.
+#   - Backup y restauración con su prueba de recuperación.
+#   - Fallos inyectados durante la carga (tirar una réplica a mitad de la
+#     meseta y demostrar que el p95 se recupera).
+#
+# ---------------------------------------------------------------------
+# AL LEVANTAR EL ENTORNO
+# ---------------------------------------------------------------------
+#   - El escáner antimalware integrado NO lleva firmas reales. Para la
+#     demostración hay que levantar el perfil antivirus y apuntar
+#     CLAMAV_ADDR a clamd:
+#         docker compose --profile antivirus up -d clamav
+#         CLAMAV_ADDR=clamav:3310 docker compose up -d
+#     Tarda: la primera vez descarga varios cientos de MB de firmas.
+#
+#   - Sin BADGE_SIGNING_KEY las insignias siguen siendo verificables por su
+#     URL pública, pero no se emiten como credencial Open Badges firmada.
+#
+#   - cmd/seed NO debe ejecutarse jamás contra un entorno real: crea cuentas
+#     con una contraseña pública y escribe sus tokens de sesión en un
+#     archivo.
+# =====================================================================
+
 # Go
 backend/bin/
 *.exe
