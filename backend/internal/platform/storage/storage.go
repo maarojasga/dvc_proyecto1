@@ -6,8 +6,6 @@ package storage
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -160,13 +158,25 @@ func (c *Client) PresignedUploadPartURL(ctx context.Context, objectKey, uploadID
 
 // CompleteMultipartUpload finaliza la carga una vez el cliente confirma
 // todas las partes con su ETag.
-func (c *Client) CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, parts []minio.CompletePart) error {
+func (c *Client) CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, partes []ParteCargada) error {
 	core := minio.Core{Client: c.mc}
-	_, err := core.CompleteMultipartUpload(ctx, c.bucket, objectKey, uploadID, parts, minio.PutObjectOptions{})
+	completas := make([]minio.CompletePart, len(partes))
+	for i, p := range partes {
+		completas[i] = minio.CompletePart{PartNumber: p.Numero, ETag: p.ETag}
+	}
+	_, err := core.CompleteMultipartUpload(ctx, c.bucket, objectKey, uploadID, completas, minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("storage: no se pudo completar multipart: %w", err)
 	}
 	return nil
+}
+
+// AbortMultipartUpload descarta una carga multipart a medias y libera las
+// partes ya subidas. Se llama cuando la verificación rechaza el objeto: sin
+// esto, el almacén conserva y factura partes de un archivo que nunca existió.
+func (c *Client) AbortMultipartUpload(ctx context.Context, objectKey, uploadID string) error {
+	core := minio.Core{Client: c.mc}
+	return core.AbortMultipartUpload(ctx, c.bucket, objectKey, uploadID)
 }
 
 // DownloadToFile descarga un objeto completo a una ruta local; usado por los
@@ -187,10 +197,14 @@ func (c *Client) UploadFile(ctx context.Context, objectKey, srcPath, contentType
 	return nil
 }
 
-// StatObject obtiene metadatos (tamaño, content-type) de un objeto ya
-// cargado, usado para verificación de integridad tras la subida directa.
-func (c *Client) StatObject(ctx context.Context, objectKey string) (minio.ObjectInfo, error) {
-	return c.mc.StatObject(ctx, c.bucket, objectKey, minio.StatObjectOptions{})
+// StatObject obtiene metadatos de un objeto ya cargado, usado para
+// verificación de integridad tras la subida directa.
+func (c *Client) StatObject(ctx context.Context, objectKey string) (ObjetoInfo, error) {
+	info, err := c.mc.StatObject(ctx, c.bucket, objectKey, minio.StatObjectOptions{})
+	if err != nil {
+		return ObjetoInfo{}, err
+	}
+	return ObjetoInfo{Tamano: info.Size, ContentType: info.ContentType}, nil
 }
 
 // RemoveObject elimina un objeto (p.ej. tras fallo de escaneo antimalware).
@@ -198,44 +212,42 @@ func (c *Client) RemoveObject(ctx context.Context, objectKey string) error {
 	return c.mc.RemoveObject(ctx, c.bucket, objectKey, minio.RemoveObjectOptions{})
 }
 
-// DetectMIME lee los primeros 512 bytes del objeto almacenado y devuelve el tipo
-// MIME real detectado mediante números mágicos (magic bytes).
-func (c *Client) DetectMIME(ctx context.Context, objectKey string) (string, error) {
+// AbrirObjeto devuelve el contenido completo del objeto.
+//
+// Existe para que la verificación posterior a la carga —checksum, MIME real y
+// escaneo antimalware— recorra el objeto una sola vez. Antes cada una de esas
+// comprobaciones lo descargaba por su cuenta.
+func (c *Client) AbrirObjeto(ctx context.Context, objectKey string) (io.ReadCloser, error) {
 	obj, err := c.mc.GetObject(ctx, c.bucket, objectKey, minio.GetObjectOptions{})
 	if err != nil {
-		return "", fmt.Errorf("storage: no se pudo abrir el objeto: %w", err)
+		return nil, fmt.Errorf("storage: no se pudo abrir el objeto: %w", err)
 	}
-	defer obj.Close()
-
-	buf := make([]byte, 512)
-	n, err := io.ReadFull(obj, buf)
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return "", fmt.Errorf("storage: no se pudo leer cabecera: %w", err)
-	}
-	return http.DetectContentType(buf[:n]), nil
+	return obj, nil
 }
 
-// ListObjectParts consulta las partes ya subidas a S3 de una carga multipart
-// en curso, permitiendo que un cliente interrumpido reanude la subida.
-func (c *Client) ListObjectParts(ctx context.Context, objectKey, uploadID string) (minio.ListObjectPartsResult, error) {
+// GuardarObjeto escribe un objeto generado por la propia plataforma (hoy, la
+// imagen de una insignia). Los binarios subidos por usuarios no pasan por
+// aquí: esos van directos al almacén con una URL prefirmada.
+func (c *Client) GuardarObjeto(ctx context.Context, objectKey string, r io.Reader, tamano int64, contentType string) error {
+	_, err := c.mc.PutObject(ctx, c.bucket, objectKey, r, tamano, minio.PutObjectOptions{ContentType: contentType})
+	if err != nil {
+		return fmt.Errorf("storage: no se pudo guardar %s: %w", objectKey, err)
+	}
+	return nil
+}
+
+// ListObjectParts consulta las partes ya subidas de una carga multipart en
+// curso, permitiendo que un cliente interrumpido reanude la subida sin
+// reenviar lo que ya llegó.
+func (c *Client) ListObjectParts(ctx context.Context, objectKey, uploadID string) ([]ParteCargada, error) {
 	core := minio.Core{Client: c.mc}
-	return core.ListObjectParts(ctx, c.bucket, objectKey, uploadID, 0, 1000)
-}
-
-// CalculateSHA256 calcula el checksum criptográfico SHA-256 de un objeto
-// ensamblado en S3 para verificación rigurosa de integridad.
-func (c *Client) CalculateSHA256(ctx context.Context, objectKey string) (string, error) {
-	obj, err := c.mc.GetObject(ctx, c.bucket, objectKey, minio.GetObjectOptions{})
+	res, err := core.ListObjectParts(ctx, c.bucket, objectKey, uploadID, 0, 1000)
 	if err != nil {
-		return "", fmt.Errorf("storage: no se pudo abrir el objeto para hash: %w", err)
+		return nil, fmt.Errorf("storage: no se pudieron listar las partes: %w", err)
 	}
-	defer obj.Close()
-
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, obj); err != nil {
-		return "", fmt.Errorf("storage: error calculando sha256: %w", err)
+	partes := make([]ParteCargada, 0, len(res.ObjectParts))
+	for _, p := range res.ObjectParts {
+		partes = append(partes, ParteCargada{Numero: p.PartNumber, ETag: p.ETag, Tamano: p.Size})
 	}
-	return hex.EncodeToString(hasher.Sum(nil)), nil
+	return partes, nil
 }
-
-

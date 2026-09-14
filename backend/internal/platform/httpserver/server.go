@@ -16,8 +16,8 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
-	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
 )
 
 type Deps struct {
@@ -28,7 +28,12 @@ type Deps struct {
 	Quizzes     *quizzes.Service
 	Progreso    *progreso.Service
 	Media       *postgres.MediaRepo
-	Storage     *storage.Client
+	// Storage conduce las cargas de autoría. Es una interfaz estrecha para
+	// que los manejadores no dependan del SDK del proveedor cloud.
+	Storage AlmacenDeObjetos
+	// Antimalware escanea cada objeto antes de aceptarlo. Vacío significa el
+	// escáner integrado.
+	Antimalware antimalware.Escaner
 	// Entrega resuelve las URL de lectura. En producción es el mismo cliente
 	// de Storage; se declara aparte porque la reproducción solo necesita eso.
 	Entrega      EntregaDeObjetos

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -13,7 +12,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
-	"github.com/minio/minio-go/v7"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
 )
 
 func (h *handlers) registerCourses(mux *http.ServeMux) {
@@ -373,6 +372,13 @@ type uploadURLRequest struct {
 	MimeType string `json:"mime_type"`
 }
 
+type confirmUploadRequest struct {
+	// ChecksumSHA256 es el hash que calculó el navegador sobre el archivo
+	// antes de subirlo. Opcional, pero si viene tiene que cuadrar: es lo que
+	// detecta una subida truncada o alterada en tránsito.
+	ChecksumSHA256 string `json:"checksum_sha256,omitempty"`
+}
+
 // requestResourceUploadURL emite una URL prefirmada de subida directa al
 // almacenamiento de objetos para el recurso indicado. La API nunca recibe
 // el binario: el cliente sube directamente y luego confirma para encolar el
@@ -396,7 +402,7 @@ func (h *handlers) requestResourceUploadURL(w http.ResponseWriter, r *http.Reque
 	}
 
 	objectKey := "resources/" + res.ID.String() + "/original"
-	putURL, err := h.deps.Storage.PresignedPutURL(r.Context(), objectKey, 24*time.Hour)
+	putURL, err := h.deps.Storage.PresignedPutURL(r.Context(), objectKey, vigenciaDeCarga)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -420,6 +426,11 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 		writeError(w, ErrBadRequest)
 		return
 	}
+	// El cuerpo es opcional: un cliente que no calcula el hash manda {} o nada.
+	var req confirmUploadRequest
+	if r.ContentLength > 0 && !decodeJSON(w, r, &req) {
+		return
+	}
 	actor, _ := UserFromContext(r.Context())
 
 	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
@@ -432,25 +443,42 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	info, err := h.deps.Storage.StatObject(r.Context(), res.ObjectKey)
-	if err != nil || info.Size == 0 {
-		writeError(w, errors.New("el objeto cargado no existe o está vacío"))
+	verificado, err := h.verificarCarga(r.Context(), res.ObjectKey, req.ChecksumSHA256, res.Type)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 
+	h.aceptarCargaVerificada(w, r, actor, versionID, resourceID, res, verificado)
+}
+
+// aceptarCargaVerificada cierra la ingesta una vez el objeto pasó los
+// controles: marca el recurso listo, o registra el activo multimedia y encola
+// la transcodificación cuando el tipo exige procesamiento asíncrono.
+//
+// Lo comparten la subida simple y la multipart para que las dos terminen
+// exactamente en el mismo estado persistido.
+func (h *handlers) aceptarCargaVerificada(
+	w http.ResponseWriter, r *http.Request, actor *user.User,
+	versionID, resourceID uuid.UUID, res *domain.Resource, obj objetoVerificado,
+) {
 	if !res.Type.RequiresAsyncProcessing() {
 		if err := h.deps.Courses.MarkResourceProcessingStatus(r.Context(), actor, versionID, resourceID, domain.ProcessingReady); err != nil {
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "ready", "mime_type": obj.MIME,
+			"size_bytes": obj.Tamano, "checksum_sha256": obj.SHA256,
+		})
 		return
 	}
 
 	assetID := uuid.New()
 	if err := h.deps.Media.Create(r.Context(), &postgres.MediaAsset{
 		ID: assetID, ResourceID: resourceID, OriginalObjectKey: res.ObjectKey,
-		MimeType: info.ContentType, SizeBytes: info.Size, Status: "uploaded",
+		MimeType: obj.MIME, SizeBytes: obj.Tamano, ChecksumSHA256: obj.SHA256,
+		Status: "uploaded",
 	}); err != nil {
 		writeError(w, err)
 		return
@@ -477,7 +505,10 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued", "media_asset_id": assetID.String()})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "queued", "media_asset_id": assetID.String(),
+		"mime_type": obj.MIME, "size_bytes": obj.Tamano, "checksum_sha256": obj.SHA256,
+	})
 }
 
 func (h *handlers) listCatalog(w http.ResponseWriter, r *http.Request) {
@@ -579,7 +610,7 @@ func (h *handlers) requestMultipartPartURL(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	partURL, err := h.deps.Storage.PresignedUploadPartURL(r.Context(), res.ObjectKey, req.UploadID, req.PartNumber, 24*time.Hour)
+	partURL, err := h.deps.Storage.PresignedUploadPartURL(r.Context(), res.ObjectKey, req.UploadID, req.PartNumber, vigenciaDeCarga)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -626,98 +657,26 @@ func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	minioParts := make([]minio.CompletePart, len(req.Parts))
+	partes := make([]storage.ParteCargada, len(req.Parts))
 	for i, p := range req.Parts {
-		minioParts[i] = minio.CompletePart{
-			PartNumber: p.PartNumber,
-			ETag:       p.ETag,
-		}
+		partes[i] = storage.ParteCargada{Numero: p.PartNumber, ETag: p.ETag}
 	}
 
-	if err := h.deps.Storage.CompleteMultipartUpload(r.Context(), res.ObjectKey, req.UploadID, minioParts); err != nil {
+	if err := h.deps.Storage.CompleteMultipartUpload(r.Context(), res.ObjectKey, req.UploadID, partes); err != nil {
 		writeError(w, err)
 		return
 	}
 
-	info, err := h.deps.Storage.StatObject(r.Context(), res.ObjectKey)
-	if err != nil || info.Size == 0 {
-		writeError(w, errors.New("el objeto cargado no existe o está vacío"))
-		return
-	}
-
-	// Verificación de integridad por Checksum SHA-256 si fue provisto
-	calculatedSHA256, shaErr := h.deps.Storage.CalculateSHA256(r.Context(), res.ObjectKey)
-	if req.ChecksumSHA256 != "" && shaErr == nil {
-		if calculatedSHA256 != req.ChecksumSHA256 {
-			_ = h.deps.Storage.RemoveObject(r.Context(), res.ObjectKey)
-			writeError(w, errors.New("fallo de integridad: el checksum SHA-256 no coincide"))
-			return
-		}
-	}
-
-	realMime, mimeErr := h.deps.Storage.DetectMIME(r.Context(), res.ObjectKey)
-	detectedMime := info.ContentType
-	if mimeErr == nil && realMime != "" {
-		detectedMime = realMime
-	}
-
-	// Filtro de seguridad: bloquear ejecutables binarios
-	if detectedMime == "application/x-dosexec" || detectedMime == "application/x-executable" || detectedMime == "application/x-sharedlib" {
-		_ = h.deps.Storage.RemoveObject(r.Context(), res.ObjectKey)
-		writeError(w, errors.New("el archivo contiene un binario ejecutable no permitido"))
-		return
-	}
-
-	if !res.Type.RequiresAsyncProcessing() {
-		if err := h.deps.Courses.MarkResourceProcessingStatus(r.Context(), actor, versionID, resourceID, domain.ProcessingReady); err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":          "ready",
-			"mime_type":       detectedMime,
-			"size_bytes":      info.Size,
-			"checksum_sha256": calculatedSHA256,
-		})
-		return
-	}
-
-	assetID := uuid.New()
-	if err := h.deps.Media.Create(r.Context(), &postgres.MediaAsset{
-		ID: assetID, ResourceID: resourceID, OriginalObjectKey: res.ObjectKey,
-		MimeType: detectedMime, SizeBytes: info.Size, Status: "uploaded",
-	}); err != nil {
-		writeError(w, err)
-		return
-	}
-
-	kind := "video"
-	if res.Type == domain.ResourceAudio {
-		kind = "audio"
-	}
-	task, err := queueTask(queue.TaskProcessMedia, queue.MediaProcessPayload{
-		TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
-		SourceObjectKey: res.ObjectKey, Kind: kind,
-	})
+	verificado, err := h.verificarCarga(r.Context(), res.ObjectKey, req.ChecksumSHA256, res.Type)
 	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if _, err := h.deps.Queue.Enqueue(task, asynq.MaxRetry(queue.MaxRetry), asynq.TaskID(assetID.String())); err != nil {
+		// La carga ya está ensamblada, así que verificarCarga borró el objeto;
+		// abortar además libera cualquier parte que el almacén siga reteniendo.
+		_ = h.deps.Storage.AbortMultipartUpload(r.Context(), res.ObjectKey, req.UploadID)
 		writeError(w, err)
 		return
 	}
 
-	if err := h.deps.Courses.MarkResourceProcessingStatus(r.Context(), actor, versionID, resourceID, domain.ProcessingPending); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status":          "queued",
-		"media_asset_id":  assetID.String(),
-		"size_bytes":      info.Size,
-		"checksum_sha256": calculatedSHA256,
-	})
+	h.aceptarCargaVerificada(w, r, actor, versionID, resourceID, res, verificado)
 }
 
 func (h *handlers) listMultipartParts(w http.ResponseWriter, r *http.Request) {
@@ -740,7 +699,7 @@ func (h *handlers) listMultipartParts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	partsResult, err := h.deps.Storage.ListObjectParts(r.Context(), res.ObjectKey, uploadID)
+	partes, err := h.deps.Storage.ListObjectParts(r.Context(), res.ObjectKey, uploadID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -748,7 +707,6 @@ func (h *handlers) listMultipartParts(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"upload_id": uploadID,
-		"parts":     partsResult.ObjectParts,
+		"parts":     partes,
 	})
 }
-

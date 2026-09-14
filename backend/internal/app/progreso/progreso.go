@@ -8,9 +8,11 @@
 package progreso
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,12 +60,21 @@ func (s *Service) auditar(ctx context.Context, actorID uuid.UUID, accion, entida
 	})
 }
 
+// AlmacenDeImagenes guarda la imagen de la insignia fuera de la base
+// relacional, como exige la arquitectura. Es una interfaz estrecha para que
+// este paquete no dependa del proveedor de almacenamiento, y para que una
+// prueba pueda emitir insignias sin MinIO levantado.
+type AlmacenDeImagenes interface {
+	GuardarObjeto(ctx context.Context, objectKey string, r io.Reader, tamano int64, contentType string) error
+}
+
 type Service struct {
 	progreso    *postgres.ProgressRepo
 	enrollments *postgres.EnrollmentRepo
 	courses     *postgres.CourseRepo
 	quizzes     *postgres.QuizRepo
 	insignias   *postgres.BadgeRepo
+	imagenes    AlmacenDeImagenes
 	auditor     Auditor
 	ahora       func() time.Time
 }
@@ -74,24 +85,26 @@ func NewService(
 	c *postgres.CourseRepo,
 	q *postgres.QuizRepo,
 	b *postgres.BadgeRepo,
+	imagenes AlmacenDeImagenes,
 	auditor Auditor,
 ) *Service {
 	return &Service{
 		progreso: p, enrollments: e, courses: c, quizzes: q, insignias: b,
-		auditor: auditor, ahora: func() time.Time { return time.Now().UTC() },
+		imagenes: imagenes, auditor: auditor,
+		ahora: func() time.Time { return time.Now().UTC() },
 	}
 }
 
 // Resumen es el avance de una inscripcion tal como se le presenta al
 // estudiante.
 type Resumen struct {
-	EnrollmentID          uuid.UUID `json:"enrollment_id"`
-	CourseID              uuid.UUID `json:"course_id"`
-	Status                string    `json:"status"`
-	PorcentajeObligatorio float64   `json:"required_percent"`
-	ObligatoriosTotal     int       `json:"required_total"`
-	ObligatoriosHechos    int       `json:"required_completed"`
-	QuizzesPendientes     int       `json:"quizzes_pending"`
+	EnrollmentID          uuid.UUID  `json:"enrollment_id"`
+	CourseID              uuid.UUID  `json:"course_id"`
+	Status                string     `json:"status"`
+	PorcentajeObligatorio float64    `json:"required_percent"`
+	ObligatoriosTotal     int        `json:"required_total"`
+	ObligatoriosHechos    int        `json:"required_completed"`
+	QuizzesPendientes     int        `json:"quizzes_pending"`
 	CompletedAt           *time.Time `json:"completed_at,omitempty"`
 	ApprovedAt            *time.Time `json:"approved_at,omitempty"`
 	CodigoInsignia        string     `json:"badge_code,omitempty"`
@@ -348,7 +361,50 @@ func (s *Service) emitirInsignia(ctx context.Context, insc *enrollment.Enrollmen
 	if err != nil {
 		return nil, err
 	}
-	return s.insignias.Emitir(ctx, nueva)
+	nueva.ImageObjectKey = badge.ClaveDeImagen(nueva.VerificationCode)
+
+	emitida, err := s.insignias.Emitir(ctx, nueva)
+	if err != nil {
+		return nil, err
+	}
+	// La imagen se dibuja despues de insertar para que sea la de la insignia
+	// que realmente quedo: si dos peticiones concurrentes compitieron, Emitir
+	// devuelve la ganadora y su codigo, no el que se acaba de generar.
+	s.dibujarImagen(ctx, emitida)
+	return emitida, nil
+}
+
+// dibujarImagen renderiza la insignia y la guarda en el almacen de objetos.
+//
+// Un fallo aqui no tumba la aprobacion del curso: la insignia ya esta emitida
+// y es verificable por su codigo, que es lo que acredita el logro. Queda
+// anotado en la bitacora para poder regenerar la imagen despues.
+func (s *Service) dibujarImagen(ctx context.Context, b *badge.Badge) {
+	if s.imagenes == nil || b.ImageObjectKey == "" {
+		return
+	}
+	titulo := s.tituloDelCurso(ctx, b.CourseID)
+	svg := badge.RenderizarSVG(titulo, b.IssuedAt, b.VerificationCode)
+	if err := s.imagenes.GuardarObjeto(ctx, b.ImageObjectKey, bytes.NewReader(svg), int64(len(svg)), badge.TipoDeImagen); err != nil {
+		s.auditar(ctx, b.StudentID, "badge.image_failed", "badge", b.ID, err.Error())
+	}
+}
+
+// tituloDelCurso resuelve el nombre que va impreso en la insignia.
+//
+// Se lee de la version publicada vigente, que es la que el estudiante curso.
+// Si no se puede resolver devuelve vacio: la imagen sale sin titulo antes que
+// no salir.
+func (s *Service) tituloDelCurso(ctx context.Context, courseID uuid.UUID) string {
+	c, err := s.courses.GetCourse(ctx, courseID)
+	if err != nil || c.CurrentPublishedVersionID == nil {
+		return ""
+	}
+	v, err := s.courses.GetVersion(ctx, *c.CurrentPublishedVersionID)
+	if err != nil {
+		return ""
+	}
+	return v.Title
 }
 
 // Verificacion es la vista publica de una insignia.
@@ -361,6 +417,9 @@ type Verificacion struct {
 	Valid     bool       `json:"valid"`
 	IssuedAt  time.Time  `json:"issued_at"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	// ImagenClave no viaja en el JSON: la capa HTTP la cambia por una URL,
+	// porque es ella quien sabe si los objetos salen del CDN o van firmados.
+	ImagenClave string `json:"-"`
 }
 
 // Verificar resuelve la URL publica de verificacion. No exige autenticacion,
@@ -373,6 +432,7 @@ func (s *Service) Verificar(ctx context.Context, codigo string) (*Verificacion, 
 	return &Verificacion{
 		Code: b.VerificationCode, CourseID: b.CourseID,
 		Valid: b.Verified(), IssuedAt: b.IssuedAt, RevokedAt: b.RevokedAt,
+		ImagenClave: b.ImageObjectKey,
 	}, nil
 }
 

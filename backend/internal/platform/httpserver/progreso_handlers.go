@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -69,6 +70,20 @@ func (h *handlers) getCourseProgress(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// insigniaResponse es la insignia tal como la ve su dueño, con la URL de la
+// imagen ya resuelta.
+type insigniaResponse struct {
+	Code      string     `json:"code"`
+	CourseID  uuid.UUID  `json:"course_id"`
+	Valid     bool       `json:"valid"`
+	IssuedAt  time.Time  `json:"issued_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	ImageURL  string     `json:"image_url,omitempty"`
+	// VerifyPath es la ruta pública de verificación, para que el cliente
+	// construya el enlace que se comparte sin inventarse el formato.
+	VerifyPath string `json:"verify_path"`
+}
+
 func (h *handlers) listMyBadges(w http.ResponseWriter, r *http.Request) {
 	actor, _ := UserFromContext(r.Context())
 	list, err := h.deps.Progreso.MisInsignias(r.Context(), actor)
@@ -76,7 +91,27 @@ func (h *handlers) listMyBadges(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": list})
+	items := make([]insigniaResponse, 0, len(list))
+	for _, b := range list {
+		items = append(items, insigniaResponse{
+			Code: b.VerificationCode, CourseID: b.CourseID, Valid: b.Verified(),
+			IssuedAt: b.IssuedAt, RevokedAt: b.RevokedAt,
+			ImageURL:   h.urlDeImagen(r, b.ImageObjectKey),
+			VerifyPath: "/api/v1/badges/" + b.VerificationCode,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// verificacionResponse es la vista pública. No lleva nada del estudiante: esa
+// es la condición de aceptación de la emisión de insignias.
+type verificacionResponse struct {
+	Code      string     `json:"code"`
+	CourseID  uuid.UUID  `json:"course_id"`
+	Valid     bool       `json:"valid"`
+	IssuedAt  time.Time  `json:"issued_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	ImageURL  string     `json:"image_url,omitempty"`
 }
 
 func (h *handlers) verifyBadge(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +120,28 @@ func (h *handlers) verifyBadge(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, v)
+	writeJSON(w, http.StatusOK, verificacionResponse{
+		Code: v.Code, CourseID: v.CourseID, Valid: v.Valid,
+		IssuedAt: v.IssuedAt, RevokedAt: v.RevokedAt,
+		ImageURL: h.urlDeImagen(r, v.ImagenClave),
+	})
+}
+
+// urlDeImagen resuelve dónde está la imagen de la insignia.
+//
+// La imagen no es material privado de un curso —su URL se comparte junto con
+// la verificación—, pero vive en el mismo almacén, así que sale por el CDN
+// cuando lo hay y firmada cuando no. Si el objeto no se llegó a escribir, se
+// devuelve vacío y el cliente muestra la insignia sin imagen.
+func (h *handlers) urlDeImagen(r *http.Request, clave string) string {
+	if clave == "" || h.deps.Entrega == nil {
+		return ""
+	}
+	url, err := h.deps.Entrega.PresignedGetURL(r.Context(), clave, vigenciaEntrega, "")
+	if err != nil {
+		return ""
+	}
+	return url
 }
 
 type revokeBadgeRequest struct {

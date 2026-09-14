@@ -6,17 +6,26 @@ que se implementa cada módulo. El contrato de la API vive en `openapi.yaml`.
 ## Frontera entre frontend y backend
 
 El frontend no comparte proceso ni base de datos con el backend. Toda la lectura
-y escritura ocurre por REST JSON contra `/api/v1`:
+y escritura ocurre por REST JSON contra `/api/v1`, y el navegador llama a la API
+**directamente**, sin proxy de Next.js de por medio:
 
 ```
-navegador ──▶ Next.js (rewrite /api/v1/*) ──▶ API en Go ──▶ PostgreSQL / Redis
-                                                   │
-                                                   └──▶ cola asynq ──▶ workers
+navegador ──▶ API en Go (NEXT_PUBLIC_API_URL) ──▶ PostgreSQL / Redis
+     │                    │
+     │                    └──▶ cola asynq ──▶ workers
+     │
+     └──▶ almacenamiento de objetos / CDN (URLs prefirmadas)
 ```
 
-Los binarios no pasan por Next.js: se suben y descargan con URLs prefirmadas
-emitidas por la API, directamente contra el almacenamiento de objetos (MinIO en
-local) o el CDN.
+Que sea directo tiene consecuencias que no son negociables: es un origen
+cruzado, así que la API declara CORS para el origen del frontend y las
+peticiones viajan con `credentials: "include"` para que la cookie de sesión
+llegue. Un `rewrite` de Next.js evitaría el CORS, pero metería un salto de red
+en cada petición y convertiría al frontend en parte del camino crítico.
+
+Los binarios tampoco pasan por Next.js: se suben y descargan con URLs
+prefirmadas emitidas por la API, directamente contra el almacenamiento de
+objetos (MinIO en local) o el CDN.
 
 ## Módulos del backend
 
@@ -36,31 +45,45 @@ El dominio no conoce HTTP, SQL ni el proveedor cloud; los adaptadores viven en
 | `platform/redisclient` | sesiones, caché y límites |
 | `platform/queue` | asynq: publicación, consumo, backoff y DLQ |
 | `platform/storage` | S3/MinIO: originales, HLS, PDFs e imágenes |
+| `platform/antimalware` | escaneo de las cargas: escáner integrado y ClamAV |
+| `platform/media` | transcodificación a HLS con FFmpeg |
 
 La API y los workers comparten `internal/config` y no guardan estado local, de
 modo que cualquier instancia es reemplazable.
 
-## Grupos de rutas del frontend
+## Rutas del frontend
 
-Cada grupo tiene una audiencia y un layout propio:
+El App Router va plano, con una ruta por pantalla y un solo layout:
 
-| Grupo | Audiencia | Requiere sesión |
-|---|---|---|
-| `(publico)` | cualquiera | no |
-| `(auth)` | anónimos | no |
-| `(estudiante)` | estudiantes inscritos | sí |
-| `(profesor)` | profesores propietarios | sí |
-| `(admin)` | administradores | sí |
+| Ruta | Audiencia |
+|---|---|
+| `/`, `/cursos/[courseId]`, `/insignias/[code]` | cualquiera, sin sesión |
+| `/login`, `/registro`, `/verificar-correo`, `/restablecer-contrasena` | anónimos |
+| `/mis-cursos`, `/mis-insignias`, `/cuenta/sesiones`, `/cursos/…/recursos/…` | estudiantes |
+| `/profesor`, `/profesor/versiones/…` | profesores propietarios |
+| `/admin` | administradores |
 
-La autorización efectiva es del servidor. El agrupamiento por rol organiza la
-interfaz; nunca sustituye la verificación de rol, propiedad e inscripción que
-hace cada endpoint.
+La autorización efectiva es del servidor. Lo que hace el frontend es no
+enseñar lo que no corresponde; nunca sustituye la verificación de rol,
+propiedad e inscripción que hace cada endpoint.
 
 ## Datos que el cliente no debe recibir
 
 - La clave correcta de una pregunta de quiz.
-- El correo del estudiante en la verificación pública de una insignia.
+- El correo del estudiante en la verificación pública de una insignia, ni en la
+  imagen de la insignia, que se comparte con la misma URL.
 - URLs directas a materiales privados sin firma previa.
+
+## Entrada de binarios
+
+Un archivo llega al almacén sin pasar por la API, pero no se acepta como
+material hasta que la API lo verifica. La confirmación —la de una subida simple
+o el cierre de una multipart— recorre el objeto una sola vez y con esa lectura
+calcula el SHA-256, deduce el tipo real de los primeros bytes y lo pasa por el
+escáner antimalware. Si algo falla, el objeto se borra.
+
+Que las dos rutas terminen en la misma función es lo que da la garantía: un
+control que solo se aplica en el camino largo lo esquiva quien elige el corto.
 
 ## Progreso
 

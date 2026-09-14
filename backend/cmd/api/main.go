@@ -21,6 +21,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/config"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
@@ -78,7 +79,7 @@ func main() {
 	adminSvc := admin.NewService(userRepo)
 	coursesSvc := courses.NewService(courseRepo)
 	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, progressRepo)
-	progresoSvc := progreso.NewService(progressRepo, enrollmentRepo, courseRepo, quizRepo, badgeRepo, userRepo)
+	progresoSvc := progreso.NewService(progressRepo, enrollmentRepo, courseRepo, quizRepo, badgeRepo, storageClient, userRepo)
 	// El servicio de quizzes avisa al de progreso al cerrar un intento, porque
 	// aprobar una evaluacion puede ser lo ultimo que faltaba para el curso.
 	quizzesSvc := quizzes.NewService(quizRepo, courseRepo, coursesSvc, enrollmentRepo, progresoSvc)
@@ -87,11 +88,19 @@ func main() {
 		log.Printf("api: no se pudo crear el administrador inicial: %v", err)
 	}
 
+	escaner := antimalware.Nuevo(cfg.ClamAVAddr)
+	if cfg.ClamAVAddr == "" {
+		log.Printf("api: antimalware integrado (sin CLAMAV_ADDR configurado)")
+	} else {
+		log.Printf("api: antimalware con clamd en %s", cfg.ClamAVAddr)
+	}
+
 	router := httpserver.NewRouter(httpserver.Deps{
 		Auth: authSvc, Admin: adminSvc, Courses: coursesSvc, Enrollments: enrollmentsSvc,
 		Quizzes: quizzesSvc, Progreso: progresoSvc,
 		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
-		Redis: rdb, Queue: queueClient,
+		Antimalware: escaner,
+		Redis:       rdb, Queue: queueClient,
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
 	})

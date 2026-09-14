@@ -14,6 +14,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/quiz"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 )
 
@@ -115,6 +116,18 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusConflict, "idempotency_in_flight", nil
 	case errors.Is(err, ErrColaNoDisponible):
 		return http.StatusServiceUnavailable, "queue_unavailable", nil
+	case errors.Is(err, ErrObjetoVacio):
+		return http.StatusUnprocessableEntity, "upload_missing", nil
+	case errors.Is(err, ErrChecksumNoCoincide):
+		return http.StatusUnprocessableEntity, "checksum_mismatch", nil
+	case errors.Is(err, ErrArchivoInfectado):
+		return http.StatusUnprocessableEntity, "malware_detected", nil
+	case errors.Is(err, ErrTipoNoCorresponde):
+		return http.StatusUnprocessableEntity, "mime_mismatch", nil
+	case errors.Is(err, antimalware.ErrEscanerNoDisponible):
+		// El objeto no se pudo escanear, así que no se acepta. Es 503 y no
+		// 422: el archivo puede estar bien, lo que falla es la plataforma.
+		return http.StatusServiceUnavailable, "scanner_unavailable", nil
 	default:
 		return http.StatusInternalServerError, "internal_error", nil
 	}
