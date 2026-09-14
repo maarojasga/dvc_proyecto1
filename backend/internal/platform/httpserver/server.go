@@ -40,6 +40,8 @@ type Deps struct {
 	Iframes ListaBlancaDeIframes
 	// Metricas alimenta el panel administrativo y los informes de evaluación.
 	Metricas Metricas
+	// Revisiones guarda el historial de contenido de los recursos de texto.
+	Revisiones Revisiones
 	// Auditor deja constancia en la bitácora inmutable de las acciones que no
 	// pasan por un servicio de aplicación.
 	Auditor Auditor
@@ -70,6 +72,7 @@ func NewRouter(d Deps) http.Handler {
 	h.registerMedia(mux)
 	h.registerIframes(mux)
 	h.registerMetricas(mux)
+	h.registerRevisiones(mux)
 	h.registerOperacion(mux)
 
 	return Chain(mux,

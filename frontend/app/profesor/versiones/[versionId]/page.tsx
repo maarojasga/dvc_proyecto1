@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, type Version, type Module, type Unit, type Clasificacion, ApiError } from "@/lib/api";
 import { BlockEditor } from "@/components/BlockEditor";
+import { HistorialDeRevisiones } from "@/components/HistorialDeRevisiones";
 import { subirArchivo, hayCargaPendiente, olvidarCarga } from "@/lib/carga";
 
 const RESOURCE_TYPES = [
@@ -470,6 +471,10 @@ function ResourceRow({
         )}
       </div>
 
+      {editable && r.Type === "text" && (
+        <EditorDeContenido versionId={versionId} resource={r} onChange={onChange} />
+      )}
+
       {pendiente && !uploading && (
         <p className="muted" role="status">
           Hay una subida sin terminar. Vuelve a elegir el mismo archivo y continuará desde donde se quedó.{" "}
@@ -502,6 +507,92 @@ function ResourceRow({
 
       {error && <span className="error-banner">{error}</span>}
     </li>
+  );
+}
+
+/**
+ * Edición del contenido de un recurso de texto, con su historial.
+ *
+ * Va plegado por defecto: una unidad con varios recursos abriría media docena
+ * de editores a la vez, y ninguno es el que se quiere tocar.
+ *
+ * Guardar escribe el contenido y deja una revisión en el servidor. El
+ * autoguardado del editor sigue conservando el borrador en el navegador, que
+ * es lo que salva un cierre accidental de la pestaña; lo que añade el guardado
+ * es el historial, que sobrevive al equipo y dice quién escribió qué.
+ */
+function EditorDeContenido({
+  versionId,
+  resource,
+  onChange,
+}: {
+  versionId: string;
+  resource: import("@/lib/api").Resource;
+  onChange: () => void;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [markdown, setMarkdown] = useState(resource.TextContentMD ?? "");
+  const [estado, setEstado] = useState("");
+  const [recarga, setRecarga] = useState(0);
+
+  async function guardar() {
+    setEstado("Guardando…");
+    try {
+      await api.saveRevision(versionId, resource.ID, markdown);
+      setEstado("Guardado");
+      setRecarga((n) => n + 1);
+      onChange();
+    } catch (e) {
+      setEstado(e instanceof ApiError ? e.message : "No se pudo guardar");
+    }
+  }
+
+  if (!abierto) {
+    return (
+      <button className="secondary" onClick={() => setAbierto(true)}>
+        Editar contenido
+      </button>
+    );
+  }
+
+  return (
+    <div className="stack">
+      <BlockEditor
+        key={recarga}
+        initialMarkdown={markdown}
+        draftKey={`draft_resource_${resource.ID}`}
+        onChange={setMarkdown}
+      />
+      <div className="row" style={{ alignItems: "center", gap: "0.5rem" }}>
+        <button onClick={guardar}>Guardar revisión</button>
+        <button className="secondary" onClick={() => setAbierto(false)}>
+          Cerrar
+        </button>
+        {estado && (
+          <span className="muted" role="status">
+            {estado}
+          </span>
+        )}
+      </div>
+
+      <HistorialDeRevisiones
+        key={`hist-${recarga}`}
+        versionId={versionId}
+        resourceId={resource.ID}
+        onRestaurado={async () => {
+          const rev = await api
+            .listRevisions(versionId, resource.ID)
+            .then((r) => r.items[0])
+            .catch(() => null);
+          if (rev) {
+            const completa = await api.getRevision(versionId, resource.ID, rev.revision_number);
+            setMarkdown(completa.content_md ?? "");
+            setRecarga((n) => n + 1);
+          }
+          onChange();
+        }}
+      />
+    </div>
   );
 }
 

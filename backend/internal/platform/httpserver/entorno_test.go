@@ -165,6 +165,7 @@ func nuevoEntorno(t *testing.T) *entorno {
 		Queue:        cola,
 		Iframes:      marcos,
 		Metricas:     postgres.NewMetricasRepo(pool),
+		Revisiones:   postgres.NewRevisionesRepo(pool),
 		Auditor:      users,
 		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
 		Redis:        rdb,

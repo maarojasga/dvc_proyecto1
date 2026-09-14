@@ -261,6 +261,17 @@ export interface ResultadosDeQuiz {
   };
 }
 
+// Una revisión guardada del contenido de un recurso. La lista no trae el
+// contenido: se pide por revisión al mirar una en concreto.
+export interface Revision {
+  id: string;
+  resource_id: string;
+  revision_number: number;
+  content_md?: string;
+  author_email?: string;
+  created_at: string;
+}
+
 // Una parte ya recibida por el almacen. El ETag es lo que el cliente reenvia
 // al completar, y lo que delata una parte que no llego intacta.
 export interface ParteCargada {
@@ -458,6 +469,26 @@ export const api = {
   quizResults: (versionId: string, resourceId: string) =>
     request<ResultadosDeQuiz>(
       `/api/v1/courses/versions/${versionId}/resources/${resourceId}/results`,
+    ),
+
+  // Historial de revisiones de un recurso de texto.
+  listRevisions: (versionId: string, resourceId: string) =>
+    request<{ items: Revision[] }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions`,
+    ),
+  saveRevision: (versionId: string, resourceId: string, content_md: string) =>
+    request<Revision | { status: string }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions`,
+      { method: "POST", body: JSON.stringify({ content_md }) },
+    ),
+  getRevision: (versionId: string, resourceId: string, numero: number) =>
+    request<Revision>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions/${numero}`,
+    ),
+  restoreRevision: (versionId: string, resourceId: string, numero: number) =>
+    request<{ status: string; restored_from?: number }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions/${numero}/restore`,
+      { method: "POST" },
     ),
 
   listCatalog: (params: Record<string, string> = {}) =>

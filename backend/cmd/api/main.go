@@ -103,6 +103,7 @@ func main() {
 		Antimalware: escaner,
 		Iframes:     iframeRepo,
 		Metricas:    postgres.NewMetricasRepo(pool),
+		Revisiones:  postgres.NewRevisionesRepo(pool),
 		Auditor:     userRepo,
 		Redis:       rdb, Queue: queue.NuevoEncolador(queueClient),
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
