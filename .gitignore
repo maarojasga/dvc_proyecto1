@@ -46,6 +46,10 @@
 #     X-Request-Id, pero no métricas ni trazas. Sin ellas no se puede ver
 #     DÓNDE se va el p95 cuando se rompe un umbral.
 #   - Cursores y ETag en las colecciones.
+#   - Vigilar las dependencias del frontend. Next 14 llegó a acumular más de
+#     veinte advisories antes de que el CI lo parara: `npm audit` en el
+#     pipeline lo detecta, pero nadie avisa entre corrida y corrida. Un
+#     Dependabot o equivalente cerraría ese hueco.
 #   - Backup y restauración con su prueba de recuperación.
 #   - Fallos inyectados durante la carga (tirar una réplica a mitad de la
 #     meseta y demostrar que el p95 se recupera).

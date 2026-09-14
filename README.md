@@ -343,6 +343,34 @@ Las E2E necesitan la plataforma en marcha y el administrador sembrado
 (`E2E_ADMIN_EMAIL` y `E2E_ADMIN_PASSWORD`). Levantan un navegador de verdad:
 no simulan la API.
 
+### Por qué Next va en 16 y no en 14
+
+El paso de análisis de seguridad del CI tumbó la rama: `next@14.2.35` arrastra
+más de veinte advisories, varios críticos —ejecución remota en el optimizador
+de imágenes con AVIF, SSRF en rewrites, envenenamiento de caché en respuestas
+de React Server Components, XSS en App Router— y `postcss`, que entra como
+dependencia suya, otros cuatro de severidad alta.
+
+No había forma de arreglarlo sin subir de versión mayor: se comprobó que
+`15.5.25` todavía deja uno crítico y que solo `16.3.5` los cierra todos. Next
+16 acepta React 18, así que el salto no obligó a migrar React. Lo que sí
+arrastró fue ESLint 9 con configuración plana, porque `eslint-config-next@16`
+lo exige, y la desaparición de `next lint`, que ahora es `eslint .`.
+
+El salto se validó con la suite completa —34 pruebas E2E, la auditoría de
+accesibilidad, las 29 unitarias y la compilación—, que es exactamente para lo
+que estaba. Ninguna falló.
+
+Dos cosas se corrigieron de paso, porque el episodio las puso a la vista:
+
+- **El Dockerfile del frontend ignoraba el lockfile** (`COPY package.json` y
+  `npm install`), así que la imagen desplegada resolvía versiones frescas y
+  podía no ser la que validaron las pruebas. Ahora copia `package-lock.json` y
+  usa `npm ci`.
+- **`next` pasa a `^16.3.5` en vez de un pin exacto.** Un pin exacto es
+  justamente cómo `14.2.35` se quedó quieto mientras acumulaba advisories; con
+  el lockfile y `npm ci`, la reproducibilidad no depende de congelar el rango.
+
 ### Lo que encontraron estas pruebas
 
 No son decorativas. En la primera pasada destaparon tres defectos que ni las

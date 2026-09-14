@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api, type Course, ApiError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 
@@ -12,19 +13,23 @@ export default function TeacherDashboardPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { t } = useI18n();
+  const router = useRouter();
 
-  useEffect(() => {
-    load();
-  }, []);
-
-  async function load() {
+  // En useCallback y declarada antes del efecto: leerla desde un efecto que
+  // no la lista como dependencia dejaba una versión vieja capturada, y era el
+  // único aviso de lint que arrastraba el proyecto.
+  const load = useCallback(async () => {
     try {
       const res = await api.listMyCourses();
       setCourses(res.items ?? []);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : t("profesor.error"));
     }
-  }
+  }, [t]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -32,7 +37,10 @@ export default function TeacherDashboardPage() {
     setSubmitting(true);
     try {
       const res = await api.createCourse({ slug, title });
-      window.location.href = `/profesor/versiones/${res.version_id}`;
+      // router.push y no window.location.href: navegar por el router conserva
+      // el estado del cliente y evita recargar la aplicación entera para ir a
+      // una pantalla que ya está cargada.
+      router.push(`/profesor/versiones/${res.version_id}`);
     } catch (e) {
       setError(e instanceof ApiError ? [e.message, ...(e.details ?? [])].join(" ") : t("profesor.errorCrear"));
     } finally {
