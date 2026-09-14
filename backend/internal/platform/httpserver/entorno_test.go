@@ -142,7 +142,8 @@ func nuevoEntorno(t *testing.T) *entorno {
 		"http://localhost:3000", user.DefaultSessionTTL)
 
 	cursos := postgres.NewCourseRepo(pool)
-	cursosSvc := courses.NewService(cursos)
+	marcos := postgres.NewIframeRepo(pool)
+	cursosSvc := courses.NewService(cursos, marcos)
 	inscripciones := postgres.NewEnrollmentRepo(pool)
 	avance := postgres.NewProgressRepo(pool)
 	evaluaciones := postgres.NewQuizRepo(pool)
@@ -154,10 +155,12 @@ func nuevoEntorno(t *testing.T) *entorno {
 		Auth:         authSvc,
 		Admin:        admin.NewService(users),
 		Courses:      cursosSvc,
-		Enrollments:  enrollments.NewService(inscripciones, cursos, avance),
+		Enrollments:  enrollments.NewService(inscripciones, cursos, avance, marcos),
 		Quizzes:      quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
 		Progreso:     progresoSvc,
 		Storage:      almacen,
+		Iframes:      marcos,
+		Auditor:      users,
 		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
 		Redis:        rdb,
 		CORSOrigin:   "http://localhost:3000",
@@ -284,6 +287,15 @@ func (e *entorno) asciendeA(correo string, rol string) {
 		`UPDATE users SET role=$2 WHERE email=$1`, correo, rol); err != nil {
 		e.t.Fatalf("no se pudo asignar el rol %s a %s: %v", rol, correo, err)
 	}
+}
+
+// administrador deja lista una cuenta con rol de administrador y devuelve su
+// cliente autenticado.
+func (e *entorno) administrador(correo string) *cliente {
+	e.t.Helper()
+	e.registrarYVerificar(correo)
+	e.asciendeA(correo, "admin")
+	return e.entrar(correo, clavePrueba)
 }
 
 // profesorConCurso deja una cuenta de profesor con un curso en borrador, y

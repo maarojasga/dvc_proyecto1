@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 )
@@ -18,10 +19,16 @@ type Service struct {
 	enrollments *postgres.EnrollmentRepo
 	courses     *postgres.CourseRepo
 	progreso    *postgres.ProgressRepo
+	iframes     ListaDeIframes
 }
 
-func NewService(enrollments *postgres.EnrollmentRepo, courses *postgres.CourseRepo, progreso *postgres.ProgressRepo) *Service {
-	return &Service{enrollments: enrollments, courses: courses, progreso: progreso}
+func NewService(enrollments *postgres.EnrollmentRepo, courses *postgres.CourseRepo, progreso *postgres.ProgressRepo, iframes ListaDeIframes) *Service {
+	return &Service{enrollments: enrollments, courses: courses, progreso: progreso, iframes: iframes}
+}
+
+// ListaDeIframes entrega la lista blanca de destinos incrustables.
+type ListaDeIframes interface {
+	Listar(ctx context.Context) (iframe.Lista, error)
 }
 
 // Enroll inscribe al estudiante en la versión publicada vigente del curso.
@@ -109,6 +116,14 @@ type Contenido struct {
 	URLExterna  string
 	// Segundos donde reanudar. Solo tiene sentido en video y audio.
 	PosicionSegundos int
+	// Sandbox, Permisos y ReferrerPolicy solo se rellenan en iframes. Los
+	// calcula el servidor a partir de la lista blanca y viajan al cliente
+	// para que los ponga en el marco: dejar que el navegador decida los
+	// atributos de seguridad de un contenido de terceros sería confiar la
+	// contención a quien la sufre.
+	Sandbox        string
+	Permisos       string
+	ReferrerPolicy string
 }
 
 // autorizarRecurso comprueba el derecho de acceso a un recurso y, de paso,
@@ -179,8 +194,30 @@ func (s *Service) ContenidoDeRecurso(ctx context.Context, actor *user.User, reso
 			return nil, ErrMediaNoLista
 		}
 		out.ClaveObjeto = rec.ObjectKey
+	case "iframe":
+		// Se vuelve a autorizar al servir, no solo al guardar: la lista pudo
+		// cambiar desde entonces, y quien la recorta espera que el contenido
+		// deje de entregarse sin tener que repasar los cursos ya publicados.
+		destino, err := s.autorizarIframe(ctx, rec.ExternalURL)
+		if err != nil {
+			return nil, err
+		}
+		out.Sandbox = iframe.Sandbox()
+		out.Permisos = destino.Permisos
+		out.ReferrerPolicy = iframe.ReferrerPolicy
 	}
 	return out, nil
+}
+
+func (s *Service) autorizarIframe(ctx context.Context, url string) (*iframe.Destino, error) {
+	if s.iframes == nil {
+		return nil, iframe.ErrHostNoAutorizado
+	}
+	lista, err := s.iframes.Listar(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return lista.Autorizar(url)
 }
 
 // PosicionMaxima acota lo que un cliente puede reportar. Sirve para reanudar,

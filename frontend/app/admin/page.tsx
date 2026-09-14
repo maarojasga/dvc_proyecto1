@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type AuditEntry, type Session, type User } from "@/lib/api";
+import { api, ApiError, type AuditEntry, type IframeDestino, type Session, type User } from "@/lib/api";
 
 const ROLES: User["role"][] = ["student", "teacher", "admin"];
 const STATUSES: User["status"][] = ["pending_verification", "active", "suspended"];
@@ -138,8 +138,182 @@ export default function AdminDashboardPage() {
         )}
       </section>
 
+      <ListaBlancaDeIframes onError={setError} />
+
       <Auditoria onError={setError} />
     </div>
+  );
+}
+
+/**
+ * Administración de los destinos que se pueden incrustar en un curso.
+ *
+ * La lista es la única capa que impide que contenido de terceros llegue al
+ * navegador del estudiante: el sandbox y la política de permisos lo contienen
+ * una vez cargado, pero no deciden si se carga. Por eso quitar una entrada
+ * surte efecto de inmediato sobre los cursos ya publicados.
+ */
+function ListaBlancaDeIframes({ onError }: { onError: (m: string) => void }) {
+  const [items, setItems] = useState<IframeDestino[] | null>(null);
+  const [sandbox, setSandbox] = useState("");
+  const [host, setHost] = useState("");
+  const [subdominios, setSubdominios] = useState(false);
+  const [permisos, setPermisos] = useState("");
+  const [descripcion, setDescripcion] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  const cargar = useCallback(async () => {
+    try {
+      const res = await api.listIframeAllowlist();
+      setItems(res.items ?? []);
+      setSandbox(res.sandbox);
+    } catch (e) {
+      onError(e instanceof ApiError ? e.message : "No se pudo cargar la lista de destinos");
+    }
+  }, [onError]);
+
+  useEffect(() => {
+    cargar();
+  }, [cargar]);
+
+  async function agregar(e: React.FormEvent) {
+    e.preventDefault();
+    setOcupado(true);
+    try {
+      await api.addIframeDestino({
+        host,
+        include_subdomains: subdominios,
+        permissions: permisos,
+        description: descripcion,
+      });
+      setHost("");
+      setPermisos("");
+      setDescripcion("");
+      setSubdominios(false);
+      await cargar();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : "No se pudo autorizar el destino");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function quitar(d: IframeDestino) {
+    if (!confirm(`¿Quitar ${d.host} de la lista? Los recursos ya publicados que lo usen dejarán de mostrarse.`)) {
+      return;
+    }
+    setOcupado(true);
+    try {
+      await api.removeIframeDestino(d.id);
+      await cargar();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : "No se pudo quitar el destino");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <section className="card">
+      <header>
+        <h2>Destinos incrustables</h2>
+        <p>
+          Solo estos dominios pueden aparecer en un recurso de tipo iframe. Todo lo demás se
+          rechaza al guardarlo y al servirlo.
+        </p>
+      </header>
+
+      <form className="barra-busqueda" onSubmit={agregar}>
+        <div className="form-field">
+          <label htmlFor="iframe-host">Dominio</label>
+          <input
+            id="iframe-host"
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+            placeholder="player.vimeo.com"
+            required
+          />
+        </div>
+        <div className="form-field">
+          <label htmlFor="iframe-permisos">Permisos concedidos</label>
+          <input
+            id="iframe-permisos"
+            value={permisos}
+            onChange={(e) => setPermisos(e.target.value)}
+            placeholder="fullscreen; picture-in-picture"
+          />
+        </div>
+        <div className="form-field">
+          <label htmlFor="iframe-desc">Para qué</label>
+          <input
+            id="iframe-desc"
+            value={descripcion}
+            onChange={(e) => setDescripcion(e.target.value)}
+            placeholder="Reproductor de vídeo"
+          />
+        </div>
+        <div className="form-field">
+          <label htmlFor="iframe-sub">
+            <input
+              id="iframe-sub"
+              type="checkbox"
+              checked={subdominios}
+              onChange={(e) => setSubdominios(e.target.checked)}
+            />{" "}
+            Incluir subdominios
+          </label>
+        </div>
+        <button type="submit" disabled={ocupado || !host.trim()}>
+          Autorizar
+        </button>
+      </form>
+
+      {subdominios && (
+        <p className="warning-banner" role="status">
+          Incluir subdominios autoriza también los que ese tercero cree en el futuro, incluido
+          cualquiera que aloje contenido de sus usuarios.
+        </p>
+      )}
+
+      {items === null && <p role="status">Cargando…</p>}
+      {items?.length === 0 && (
+        <div className="estado-vacio">
+          <p>No hay ningún destino autorizado.</p>
+          <p>Mientras la lista esté vacía, no se puede guardar ningún recurso incrustado.</p>
+        </div>
+      )}
+
+      {items && items.length > 0 && (
+        <ul className="lista-filas">
+          {items.map((d) => (
+            <li key={d.id} className="fila">
+              <div className="fila__datos">
+                <p>
+                  <strong>{d.host}</strong>{" "}
+                  {d.include_subdomains && <span className="badge">y subdominios</span>}{" "}
+                  {d.permissions ? (
+                    <span className="badge">{d.permissions}</span>
+                  ) : (
+                    <span className="badge">sin permisos extra</span>
+                  )}
+                </p>
+                {d.description && <p className="muted">{d.description}</p>}
+              </div>
+              <button className="secondary" disabled={ocupado} onClick={() => quitar(d)}>
+                Quitar
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {sandbox && (
+        <p className="muted">
+          Todo marco se sirve con <code>sandbox=&quot;{sandbox}&quot;</code>, que le niega navegar la
+          ventana principal, abrir descargas y mostrar diálogos modales.
+        </p>
+      )}
+    </section>
   );
 }
 

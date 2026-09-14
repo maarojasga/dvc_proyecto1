@@ -4,6 +4,7 @@
 package httpserver
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -34,6 +35,11 @@ type Deps struct {
 	// Antimalware escanea cada objeto antes de aceptarlo. Vacío significa el
 	// escáner integrado.
 	Antimalware antimalware.Escaner
+	// Iframes administra la lista blanca de destinos incrustables.
+	Iframes ListaBlancaDeIframes
+	// Auditor deja constancia en la bitácora inmutable de las acciones que no
+	// pasan por un servicio de aplicación.
+	Auditor Auditor
 	// Entrega resuelve las URL de lectura. En producción es el mismo cliente
 	// de Storage; se declara aparte porque la reproducción solo necesita eso.
 	Entrega      EntregaDeObjetos
@@ -56,6 +62,7 @@ func NewRouter(d Deps) http.Handler {
 	h.registerQuizzes(mux)
 	h.registerProgress(mux)
 	h.registerMedia(mux)
+	h.registerIframes(mux)
 	h.registerOperacion(mux)
 
 	return Chain(mux,
@@ -67,6 +74,11 @@ func NewRouter(d Deps) http.Handler {
 		CSRF,
 		Idempotency(d.Redis),
 	)
+}
+
+// Auditor es la bitácora inmutable vista desde la capa HTTP.
+type Auditor interface {
+	InsertAudit(ctx context.Context, e postgres.AuditEntry) error
 }
 
 type handlers struct {

@@ -45,6 +45,13 @@ type contentResponse struct {
 	Markdown string `json:"markdown,omitempty"`
 	// ExternalURL es el destino de enlaces e iframes.
 	ExternalURL string `json:"external_url,omitempty"`
+	// Sandbox, Allow y ReferrerPolicy son los atributos con los que el cliente
+	// debe montar un iframe. Los decide el servidor: si el cliente eligiera
+	// cuánto restringir el contenido de terceros, bastaría con manipularlo
+	// para que no restringiera nada.
+	Sandbox        string `json:"sandbox,omitempty"`
+	Allow          string `json:"allow,omitempty"`
+	ReferrerPolicy string `json:"referrer_policy,omitempty"`
 	// PositionSeconds es dónde reanudar la reproducción.
 	PositionSeconds int `json:"position_seconds,omitempty"`
 }
@@ -78,6 +85,8 @@ func (h *handlers) resourceContent(w http.ResponseWriter, r *http.Request) {
 		Type: contenido.Tipo, Title: contenido.Titulo,
 		Downloadable: contenido.Descargable, Markdown: contenido.Markdown,
 		ExternalURL: contenido.URLExterna, PositionSeconds: contenido.PosicionSegundos,
+		Sandbox: contenido.Sandbox, Allow: contenido.Permisos,
+		ReferrerPolicy: contenido.ReferrerPolicy,
 	}
 	if contenido.ClaveObjeto != "" {
 		url, err := h.deps.Entrega.PresignedGetURL(r.Context(), contenido.ClaveObjeto, vigenciaEntrega, "")

@@ -7,6 +7,7 @@ import { api, ApiError, type ResourceContent } from "@/lib/api";
 import { ReproductorHLS } from "@/components/ReproductorHLS";
 import { VisorPDF } from "@/components/VisorPDF";
 import { QuizPlayer } from "@/components/QuizPlayer";
+import { MarcoIncrustado } from "@/components/MarcoIncrustado";
 import { useProgressReporting } from "@/lib/useProgressReporting";
 
 /**
@@ -144,12 +145,16 @@ export default function RecursoPage() {
         </article>
       )}
 
-      {(contenido.type === "link" || contenido.type === "iframe") && contenido.external_url && (
+      {contenido.type === "link" && contenido.external_url && (
         <p>
           <a href={contenido.external_url} target="_blank" rel="noopener noreferrer">
             Abrir el recurso externo
           </a>
         </p>
+      )}
+
+      {contenido.type === "iframe" && contenido.external_url && (
+        <MarcoIncrustado contenido={contenido} />
       )}
 
       {contenido.type === "file" && contenido.url && (

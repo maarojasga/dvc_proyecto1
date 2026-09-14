@@ -87,6 +87,21 @@ export interface ResourceContent {
   markdown?: string;
   external_url?: string;
   position_seconds?: number;
+  // Atributos de seguridad de un iframe. Los decide el servidor a partir de la
+  // lista blanca; el cliente los aplica tal cual.
+  sandbox?: string;
+  allow?: string;
+  referrer_policy?: string;
+}
+
+// Destino autorizado para incrustar.
+export interface IframeDestino {
+  id: string;
+  host: string;
+  include_subdomains: boolean;
+  permissions?: string;
+  description?: string;
+  example_url?: string;
 }
 
 export interface AuditEntry {
@@ -347,6 +362,23 @@ export const api = {
         }),
       },
     ),
+
+  // La lista blanca de iframes. El profesor la consulta para saber qué
+  // destinos puede incrustar; solo la administración la modifica.
+  listIframeAllowlist: () =>
+    request<{ items: IframeDestino[]; sandbox: string; referrer_policy: string }>("/api/v1/iframe-allowlist"),
+  addIframeDestino: (data: {
+    host: string;
+    include_subdomains: boolean;
+    permissions: string;
+    description: string;
+  }) =>
+    request<IframeDestino>("/api/v1/admin/iframe-allowlist", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  removeIframeDestino: (id: string) =>
+    request<void>(`/api/v1/admin/iframe-allowlist/${id}`, { method: "DELETE" }),
 
   listCatalog: (params: Record<string, string> = {}) =>
     request<{ items: Version[] }>(`/api/v1/catalog?${new URLSearchParams(params)}`),

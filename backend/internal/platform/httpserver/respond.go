@@ -12,6 +12,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/quiz"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
@@ -124,6 +125,12 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusUnprocessableEntity, "malware_detected", nil
 	case errors.Is(err, ErrTipoNoCorresponde):
 		return http.StatusUnprocessableEntity, "mime_mismatch", nil
+	case errors.Is(err, iframe.ErrHostNoAutorizado):
+		return http.StatusUnprocessableEntity, "iframe_host_not_allowed", nil
+	case errors.Is(err, iframe.ErrEsquemaNoPermitido):
+		return http.StatusUnprocessableEntity, "iframe_scheme_not_allowed", nil
+	case errors.Is(err, iframe.ErrURLInvalida):
+		return http.StatusUnprocessableEntity, "iframe_invalid_url", nil
 	case errors.Is(err, antimalware.ErrEscanerNoDisponible):
 		// El objeto no se pudo escanear, así que no se acepta. Es 503 y no
 		// 422: el archivo puede estar bien, lo que falla es la plataforma.

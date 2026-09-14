@@ -77,8 +77,9 @@ func main() {
 
 	authSvc := auth.NewService(userRepo, m, cfg.PublicBaseURL, cfg.SessionTTL)
 	adminSvc := admin.NewService(userRepo)
-	coursesSvc := courses.NewService(courseRepo)
-	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, progressRepo)
+	iframeRepo := postgres.NewIframeRepo(pool)
+	coursesSvc := courses.NewService(courseRepo, iframeRepo)
+	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, progressRepo, iframeRepo)
 	progresoSvc := progreso.NewService(progressRepo, enrollmentRepo, courseRepo, quizRepo, badgeRepo, storageClient, userRepo)
 	// El servicio de quizzes avisa al de progreso al cerrar un intento, porque
 	// aprobar una evaluacion puede ser lo ultimo que faltaba para el curso.
@@ -100,6 +101,8 @@ func main() {
 		Quizzes: quizzesSvc, Progreso: progresoSvc,
 		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
 		Antimalware: escaner,
+		Iframes:     iframeRepo,
+		Auditor:     userRepo,
 		Redis:       rdb, Queue: queueClient,
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,

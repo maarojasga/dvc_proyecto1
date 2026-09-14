@@ -861,6 +861,81 @@ paths:
         "422": { $ref: "#/components/responses/CargaRechazada" }
         "503": { $ref: "#/components/responses/Problema" }
 
+  /iframe-allowlist:
+    get:
+      tags: [Multimedia]
+      summary: Destinos autorizados para incrustar
+      description: >
+        La consulta la necesita también el profesor: al añadir un recurso de
+        tipo iframe tiene que saber qué dominios se admiten. Solo la
+        administración puede modificarla.
+      operationId: listIframeAllowlist
+      responses:
+        "200":
+          description: Destinos autorizados, con el sandbox común a todos.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/DestinoIframe" }
+                  sandbox:
+                    type: string
+                    description: Valor del atributo sandbox con que se sirve todo marco.
+                  referrer_policy: { type: string }
+
+  /admin/iframe-allowlist:
+    post:
+      tags: [Administración]
+      summary: Autoriza un dominio incrustable
+      description: >
+        Acepta tanto un dominio suelto como una URL, de la que se extrae el
+        host. Repetir un host ya autorizado actualiza sus permisos en vez de
+        fallar. Queda auditado.
+      operationId: addIframeDestino
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host]
+              properties:
+                host: { type: string }
+                include_subdomains:
+                  type: boolean
+                  description: >
+                    Extiende la autorización a los subdominios, incluidos los
+                    que ese tercero cree después.
+                permissions:
+                  type: string
+                  description: Sintaxis del atributo `allow` ("fullscreen; autoplay").
+                description: { type: string }
+      responses:
+        "201":
+          description: Destino autorizado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DestinoIframe" }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /admin/iframe-allowlist/{id}:
+    delete:
+      tags: [Administración]
+      summary: Retira un dominio de la lista
+      description: >
+        Surte efecto inmediato sobre los cursos ya publicados: la autorización
+        se rehace al servir cada recurso, así que los que apunten a ese host
+        dejan de entregarse. Queda auditado con el host retirado.
+      operationId: removeIframeDestino
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Destino retirado. }
+        "404": { $ref: "#/components/responses/Problema" }
+
   /catalog:
     get:
       summary: Catálogo de cursos publicados, con búsqueda y filtros
@@ -889,6 +964,12 @@ paths:
     get:
       tags: [Multimedia]
       summary: Contenido de un recurso para el estudiante
+      x-iframe-note: >
+        En un recurso de tipo iframe la respuesta añade sandbox, allow y
+        referrer_policy. Los decide el servidor a partir de la lista blanca y
+        el cliente los aplica tal cual: si eligiera él cuánto restringir el
+        contenido de terceros, bastaría con manipularlo para que no
+        restringiera nada. Un destino retirado de la lista responde 422.
       description: >
         Devuelve lo necesario para presentar el recurso: la lista maestra HLS
         en video y audio, la URL del objeto en PDF, imagen y descargables, el
@@ -1285,6 +1366,17 @@ components:
       type: http
       scheme: bearer
   schemas:
+    DestinoIframe:
+      type: object
+      required: [id, host, include_subdomains]
+      properties:
+        id: { type: string, format: uuid }
+        host: { type: string }
+        include_subdomains: { type: boolean }
+        permissions: { type: string }
+        description: { type: string }
+        example_url: { type: string, format: uri }
+
     CargaVerificada:
       type: object
       description: Resultado de verificar un objeto recién cargado.

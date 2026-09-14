@@ -504,6 +504,37 @@ function ResourceRow({
   );
 }
 
+/**
+ * Enumera los dominios que se pueden incrustar.
+ *
+ * Se enseña junto al campo para que el profesor no descubra la restricción a
+ * base de chocar contra un 422: la lista la fija la administración y él no
+ * puede ampliarla.
+ */
+function DestinosAutorizados() {
+  const [hosts, setHosts] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    api
+      .listIframeAllowlist()
+      .then((res) =>
+        setHosts((res.items ?? []).map((d) => (d.include_subdomains ? `*.${d.host}` : d.host))),
+      )
+      .catch(() => setHosts([]));
+  }, []);
+
+  if (hosts === null) return null;
+  if (hosts.length === 0) {
+    return (
+      <p className="muted">
+        No hay dominios autorizados para incrustar. Pide a la administración que añada el que
+        necesitas.
+      </p>
+    );
+  }
+  return <p className="muted">Dominios autorizados: {hosts.join(", ")}.</p>;
+}
+
 function AddResourceForm({
   versionId,
   unitId,
@@ -580,6 +611,7 @@ function AddResourceForm({
         <div className="form-field">
           <label htmlFor={`url-${unitId}`}>URL</label>
           <input id={`url-${unitId}`} type="url" value={externalUrl} onChange={(e) => setExternalUrl(e.target.value)} />
+          {type === "iframe" && <DestinosAutorizados />}
         </div>
       )}
 

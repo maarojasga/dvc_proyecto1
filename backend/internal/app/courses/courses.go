@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	domain "github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/course"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 )
@@ -20,12 +21,43 @@ var (
 	ErrVersionNotDraft = errors.New("courses: la versión no es un borrador editable")
 )
 
-type Service struct {
-	repo *postgres.CourseRepo
+// ListaDeIframes entrega la lista blanca de destinos incrustables.
+//
+// Se declara como interfaz para que la autoría no dependa del repositorio
+// concreto y una prueba pueda fijar la lista sin tocar la base.
+type ListaDeIframes interface {
+	Listar(ctx context.Context) (iframe.Lista, error)
 }
 
-func NewService(repo *postgres.CourseRepo) *Service {
-	return &Service{repo: repo}
+type Service struct {
+	repo    *postgres.CourseRepo
+	iframes ListaDeIframes
+}
+
+func NewService(repo *postgres.CourseRepo, iframes ListaDeIframes) *Service {
+	return &Service{repo: repo, iframes: iframes}
+}
+
+// validarIframe comprueba el destino de un recurso incrustado contra la lista
+// blanca, en el momento de guardarlo.
+//
+// Se valida al escribir y no solo al servir porque un recurso guardado es lo
+// que el profesor da por bueno: descubrir en la publicación —o peor, en la
+// pantalla del estudiante— que el destino no se admite llega tarde. Al servir
+// se vuelve a comprobar, porque la lista puede haber cambiado desde entonces.
+func (s *Service) validarIframe(ctx context.Context, res *domain.Resource) error {
+	if res.Type != domain.ResourceIframe {
+		return nil
+	}
+	if s.iframes == nil {
+		return iframe.ErrHostNoAutorizado
+	}
+	lista, err := s.iframes.Listar(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = lista.Autorizar(res.ExternalURL)
+	return err
 }
 
 // CreateDraft crea un curso nuevo con su primera versión en borrador.
@@ -271,6 +303,9 @@ func (s *Service) AddResource(ctx context.Context, actor *user.User, versionID u
 	if !res.Type.Valid() {
 		return nil, errors.New("courses: tipo de recurso inválido")
 	}
+	if err := s.validarIframe(ctx, res); err != nil {
+		return nil, err
+	}
 	res.ID = uuid.New()
 	res.StableID = uuid.New()
 	if res.ProcessingStatus == "" {
@@ -310,6 +345,9 @@ func (s *Service) MarkResourceProcessingStatus(ctx context.Context, actor *user.
 
 func (s *Service) UpdateResource(ctx context.Context, actor *user.User, versionID uuid.UUID, res *domain.Resource) error {
 	if _, err := s.editableVersion(ctx, actor, versionID); err != nil {
+		return err
+	}
+	if err := s.validarIframe(ctx, res); err != nil {
 		return err
 	}
 	return s.repo.UpdateResource(ctx, versionID, res)
