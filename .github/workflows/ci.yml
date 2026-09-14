@@ -238,6 +238,24 @@ jobs:
             # último porque agota el presupuesto a propósito.
             echo "AUTH_RATE_LIMIT_PER_MINUTE=300"
           } >> .env
+
+          # Comprobar que la configuración del .env LLEGA a los contenedores
+          # antes de construir nada. Compose usa el .env para interpolar este
+          # archivo, no para inyectar variables en los procesos: lo que no
+          # está declarado en el `environment:` del servicio no llega, y el
+          # servicio arranca con su valor por defecto sin decir nada. Pasó con
+          # AUTH_RATE_LIMIT_PER_MINUTE, y el síntoma fueron veintitantas
+          # pruebas en 429 que parecían un fallo del limitador.
+          #
+          # Va antes del `up` a propósito: falla en segundos en vez de después
+          # de construir las imágenes y correr la suite entera.
+          pip install --quiet pyyaml
+          docker compose config > /tmp/compose-resuelto.yml
+          python3 .github/scripts/verificar-entorno.py /tmp/compose-resuelto.yml \
+            api:AUTH_RATE_LIMIT_PER_MINUTE=300 \
+            api:ADMIN_EMAIL="$ADMIN_EMAIL" \
+            api:PUBLIC_BASE_URL=http://localhost:3000
+
           docker compose up -d --build
           # Compose da el contenedor por arrancado en cuanto el proceso vive;
           # que la API responda es otra cosa.

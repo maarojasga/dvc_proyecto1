@@ -121,6 +121,17 @@ services:
       SMTP_FROM: no-reply@mooc.local
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
       COOKIE_SECURE: "false"
+      # Intentos de registro, login y restablecimiento por IP y minuto. Vacío
+      # deja el valor de producción (10), que es el que debe regir en un
+      # despliegue real. Solo se sube para las pruebas de extremo a extremo,
+      # donde toda la suite sale de una misma IP.
+      #
+      # Tiene que estar declarado AQUÍ y no basta con ponerlo en el .env:
+      # Compose usa el .env para interpolar este archivo, no para inyectar
+      # variables en los contenedores. Una variable que solo viva en el .env
+      # nunca llega al proceso, y el servicio arranca con su valor por defecto
+      # sin decir nada.
+      AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
     # No publica puerto en el host: lo hace el proxy. Publicarlo aquí ataría
