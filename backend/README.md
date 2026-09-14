@@ -49,6 +49,10 @@ por duplicado.
 | El tipo del contenido se deduce de los bytes, no de lo declarado | `Content-Type` lo escribe quien sube. Lo que decide si un PDF es un PDF son sus primeros bytes. |
 | Un escáner que no responde rechaza la carga | Dar por limpio lo que no se pudo escanear convierte apagar el antivirus en una vía de entrada. |
 | El objeto rechazado se borra del almacén | Dejarlo conserva un archivo que no superó el control bajo una clave que el recurso ya conoce. |
+| Una insignia revocada no se emite como credencial | Una credencial firmada no se puede desdecir. Para el estado está la URL pública, que sigue respondiendo y dice que ya no vale. |
+| El sujeto de la credencial es su URL de verificación | La credencial se comparte; identificar al sujeto por su correo o su id expondría a la persona en un documento pensado para circular. |
+| La lista blanca decide, el sandbox contiene | `allow-scripts` junto a `allow-same-origin` deja que un marco se quite el propio sandbox, así que la contención no es una frontera: la frontera es la lista. |
+| El foro exige acceso al curso | Un curso no es un tablón público: se lee y se escribe con inscripción, autoría o administración. |
 | El título del curso se escapa al dibujar la insignia | La imagen es un SVG que sirve el almacén y abre el navegador: sin escapar, un título con etiquetas sería un XSS servido por la plataforma. |
 
 ## Puesta en marcha
@@ -109,6 +113,9 @@ ejecuta en paralelo y la suite falla de forma intermitente.
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_USE_SSL` | — | Credenciales del almacenamiento. |
 | `PUBLIC_BASE_URL` | `http://localhost:3000` | Base de los enlaces de los correos y origen permitido por CORS. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | `localhost`, `1025`, `no-reply@mooc.local` | Servidor de correo saliente. |
+| `BADGE_SIGNING_KEY` | — | Clave Ed25519 en base64 para firmar las credenciales Open Badges 3.0. Vacía: la insignia sigue siendo verificable por su URL pública, sin credencial portátil. |
+| `BADGE_KEY_ID` | `mooc-badges-1` | Identifica la clave en el JWKS, para rotarla sin invalidar lo firmado antes. |
+| `ISSUER_NAME` | `Plataforma MOOC` | Organización que figura como emisora. |
 | `CLAMAV_ADDR` | — | Dirección de clamd (`host:puerto`). Vacío: escáner integrado, sin firmas. Configurado y sin respuesta: la carga se rechaza. |
 | `SESSION_TTL` | `720h` | Vigencia de la sesión. |
 | `COOKIE_SECURE` | `false` | Marca `Secure` en las cookies; actívalo con TLS delante. |

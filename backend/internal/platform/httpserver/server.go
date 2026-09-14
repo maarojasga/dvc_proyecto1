@@ -4,6 +4,7 @@
 package httpserver
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
 )
 
 type Deps struct {
@@ -34,11 +36,34 @@ type Deps struct {
 	// Antimalware escanea cada objeto antes de aceptarlo. Vacío significa el
 	// escáner integrado.
 	Antimalware antimalware.Escaner
+	// Iframes administra la lista blanca de destinos incrustables.
+	Iframes ListaBlancaDeIframes
+	// Metricas alimenta el panel administrativo y los informes de evaluación.
+	Metricas Metricas
+	// Revisiones guarda el historial de contenido de los recursos de texto.
+	Revisiones Revisiones
+	// Colaboradores gestiona la coautoría de un curso.
+	Colaboradores Colaboradores
+	// Exportacion reúne los datos personales de una cuenta.
+	Exportacion Exportacion
+	// Subtitulos guarda las pistas y sus transcripciones.
+	Subtitulos Subtitulos
+	// Foros es el foro asíncrono de cada curso.
+	Foros Foros
+	// Credenciales firma las credenciales Open Badges 3.0. Sin clave, la
+	// plataforma sigue emitiendo insignias verificables por su URL pública.
+	Credenciales EmisorDeCredenciales
+	// Auditor deja constancia en la bitácora inmutable de las acciones que no
+	// pasan por un servicio de aplicación.
+	Auditor Auditor
 	// Entrega resuelve las URL de lectura. En producción es el mismo cliente
 	// de Storage; se declara aparte porque la reproducción solo necesita eso.
-	Entrega      EntregaDeObjetos
-	Redis        *redis.Client
-	Queue        *asynq.Client
+	Entrega EntregaDeObjetos
+	Redis   *redis.Client
+	// Queue publica los trabajos asíncronos. Es una interfaz para que los
+	// manejadores no dependan del SDK de la cola y una prueba pueda comprobar
+	// qué se encoló sin Redis de por medio.
+	Queue        queue.Encolador
 	Inspector    *asynq.Inspector
 	CORSOrigin   string
 	CookieSecure bool
@@ -56,6 +81,14 @@ func NewRouter(d Deps) http.Handler {
 	h.registerQuizzes(mux)
 	h.registerProgress(mux)
 	h.registerMedia(mux)
+	h.registerIframes(mux)
+	h.registerMetricas(mux)
+	h.registerRevisiones(mux)
+	h.registerColaboradores(mux)
+	h.registerExportacion(mux)
+	h.registerSubtitulos(mux)
+	h.registerForos(mux)
+	h.registerOpenBadges(mux)
 	h.registerOperacion(mux)
 
 	return Chain(mux,
@@ -67,6 +100,11 @@ func NewRouter(d Deps) http.Handler {
 		CSRF,
 		Idempotency(d.Redis),
 	)
+}
+
+// Auditor es la bitácora inmutable vista desde la capa HTTP.
+type Auditor interface {
+	InsertAudit(ctx context.Context, e postgres.AuditEntry) error
 }
 
 type handlers struct {

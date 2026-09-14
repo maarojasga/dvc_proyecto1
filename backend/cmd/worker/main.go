@@ -13,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/config"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/documentos"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/media"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
@@ -45,15 +46,28 @@ func main() {
 		os.Exit(1)
 	}
 
+	assets := postgres.NewMediaRepo(pool)
+	cursos := postgres.NewCourseRepo(pool)
+
 	processor := &media.Processor{
 		Storage: storageClient,
-		Assets:  postgres.NewMediaRepo(pool),
-		Courses: postgres.NewCourseRepo(pool),
+		Assets:  assets,
+		Courses: cursos,
+		Log:     log,
+	}
+	// La conversión de presentaciones comparte worker con la
+	// transcodificación: las dos son trabajos lentos sobre el mismo activo, y
+	// separarlas en procesos distintos duplicaría el despliegue sin ganar nada.
+	convertidor := &documentos.Procesador{
+		Storage: storageClient,
+		Assets:  assets,
+		Courses: cursos,
 		Log:     log,
 	}
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(queue.TaskProcessMedia, processor.HandleProcessMedia)
+	mux.HandleFunc(queue.TaskConvertDocument, convertidor.HandleConvertDocument)
 
 	srv := queue.NewServer(cfg.RedisAddr, 5, log)
 

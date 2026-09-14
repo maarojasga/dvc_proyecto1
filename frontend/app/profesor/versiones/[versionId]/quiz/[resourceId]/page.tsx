@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { api, ApiError, type QuizQuestionDraft, type Resource } from "@/lib/api";
+import { api, ApiError, type QuizQuestionDraft, type Resource, type ResultadosDeQuiz } from "@/lib/api";
 
 type BorradorOpcion = { text_md: string; is_correct: boolean };
 type BorradorPregunta = {
@@ -359,6 +359,108 @@ export default function QuizAuthoringPage() {
           {saving ? "Guardando…" : "Guardar evaluación"}
         </button>
       </form>
+
+      <ResultadosAgregados versionId={versionId} resourceId={resourceId} />
     </div>
+  );
+}
+
+/**
+ * Resultados agregados de la evaluación.
+ *
+ * Se muestran junto al editor y no en otra pantalla porque sirven para
+ * lo mismo que el editor: corregir el quiz. Una opción incorrecta que elige
+ * media clase casi nunca es media clase que no estudió; suele ser una pregunta
+ * ambigua, y aquí se ve al lado del texto que hay que reescribir.
+ */
+function ResultadosAgregados({ versionId, resourceId }: { versionId: string; resourceId: string }) {
+  const [datos, setDatos] = useState<ResultadosDeQuiz | null>(null);
+
+  useEffect(() => {
+    api
+      .quizResults(versionId, resourceId)
+      .then(setDatos)
+      .catch(() => setDatos(null));
+  }, [versionId, resourceId]);
+
+  if (!datos) return null;
+  const r = datos.resultados;
+
+  if (r.intentos === 0) {
+    return (
+      <section className="card">
+        <header>
+          <h2>Resultados</h2>
+        </header>
+        <p className="muted">Todavía no la ha presentado nadie.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="card stack">
+      <header>
+        <h2>Resultados</h2>
+        <p>
+          {r.intentos} {r.intentos === 1 ? "intento" : "intentos"} de {r.estudiantes}{" "}
+          {r.estudiantes === 1 ? "estudiante" : "estudiantes"}.
+        </p>
+      </header>
+
+      <p className="row">
+        <span className="badge">Nota media: {r.nota_media}</span>
+        <span className="badge">Mediana: {r.nota_mediana}</span>
+        <span className="badge">Aprobados: {r.tasa_aprobado}%</span>
+      </p>
+
+      <ol className="stack">
+        {r.preguntas.map((p) => (
+          <li key={p.stable_id} className="card">
+            <p style={{ fontWeight: 600 }}>{p.prompt_md}</p>
+            <p className="row">
+              <span className="badge">Acierto: {p.tasa_acierto}%</span>
+              {p.en_blanco > 0 && <span className="badge">En blanco: {p.en_blanco}</span>}
+            </p>
+            {p.tasa_acierto < 30 && (
+              <p className="warning-banner" role="status">
+                La acierta menos de un tercio: puede estar mal planteada, no solo ser difícil.
+              </p>
+            )}
+            <ul className="stack" style={{ gap: "0.35rem" }}>
+              {p.opciones.map((o) => (
+                <li key={o.stable_id}>
+                  <div className="row" style={{ alignItems: "center", gap: "0.5rem" }}>
+                    <span style={{ flex: 1 }}>
+                      {o.es_correcta && <span className="badge">correcta</span>} {o.text_md}
+                    </span>
+                    <span className="muted">
+                      {o.elegida} ({o.porcentaje}%)
+                    </span>
+                  </div>
+                  {/* Una barra proporcional dice de un vistazo lo que una
+                      columna de números obliga a comparar a mano. */}
+                  <div
+                    style={{
+                      background: "var(--color-bg-subtle, #e5e7eb)",
+                      borderRadius: "999px",
+                      height: "6px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${o.porcentaje}%`,
+                        height: "100%",
+                        background: o.es_correcta ? "#16a34a" : "#94a3b8",
+                      }}
+                    />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }

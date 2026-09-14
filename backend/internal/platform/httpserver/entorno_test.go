@@ -3,6 +3,7 @@ package httpserver_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -100,6 +101,7 @@ type entorno struct {
 	rdb     *redis.Client
 	correos *buzon
 	almacen *almacenFalso
+	cola    *colaFalsa
 }
 
 func nuevoEntorno(t *testing.T) *entorno {
@@ -142,28 +144,42 @@ func nuevoEntorno(t *testing.T) *entorno {
 		"http://localhost:3000", user.DefaultSessionTTL)
 
 	cursos := postgres.NewCourseRepo(pool)
-	cursosSvc := courses.NewService(cursos)
+	marcos := postgres.NewIframeRepo(pool)
+	colaboradores := postgres.NewColaboradoresRepo(pool)
+	cursosSvc := courses.NewService(cursos, marcos, colaboradores)
 	inscripciones := postgres.NewEnrollmentRepo(pool)
 	avance := postgres.NewProgressRepo(pool)
 	evaluaciones := postgres.NewQuizRepo(pool)
 	insignias := postgres.NewBadgeRepo(pool)
 
 	almacen := nuevoAlmacenFalso()
+	cola := nuevaColaFalsa()
 	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, almacen, users)
 	handler := httpserver.NewRouter(httpserver.Deps{
-		Auth:         authSvc,
-		Admin:        admin.NewService(users),
-		Courses:      cursosSvc,
-		Enrollments:  enrollments.NewService(inscripciones, cursos, avance),
-		Quizzes:      quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
-		Progreso:     progresoSvc,
-		Storage:      almacen,
-		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
-		Redis:        rdb,
-		CORSOrigin:   "http://localhost:3000",
-		CookieSecure: false,
+		Auth:          authSvc,
+		Admin:         admin.NewService(users),
+		Courses:       cursosSvc,
+		Enrollments:   enrollments.NewService(inscripciones, cursos, avance, marcos),
+		Quizzes:       quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
+		Progreso:      progresoSvc,
+		Storage:       almacen,
+		Media:         postgres.NewMediaRepo(pool),
+		Queue:         cola,
+		Iframes:       marcos,
+		Metricas:      postgres.NewMetricasRepo(pool),
+		Revisiones:    postgres.NewRevisionesRepo(pool),
+		Colaboradores: colaboradores,
+		Subtitulos:    postgres.NewSubtitulosRepo(pool),
+		Foros:         postgres.NewForosRepo(pool),
+		Credenciales:  credencialesDePrueba(),
+		Exportacion:   postgres.NewExportacionRepo(pool),
+		Auditor:       users,
+		Entrega:       entregaPorCDN{base: "https://cdn.pruebas.local"},
+		Redis:         rdb,
+		CORSOrigin:    "http://localhost:3000",
+		CookieSecure:  false,
 	})
-	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos, almacen: almacen}
+	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos, almacen: almacen, cola: cola}
 }
 
 // cliente conserva cookies entre peticiones, como un navegador, y reenvía el
@@ -286,6 +302,15 @@ func (e *entorno) asciendeA(correo string, rol string) {
 	}
 }
 
+// administrador deja lista una cuenta con rol de administrador y devuelve su
+// cliente autenticado.
+func (e *entorno) administrador(correo string) *cliente {
+	e.t.Helper()
+	e.registrarYVerificar(correo)
+	e.asciendeA(correo, "admin")
+	return e.entrar(correo, clavePrueba)
+}
+
 // profesorConCurso deja una cuenta de profesor con un curso en borrador, y
 // devuelve el cliente autenticado junto con el identificador de la versión.
 func (e *entorno) profesorConCurso(correo, slug string) (*cliente, string) {
@@ -307,6 +332,28 @@ func (e *entorno) profesorConCurso(correo, slug string) (*cliente, string) {
 	return c, versionID
 }
 
+// marcarPresentacionConvertida simula lo que deja el worker al terminar: el
+// PDF en el almacén, el activo listo con su clave derivada y el recurso
+// marcado como procesado.
+//
+// Se hace en base y no invocando al worker porque la conversión exige
+// LibreOffice; lo que esta prueba verifica es la entrega del derivado, no la
+// conversión, que se prueba aparte.
+func (e *entorno) marcarPresentacionConvertida(recursoID string) {
+	e.t.Helper()
+	clave := "presentaciones/" + recursoID + "/preview.pdf"
+	e.almacen.ponerObjeto(clave, []byte("%PDF-1.7\n"), "application/pdf")
+	if _, err := e.pool.Exec(context.Background(), `
+		UPDATE media_assets SET status='ready', derived_pdf_key=$2
+		 WHERE resource_id = $1`, recursoID, clave); err != nil {
+		e.t.Fatalf("marcar el activo listo: %v", err)
+	}
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE resources SET processing_status='ready' WHERE id = $1`, recursoID); err != nil {
+		e.t.Fatalf("marcar el recurso listo: %v", err)
+	}
+}
+
 // consultarTexto devuelve un único valor de texto.
 func (e *entorno) consultarTexto(consulta string, args ...any) string {
 	e.t.Helper()
@@ -324,4 +371,18 @@ func (e *entorno) contar(consulta string, args ...any) int {
 		e.t.Fatalf("consulta %q: %v", consulta, err)
 	}
 	return n
+}
+
+// credencialesDePrueba genera una clave efímera para firmar las credenciales
+// Open Badges. Es de usar y tirar: lo que se verifica es que la firma cuadre
+// con su propia clave pública, no que la clave persista.
+func credencialesDePrueba() httpserver.EmisorDeCredenciales {
+	publica, privada, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		panic(err)
+	}
+	return httpserver.EmisorDeCredenciales{
+		Privada: privada, Publica: publica, KeyID: "pruebas-1",
+		Nombre: "Universidad de Pruebas", BaseURL: "http://localhost:3000",
+	}
 }

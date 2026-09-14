@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/documento"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
 
@@ -33,6 +34,10 @@ type AlmacenDeObjetos interface {
 	StatObject(ctx context.Context, objectKey string) (storage.ObjetoInfo, error)
 	AbrirObjeto(ctx context.Context, objectKey string) (io.ReadCloser, error)
 	RemoveObject(ctx context.Context, objectKey string) error
+	// GuardarObjeto escribe algo que genera la propia plataforma (hoy, una
+	// pista de subtítulos). Los binarios que suben los usuarios no pasan por
+	// aquí: esos van directos al almacén con una URL prefirmada.
+	GuardarObjeto(ctx context.Context, objectKey string, r io.Reader, tamano int64, contentType string) error
 }
 
 // vigenciaDeCarga es lo que dura una carga directa al almacén. La especifica
@@ -57,6 +62,10 @@ type objetoVerificado struct {
 	// cliente: lo declarado no acredita nada.
 	MIME   string
 	SHA256 string
+	// Formato solo se rellena en presentaciones: distingue PPTX de ODP, que
+	// comparten contenedor ZIP y por tanto el mismo MIME. Lo necesita el
+	// worker para elegir el filtro de entrada del convertidor.
+	Formato documento.Formato
 }
 
 // verificarCarga comprueba un objeto recién subido antes de aceptarlo como
@@ -99,6 +108,9 @@ func (h *handlers) verificarCarga(ctx context.Context, objectKey, checksumDeclar
 		SHA256: hex.EncodeToString(hash.Sum(nil)),
 		MIME:   http.DetectContentType(cabecera.datos),
 	}
+	if tipo == domain.ResourcePresentation {
+		res.Formato = documento.Detectar(cabecera.datos)
+	}
 
 	if !veredicto.Limpio {
 		_ = h.deps.Storage.RemoveObject(ctx, objectKey)
@@ -111,6 +123,14 @@ func (h *handlers) verificarCarga(ctx context.Context, objectKey, checksumDeclar
 	if !mimeCorresponde(tipo, res.MIME) {
 		_ = h.deps.Storage.RemoveObject(ctx, objectKey)
 		return objetoVerificado{}, fmt.Errorf("%w: se detectó %s", ErrTipoNoCorresponde, res.MIME)
+	}
+	// Una presentación que no se sepa convertir se rechaza aquí y no en el
+	// worker: fallar al subir dice con claridad qué pasó, mientras que fallar
+	// una cola más adelante deja el recurso en "failed" sin explicación útil
+	// para quien lo subió.
+	if tipo == domain.ResourcePresentation && res.Formato == documento.Desconocido {
+		_ = h.deps.Storage.RemoveObject(ctx, objectKey)
+		return objetoVerificado{}, documento.ErrFormatoNoSoportado
 	}
 	return res, nil
 }
@@ -147,9 +167,19 @@ func mimeCorresponde(tipo domain.ResourceType, mime string) bool {
 		// Varios contenedores de audio (m4a, algunos ogg) se olfatean como
 		// vídeo porque comparten la envoltura.
 		return familia == "audio" || familia == "video" || generico
+	case domain.ResourcePresentation:
+		// PPTX y ODP son contenedores ZIP, así que el olfateo genérico los da
+		// por application/zip. Distinguirlos es cosa de documento.Detectar,
+		// que mira el nombre de la primera entrada del contenedor.
+		//
+		// Los formatos heredados (.ppt) no entran: son contenedores OLE, y el
+		// escáner antimalware los rechaza antes de llegar aquí por admitir
+		// macros. Convertirlos exigiría confiar en un formato que es un vector
+		// conocido, y el alcance pide PPTX y ODP.
+		return mime == "application/zip" || generico
 	default:
-		// Presentaciones y descargables admiten cualquier formato que haya
-		// superado el escaneo: ahí el control es el antimalware, no el MIME.
+		// Los descargables admiten cualquier formato que haya superado el
+		// escaneo: ahí el control es el antimalware, no el MIME.
 		return true
 	}
 }

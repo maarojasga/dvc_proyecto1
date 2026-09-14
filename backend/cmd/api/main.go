@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"log"
 	"net/http"
@@ -77,8 +79,10 @@ func main() {
 
 	authSvc := auth.NewService(userRepo, m, cfg.PublicBaseURL, cfg.SessionTTL)
 	adminSvc := admin.NewService(userRepo)
-	coursesSvc := courses.NewService(courseRepo)
-	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, progressRepo)
+	iframeRepo := postgres.NewIframeRepo(pool)
+	colaboradoresRepo := postgres.NewColaboradoresRepo(pool)
+	coursesSvc := courses.NewService(courseRepo, iframeRepo, colaboradoresRepo)
+	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, progressRepo, iframeRepo)
 	progresoSvc := progreso.NewService(progressRepo, enrollmentRepo, courseRepo, quizRepo, badgeRepo, storageClient, userRepo)
 	// El servicio de quizzes avisa al de progreso al cerrar un intento, porque
 	// aprobar una evaluacion puede ser lo ultimo que faltaba para el curso.
@@ -99,8 +103,17 @@ func main() {
 		Auth: authSvc, Admin: adminSvc, Courses: coursesSvc, Enrollments: enrollmentsSvc,
 		Quizzes: quizzesSvc, Progreso: progresoSvc,
 		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
-		Antimalware: escaner,
-		Redis:       rdb, Queue: queueClient,
+		Antimalware:   escaner,
+		Iframes:       iframeRepo,
+		Metricas:      postgres.NewMetricasRepo(pool),
+		Revisiones:    postgres.NewRevisionesRepo(pool),
+		Colaboradores: colaboradoresRepo,
+		Subtitulos:    postgres.NewSubtitulosRepo(pool),
+		Foros:         postgres.NewForosRepo(pool),
+		Credenciales:  emisorDeCredenciales(cfg),
+		Exportacion:   postgres.NewExportacionRepo(pool),
+		Auditor:       userRepo,
+		Redis:         rdb, Queue: queue.NuevoEncolador(queueClient),
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
 	})
@@ -158,4 +171,35 @@ func bootstrapAdmin(ctx context.Context, users *postgres.UserRepo) error {
 	}
 	log.Printf("api: administrador inicial creado (%s)", email)
 	return nil
+}
+
+// emisorDeCredenciales prepara la firma de las credenciales Open Badges 3.0.
+//
+// Sin BADGE_SIGNING_KEY la plataforma arranca igual: las insignias siguen
+// siendo verificables por su URL pública y lo único que no se puede ofrecer es
+// la credencial portátil. Se avisa en el arranque porque, si alguien esperaba
+// esa función, el fallo se descubriría en la pantalla de un estudiante.
+func emisorDeCredenciales(cfg config.Config) httpserver.EmisorDeCredenciales {
+	emisor := httpserver.EmisorDeCredenciales{
+		KeyID:   cfg.BadgeKeyID,
+		Nombre:  cfg.IssuerName,
+		BaseURL: cfg.PublicBaseURL,
+	}
+	if cfg.BadgeSigningKey == "" {
+		log.Printf("api: sin BADGE_SIGNING_KEY; las insignias no se emitirán como credencial firmada")
+		return emisor
+	}
+
+	crudo, err := base64.StdEncoding.DecodeString(cfg.BadgeSigningKey)
+	if err != nil || len(crudo) != ed25519.PrivateKeySize {
+		// No se genera una clave al vuelo como sustituto: cada reinicio
+		// produciría otra y las credenciales firmadas antes dejarían de
+		// verificarse, que es peor que no firmarlas.
+		log.Printf("api: BADGE_SIGNING_KEY no es una clave Ed25519 válida en base64; no se firmarán credenciales")
+		return emisor
+	}
+	emisor.Privada = ed25519.PrivateKey(crudo)
+	emisor.Publica = emisor.Privada.Public().(ed25519.PublicKey)
+	log.Printf("api: credenciales Open Badges firmadas con la clave %q", emisor.KeyID)
+	return emisor
 }

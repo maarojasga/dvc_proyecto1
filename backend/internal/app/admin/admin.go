@@ -5,6 +5,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +20,27 @@ type Service struct {
 
 func NewService(users *postgres.UserRepo) *Service {
 	return &Service{users: users}
+}
+
+// ErrNoEsProfesor lo produce buscar por correo a alguien que no puede
+// escribir cursos.
+var ErrNoEsProfesor = errors.New("admin: la cuenta no existe o no es de profesor")
+
+// BuscarProfesorPorCorreo resuelve una cuenta de profesor activa.
+//
+// Devuelve el mismo error cuando el correo no existe, cuando no es de profesor
+// y cuando la cuenta no está activa. Distinguirlos convertiría este endpoint en
+// una forma de averiguar qué correos hay registrados, que es lo mismo que el
+// registro y la recuperación se cuidan de no revelar.
+func (s *Service) BuscarProfesorPorCorreo(ctx context.Context, correo string) (*user.User, error) {
+	u, err := s.users.GetByEmail(ctx, correo)
+	if err != nil {
+		return nil, ErrNoEsProfesor
+	}
+	if u.Role != user.RoleTeacher || u.Status != user.StatusActive {
+		return nil, ErrNoEsProfesor
+	}
+	return u, nil
 }
 
 func (s *Service) ListUsers(ctx context.Context, f postgres.ListUsersFilter) ([]*user.User, error) {

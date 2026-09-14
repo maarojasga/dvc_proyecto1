@@ -3,8 +3,10 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { api, type Version, type Module, type Unit, ApiError } from "@/lib/api";
+import { api, type Version, type Module, type Unit, type Clasificacion, ApiError } from "@/lib/api";
 import { BlockEditor } from "@/components/BlockEditor";
+import { HistorialDeRevisiones } from "@/components/HistorialDeRevisiones";
+import { Coautoria } from "@/components/Coautoria";
 import { subirArchivo, hayCargaPendiente, olvidarCarga } from "@/lib/carga";
 
 const RESOURCE_TYPES = [
@@ -106,8 +108,11 @@ export default function VersionEditorPage() {
 
       <MetadataForm version={version} disabled={!isDraft} onSaved={load} />
 
+      <Coautoria courseId={version.CourseID} />
+
       {isDraft && (
-        <div className="card">
+        <div className="card stack">
+          <CambiosDelBorrador versionId={versionId} />
           <button onClick={handlePublish}>Publicar versión</button>
         </div>
       )}
@@ -469,6 +474,10 @@ function ResourceRow({
         )}
       </div>
 
+      {editable && r.Type === "text" && (
+        <EditorDeContenido versionId={versionId} resource={r} onChange={onChange} />
+      )}
+
       {pendiente && !uploading && (
         <p className="muted" role="status">
           Hay una subida sin terminar. Vuelve a elegir el mismo archivo y continuará desde donde se quedó.{" "}
@@ -502,6 +511,186 @@ function ResourceRow({
       {error && <span className="error-banner">{error}</span>}
     </li>
   );
+}
+
+/**
+ * Edición del contenido de un recurso de texto, con su historial.
+ *
+ * Va plegado por defecto: una unidad con varios recursos abriría media docena
+ * de editores a la vez, y ninguno es el que se quiere tocar.
+ *
+ * Guardar escribe el contenido y deja una revisión en el servidor. El
+ * autoguardado del editor sigue conservando el borrador en el navegador, que
+ * es lo que salva un cierre accidental de la pestaña; lo que añade el guardado
+ * es el historial, que sobrevive al equipo y dice quién escribió qué.
+ */
+function EditorDeContenido({
+  versionId,
+  resource,
+  onChange,
+}: {
+  versionId: string;
+  resource: import("@/lib/api").Resource;
+  onChange: () => void;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  const [markdown, setMarkdown] = useState(resource.TextContentMD ?? "");
+  const [estado, setEstado] = useState("");
+  const [recarga, setRecarga] = useState(0);
+
+  async function guardar() {
+    setEstado("Guardando…");
+    try {
+      await api.saveRevision(versionId, resource.ID, markdown);
+      setEstado("Guardado");
+      setRecarga((n) => n + 1);
+      onChange();
+    } catch (e) {
+      setEstado(e instanceof ApiError ? e.message : "No se pudo guardar");
+    }
+  }
+
+  if (!abierto) {
+    return (
+      <button className="secondary" onClick={() => setAbierto(true)}>
+        Editar contenido
+      </button>
+    );
+  }
+
+  return (
+    <div className="stack">
+      <BlockEditor
+        key={recarga}
+        initialMarkdown={markdown}
+        draftKey={`draft_resource_${resource.ID}`}
+        onChange={setMarkdown}
+      />
+      <div className="row" style={{ alignItems: "center", gap: "0.5rem" }}>
+        <button onClick={guardar}>Guardar revisión</button>
+        <button className="secondary" onClick={() => setAbierto(false)}>
+          Cerrar
+        </button>
+        {estado && (
+          <span className="muted" role="status">
+            {estado}
+          </span>
+        )}
+      </div>
+
+      <HistorialDeRevisiones
+        key={`hist-${recarga}`}
+        versionId={versionId}
+        resourceId={resource.ID}
+        onRestaurado={async () => {
+          const rev = await api
+            .listRevisions(versionId, resource.ID)
+            .then((r) => r.items[0])
+            .catch(() => null);
+          if (rev) {
+            const completa = await api.getRevision(versionId, resource.ID, rev.revision_number);
+            setMarkdown(completa.content_md ?? "");
+            setRecarga((n) => n + 1);
+          }
+          onChange();
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * Lo que este borrador cambia respecto a la versión publicada.
+ *
+ * Se enseña junto al botón de publicar y no en una pantalla aparte porque el
+ * momento en que importa es justo antes de publicar: es cuando el profesor
+ * puede todavía decidir que no quiere alterar lo que sus estudiantes tienen
+ * que completar.
+ */
+function CambiosDelBorrador({ versionId }: { versionId: string }) {
+  const [clasificacion, setClasificacion] = useState<Clasificacion | null>(null);
+
+  useEffect(() => {
+    api
+      .versionChanges(versionId)
+      .then(setClasificacion)
+      .catch(() => setClasificacion(null));
+  }, [versionId]);
+
+  if (!clasificacion) return null;
+
+  if (clasificacion.alcance === "ninguno") {
+    return <p className="muted">Este borrador es idéntico a la versión publicada.</p>;
+  }
+
+  const mayor = clasificacion.alcance === "mayor";
+  const afectados = clasificacion.cambios.filter((c) => c.afecta_progreso);
+
+  return (
+    <div className="stack">
+      <h3 style={{ margin: 0 }}>Cambios respecto a lo publicado</h3>
+
+      {mayor ? (
+        <p className="warning-banner" role="status">
+          Esta actualización cambia lo que hay que completar para aprobar. Al publicarla, el
+          avance de los {afectados.length === 1 ? "inscritos" : "inscritos"} se recalcula sobre la
+          nueva lista de recursos obligatorios. Lo que ya llevaban hecho se conserva, y a nadie se
+          le retira una aprobación ya obtenida.
+        </p>
+      ) : (
+        <p className="muted">
+          Cambia el contenido o la presentación, pero no lo que hay que completar: el avance de los
+          inscritos sigue midiéndose igual.
+        </p>
+      )}
+
+      <ul className="lista-filas">
+        {clasificacion.cambios.map((c) => (
+          <li key={`${c.elemento}-${c.stable_id}`} className="fila">
+            <div className="fila__datos">
+              <p>
+                <span className="badge">{c.tipo}</span> <span className="badge">{c.elemento}</span>{" "}
+                <strong>{c.titulo}</strong>
+                {c.afecta_progreso && <span className="badge"> afecta al progreso</span>}
+              </p>
+              {c.detalle && <p className="muted">{c.detalle}</p>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Enumera los dominios que se pueden incrustar.
+ *
+ * Se enseña junto al campo para que el profesor no descubra la restricción a
+ * base de chocar contra un 422: la lista la fija la administración y él no
+ * puede ampliarla.
+ */
+function DestinosAutorizados() {
+  const [hosts, setHosts] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    api
+      .listIframeAllowlist()
+      .then((res) =>
+        setHosts((res.items ?? []).map((d) => (d.include_subdomains ? `*.${d.host}` : d.host))),
+      )
+      .catch(() => setHosts([]));
+  }, []);
+
+  if (hosts === null) return null;
+  if (hosts.length === 0) {
+    return (
+      <p className="muted">
+        No hay dominios autorizados para incrustar. Pide a la administración que añada el que
+        necesitas.
+      </p>
+    );
+  }
+  return <p className="muted">Dominios autorizados: {hosts.join(", ")}.</p>;
 }
 
 function AddResourceForm({
@@ -580,6 +769,7 @@ function AddResourceForm({
         <div className="form-field">
           <label htmlFor={`url-${unitId}`}>URL</label>
           <input id={`url-${unitId}`} type="url" value={externalUrl} onChange={(e) => setExternalUrl(e.target.value)} />
+          {type === "iframe" && <DestinosAutorizados />}
         </div>
       )}
 

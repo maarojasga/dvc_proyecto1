@@ -89,6 +89,18 @@ func (r *MediaRepo) MarkReady(ctx context.Context, id uuid.UUID, hlsMasterKey st
 	return err
 }
 
+// MarcarPDFListo registra la vista previa de una presentacion.
+//
+// Escribe en derived_pdf_key y no en hls_master_key: son derivados distintos y
+// mezclarlos obligaria a adivinar cual es cual al entregarlos.
+func (r *MediaRepo) MarcarPDFListo(ctx context.Context, id uuid.UUID, clavePDF string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE media_assets
+		   SET status='ready', derived_pdf_key=$2, processing_started_at=NULL, updated_at=now()
+		 WHERE id=$1`, id, clavePDF)
+	return err
+}
+
 func (r *MediaRepo) MarkFailed(ctx context.Context, id uuid.UUID, reason string) error {
 	// Se libera el arrendamiento para que el reintento de asynq pueda
 	// reclamarlo de inmediato, sin esperar a que venza.

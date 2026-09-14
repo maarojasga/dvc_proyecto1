@@ -4,9 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, ApiError, type ResourceContent } from "@/lib/api";
-import { ReproductorHLS } from "@/components/ReproductorHLS";
+import { ReproductorHLS, type PistaDeSubtitulos } from "@/components/ReproductorHLS";
+import { Foro } from "@/components/Foro";
 import { VisorPDF } from "@/components/VisorPDF";
 import { QuizPlayer } from "@/components/QuizPlayer";
+import { MarcoIncrustado } from "@/components/MarcoIncrustado";
 import { useProgressReporting } from "@/lib/useProgressReporting";
 
 /**
@@ -19,6 +21,16 @@ import { useProgressReporting } from "@/lib/useProgressReporting";
 export default function RecursoPage() {
   const params = useParams<{ courseId: string; resourceId: string }>();
   const { courseId, resourceId } = params;
+  // Las pistas se piden aparte del contenido: el servidor las autoriza por la
+  // misma vía, y un recurso sin subtítulos no debería fallar por eso.
+  const [pistas, setPistas] = useState<PistaDeSubtitulos[]>([]);
+
+  useEffect(() => {
+    api
+      .listCaptions(resourceId)
+      .then((r) => setPistas(r.items ?? []))
+      .catch(() => setPistas([]));
+  }, [resourceId]);
 
   const [contenido, setContenido] = useState<ResourceContent | null>(null);
   const [error, setError] = useState("");
@@ -113,15 +125,34 @@ export default function RecursoPage() {
             titulo={contenido.title}
             posicionInicial={contenido.position_seconds ?? 0}
             onPosicion={reportarPosicion}
+            pistas={pistas}
           />
           {(contenido.position_seconds ?? 0) > 0 && (
             <p className="muted">Se reanuda donde lo dejaste.</p>
           )}
+          <Transcripcion resourceId={resourceId} pistas={pistas} />
         </>
       )}
 
       {contenido.type === "pdf" && contenido.url && (
         <VisorPDF src={contenido.url} titulo={contenido.title} descargable={contenido.downloadable} />
+      )}
+
+      {/* Una presentación se previsualiza con el mismo visor: lo que llega es
+          el PDF que produjo la conversión, porque el navegador no abre un PPTX
+          ni un ODP. El original sigue disponible cuando el profesor lo marcó
+          descargable. */}
+      {contenido.type === "presentation" && contenido.url && (
+        <>
+          <VisorPDF src={contenido.url} titulo={contenido.title} descargable={false} />
+          {contenido.original_url && (
+            <p>
+              <a href={contenido.original_url} target="_blank" rel="noopener noreferrer">
+                Descargar la presentación original
+              </a>
+            </p>
+          )}
+        </>
       )}
 
       {contenido.type === "image" && contenido.url && (
@@ -144,12 +175,16 @@ export default function RecursoPage() {
         </article>
       )}
 
-      {(contenido.type === "link" || contenido.type === "iframe") && contenido.external_url && (
+      {contenido.type === "link" && contenido.external_url && (
         <p>
           <a href={contenido.external_url} target="_blank" rel="noopener noreferrer">
             Abrir el recurso externo
           </a>
         </p>
+      )}
+
+      {contenido.type === "iframe" && contenido.external_url && (
+        <MarcoIncrustado contenido={contenido} />
       )}
 
       {contenido.type === "file" && contenido.url && (
@@ -161,6 +196,55 @@ export default function RecursoPage() {
       )}
 
       {contenido.type === "quiz" && <QuizPlayer resourceId={resourceId} />}
+
+      {/* El foro va acotado a este recurso: junto a una lección interesa lo
+          que se discute sobre ella, no el foro entero del curso. */}
+      <Foro courseId={courseId} resourceStableId={contenido.stable_id} />
     </div>
+  );
+}
+
+/**
+ * Transcripción del material reproducible.
+ *
+ * Se deriva de los subtítulos, así que solo aparece cuando hay pista. Va
+ * plegada porque es larga: lo que se quiere casi siempre es reproducir, y la
+ * transcripción está para quien no puede o no quiere hacerlo, y para buscar
+ * dentro de una clase grabada con la búsqueda del navegador.
+ */
+function Transcripcion({ resourceId, pistas }: { resourceId: string; pistas: PistaDeSubtitulos[] }) {
+  const [abierta, setAbierta] = useState(false);
+  const [texto, setTexto] = useState<string | null>(null);
+  const idioma = pistas[0]?.language;
+
+  useEffect(() => {
+    if (!abierta || !idioma || texto !== null) return;
+    api
+      .getTranscript(resourceId, idioma)
+      .then((r) => setTexto(r.transcript))
+      .catch(() => setTexto(""));
+  }, [abierta, idioma, resourceId, texto]);
+
+  if (!idioma) return null;
+
+  return (
+    <section className="stack">
+      <div>
+        <button className="secondary" onClick={() => setAbierta(!abierta)} aria-expanded={abierta}>
+          {abierta ? "Ocultar la transcripción" : "Ver la transcripción"}
+        </button>
+      </div>
+      {abierta && (
+        <div className="card">
+          {texto === null ? (
+            <p role="status">Cargando la transcripción…</p>
+          ) : texto === "" ? (
+            <p className="muted">Este material todavía no tiene transcripción.</p>
+          ) : (
+            <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{texto}</p>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

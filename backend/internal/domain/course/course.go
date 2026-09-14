@@ -46,13 +46,16 @@ func (t ResourceType) Valid() bool {
 }
 
 // requiresProcessing indica si el tipo de recurso pasa por el pipeline
-// asíncrono de procesamiento (transcodificación HLS). La conversión de
-// presentaciones (PPTX/ODP a PDF) es alcance opcional (sección 5.2) y no
-// está implementada en esta iteración: dichos recursos se marcan listos de
-// inmediato tras la carga.
+// asíncrono: transcodificación a HLS en video y audio, conversión a PDF en
+// presentaciones.
+//
+// La consecuencia para la publicación es la misma en los tres casos: un
+// recurso visible cuyo procesamiento no ha terminado bloquea la publicación de
+// la versión, porque publicarlo pondría delante del estudiante un contenido
+// que todavía no se puede ver.
 func (t ResourceType) requiresProcessing() bool {
 	switch t {
-	case ResourceVideo, ResourceAudio:
+	case ResourceVideo, ResourceAudio, ResourcePresentation:
 		return true
 	}
 	return false

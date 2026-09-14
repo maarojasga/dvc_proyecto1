@@ -97,6 +97,11 @@ services:
       # Vacío: escáner antimalware integrado. Con el perfil "antivirus"
       # levantado, "clamav:3310" añade ClamAV por delante.
       CLAMAV_ADDR: ${CLAMAV_ADDR:-}
+      # Firma de las credenciales Open Badges 3.0. Vacia: las insignias siguen
+      # siendo verificables por su URL publica, sin credencial portatil.
+      BADGE_SIGNING_KEY: ${BADGE_SIGNING_KEY:-}
+      BADGE_KEY_ID: ${BADGE_KEY_ID:-mooc-badges-1}
+      ISSUER_NAME: ${ISSUER_NAME:-Plataforma MOOC}
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_FROM: no-reply@mooc.local

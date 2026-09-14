@@ -31,7 +31,10 @@ func (h *handlers) registerMedia(mux *http.ServeMux) {
 }
 
 type contentResponse struct {
-	Type         string `json:"type"`
+	Type string `json:"type"`
+	// StableID identifica el recurso a través de las versiones. Lo usa el foro
+	// para atar una conversación a la lección y no a la fila.
+	StableID     string `json:"stable_id"`
 	Title        string `json:"title"`
 	Downloadable bool   `json:"downloadable"`
 	// URL del objeto: la lista maestra HLS en video y audio, el archivo en
@@ -41,10 +44,21 @@ type contentResponse struct {
 	CDN bool `json:"cdn,omitempty"`
 	// ExpiresIn son los segundos de validez cuando la URL va firmada.
 	ExpiresIn int `json:"expires_in,omitempty"`
+	// OriginalURL es el archivo tal como lo subió el profesor, cuando el
+	// recurso se presenta convertido (una presentación) y además es
+	// descargable.
+	OriginalURL string `json:"original_url,omitempty"`
 	// Markdown es el contenido de los recursos de texto.
 	Markdown string `json:"markdown,omitempty"`
 	// ExternalURL es el destino de enlaces e iframes.
 	ExternalURL string `json:"external_url,omitempty"`
+	// Sandbox, Allow y ReferrerPolicy son los atributos con los que el cliente
+	// debe montar un iframe. Los decide el servidor: si el cliente eligiera
+	// cuánto restringir el contenido de terceros, bastaría con manipularlo
+	// para que no restringiera nada.
+	Sandbox        string `json:"sandbox,omitempty"`
+	Allow          string `json:"allow,omitempty"`
+	ReferrerPolicy string `json:"referrer_policy,omitempty"`
 	// PositionSeconds es dónde reanudar la reproducción.
 	PositionSeconds int `json:"position_seconds,omitempty"`
 }
@@ -75,9 +89,11 @@ func (h *handlers) resourceContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := contentResponse{
-		Type: contenido.Tipo, Title: contenido.Titulo,
+		Type: contenido.Tipo, StableID: contenido.StableID.String(), Title: contenido.Titulo,
 		Downloadable: contenido.Descargable, Markdown: contenido.Markdown,
 		ExternalURL: contenido.URLExterna, PositionSeconds: contenido.PosicionSegundos,
+		Sandbox: contenido.Sandbox, Allow: contenido.Permisos,
+		ReferrerPolicy: contenido.ReferrerPolicy,
 	}
 	if contenido.ClaveObjeto != "" {
 		url, err := h.deps.Entrega.PresignedGetURL(r.Context(), contenido.ClaveObjeto, vigenciaEntrega, "")
@@ -89,6 +105,11 @@ func (h *handlers) resourceContent(w http.ResponseWriter, r *http.Request) {
 		out.CDN = h.deps.Entrega.SirveDesdeCDN()
 		if !out.CDN {
 			out.ExpiresIn = int(vigenciaEntrega.Seconds())
+		}
+	}
+	if contenido.ClaveOriginal != "" {
+		if url, err := h.deps.Entrega.PresignedGetURL(r.Context(), contenido.ClaveOriginal, vigenciaEntrega, ""); err == nil {
+			out.OriginalURL = url
 		}
 	}
 	writeJSON(w, http.StatusOK, out)

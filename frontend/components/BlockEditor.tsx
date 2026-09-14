@@ -2,150 +2,37 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
-export interface Block {
-  id: string;
-  type: "heading" | "paragraph" | "code" | "callout" | "list";
-  level?: 1 | 2 | 3;
-  content: string;
-  language?: string;
-}
+import { aBloques, aMarkdown, bloqueVacio, nuevoID, type Block, type TipoDeBloque } from "@/lib/markdown";
+
+// El editor delega la conversión a lib/markdown, que es lógica pura y tiene
+// pruebas de ida y vuelta por tipo de nodo. Aquí solo queda la interfaz.
+export type { Block } from "@/lib/markdown";
 
 interface BlockEditorProps {
   initialMarkdown?: string;
+  /** Clave bajo la que se guarda el borrador local. */
   draftKey?: string;
   onChange: (canonicalMarkdown: string) => void;
 }
 
-export function markdownToBlocks(md: string): Block[] {
-  if (!md || !md.trim()) {
-    return [{ id: "b-1", type: "paragraph", content: "" }];
-  }
-
-  const lines = md.split("\n");
-  const blocks: Block[] = [];
-  let currentParagraph = "";
-  let inCode = false;
-  let codeContent: string[] = [];
-  let codeLang = "";
-
-  const flushParagraph = () => {
-    if (currentParagraph.trim()) {
-      blocks.push({
-        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        type: "paragraph",
-        content: currentParagraph.trim(),
-      });
-      currentParagraph = "";
-    }
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    if (line.startsWith("```")) {
-      if (inCode) {
-        blocks.push({
-          id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-          type: "code",
-          content: codeContent.join("\n"),
-          language: codeLang,
-        });
-        inCode = false;
-        codeContent = [];
-        codeLang = "";
-      } else {
-        flushParagraph();
-        inCode = true;
-        codeLang = line.slice(3).trim();
-      }
-      continue;
-    }
-
-    if (inCode) {
-      codeContent.push(line);
-      continue;
-    }
-
-    if (line.startsWith("# ")) {
-      flushParagraph();
-      blocks.push({
-        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        type: "heading",
-        level: 1,
-        content: line.slice(2).trim(),
-      });
-    } else if (line.startsWith("## ")) {
-      flushParagraph();
-      blocks.push({
-        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        type: "heading",
-        level: 2,
-        content: line.slice(3).trim(),
-      });
-    } else if (line.startsWith("### ")) {
-      flushParagraph();
-      blocks.push({
-        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        type: "heading",
-        level: 3,
-        content: line.slice(4).trim(),
-      });
-    } else if (line.startsWith("> ")) {
-      flushParagraph();
-      blocks.push({
-        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        type: "callout",
-        content: line.slice(2).trim(),
-      });
-    } else if (line.startsWith("- ") || line.startsWith("* ")) {
-      flushParagraph();
-      blocks.push({
-        id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        type: "list",
-        content: line.slice(2).trim(),
-      });
-    } else if (line.trim() === "") {
-      flushParagraph();
-    } else {
-      currentParagraph += (currentParagraph ? "\n" : "") + line;
-    }
-  }
-
-  flushParagraph();
-  if (inCode) {
-    blocks.push({
-      id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      type: "code",
-      content: codeContent.join("\n"),
-      language: codeLang,
-    });
-  }
-
-  return blocks.length ? blocks : [{ id: "b-1", type: "paragraph", content: "" }];
+// conBloqueInicial evita presentar un editor sin nada donde escribir: un
+// documento vacío se convierte en cero bloques, que es correcto al
+// serializar pero inservible al editar.
+function conBloqueInicial(bloques: Block[]): Block[] {
+  return bloques.length > 0 ? bloques : [bloqueVacio()];
 }
 
-export function blocksToMarkdown(blocks: Block[]): string {
-  return blocks
-    .map((b) => {
-      switch (b.type) {
-        case "heading": {
-          const prefix = "#".repeat(b.level || 2);
-          return `${prefix} ${b.content.trim()}`;
-        }
-        case "paragraph":
-          return b.content.trim();
-        case "code":
-          return `\`\`\`${b.language || ""}\n${b.content}\n\`\`\``;
-        case "callout":
-          return `> ${b.content.trim()}`;
-        case "list":
-          return `- ${b.content.trim()}`;
-        default:
-          return b.content;
-      }
-    })
-    .filter((s) => s.length > 0)
-    .join("\n\n");
+// contenidoInicial da a los bloques estructurados algo con lo que arrancar.
+// Una tabla vacía no se puede editar: no tiene celdas donde escribir.
+function contenidoInicial(tipo: TipoDeBloque): string {
+  switch (tipo) {
+    case "table":
+      return "Columna 1|Columna 2\n|";
+    case "task":
+      return "Primera tarea";
+    default:
+      return "";
+  }
 }
 
 export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft", onChange }: BlockEditorProps) {
@@ -158,7 +45,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
         } catch {}
       }
     }
-    return markdownToBlocks(initialMarkdown);
+    return conBloqueInicial(aBloques(initialMarkdown));
   });
 
   const [autosaveStatus, setAutosaveStatus] = useState<string>("Borrador guardado");
@@ -174,7 +61,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
           if (typeof window !== "undefined") {
             localStorage.setItem(draftKey, JSON.stringify(newBlocks));
           }
-          const md = blocksToMarkdown(newBlocks);
+          const md = aMarkdown(newBlocks);
           onChange(md);
           const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
           setAutosaveStatus(`Autoguardado a las ${timeStr}`);
@@ -198,13 +85,14 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
     triggerAutosave(updated);
   };
 
-  const addBlock = (type: Block["type"], afterId?: string) => {
+  const addBlock = (type: TipoDeBloque, afterId?: string) => {
     const newBlock: Block = {
-      id: `b-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      id: nuevoID(),
       type,
       level: type === "heading" ? 2 : undefined,
-      content: "",
+      content: contenidoInicial(type),
       language: type === "code" ? "javascript" : undefined,
+      done: type === "task" ? [false] : undefined,
     };
 
     let updated: Block[];
@@ -243,7 +131,7 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
     if (typeof window !== "undefined") {
       localStorage.removeItem(draftKey);
     }
-    const reset = markdownToBlocks(initialMarkdown);
+    const reset = conBloqueInicial(aBloques(initialMarkdown));
     setBlocks(reset);
     triggerAutosave(reset);
   };
@@ -354,11 +242,36 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
                 onChange={(e) => updateBlock(block.id, { content: e.target.value })}
                 style={{ width: "100%", borderLeft: "4px solid #3b82f6", background: "#eff6ff" }}
               />
+            ) : block.type === "formula" ? (
+              <>
+                <textarea
+                  rows={2}
+                  value={block.content}
+                  placeholder="\\int_0^1 x^2 dx = \\frac{1}{3}"
+                  onChange={(e) => updateBlock(block.id, { content: e.target.value })}
+                  style={{ width: "100%", fontFamily: "monospace", fontSize: "0.9rem" }}
+                />
+                <p className="muted" style={{ fontSize: "0.75rem", margin: "0.25rem 0 0" }}>
+                  Notación LaTeX. Se guarda entre <code>$$</code>, que es lo que reconocen los
+                  renderizadores de fórmulas.
+                </p>
+              </>
+            ) : block.type === "table" ? (
+              <EditorDeTabla
+                contenido={block.content}
+                onChange={(contenido) => updateBlock(block.id, { content: contenido })}
+              />
+            ) : block.type === "task" ? (
+              <EditorDeTareas
+                contenido={block.content}
+                hechas={block.done ?? []}
+                onChange={(contenido, hechas) => updateBlock(block.id, { content: contenido, done: hechas })}
+              />
             ) : (
               <textarea
                 rows={3}
                 value={block.content}
-                placeholder={block.type === "list" ? "Elemento de lista..." : "Escribe el contenido del párrafo..."}
+                placeholder={block.type === "list" ? "Un elemento por línea..." : "Escribe el contenido del párrafo..."}
                 onChange={(e) => updateBlock(block.id, { content: e.target.value })}
                 style={{ width: "100%" }}
               />
@@ -383,10 +296,181 @@ export function BlockEditor({ initialMarkdown = "", draftKey = "mooc_block_draft
         <button type="button" onClick={() => addBlock("list")}>
           + Lista
         </button>
+        <button type="button" onClick={() => addBlock("task")}>
+          + Tareas
+        </button>
+        <button type="button" onClick={() => addBlock("table")}>
+          + Tabla
+        </button>
+        <button type="button" onClick={() => addBlock("formula")}>
+          + Fórmula
+        </button>
         <button type="button" onClick={clearDraft} style={{ marginLeft: "auto", fontSize: "0.75rem", opacity: 0.7 }}>
           Limpiar borrador
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Edición de una tabla celda a celda.
+ *
+ * El contenido se guarda como filas separadas por saltos de línea y celdas por
+ * "|", que es lo que espera lib/markdown. Se edita en una cuadrícula y no en un
+ * textarea con pipes porque alinear una tabla a mano es justo lo que un editor
+ * de bloques debería ahorrar.
+ */
+function EditorDeTabla({
+  contenido,
+  onChange,
+}: {
+  contenido: string;
+  onChange: (contenido: string) => void;
+}) {
+  const filas = contenido.split("\n").map((f) => f.split("|"));
+  const columnas = Math.max(1, ...filas.map((f) => f.length));
+
+  const emitir = (nuevas: string[][]) => onChange(nuevas.map((f) => f.join("|")).join("\n"));
+
+  const cambiarCelda = (fila: number, columna: number, valor: string) => {
+    const nuevas = filas.map((f) => [...f]);
+    while (nuevas[fila].length < columnas) nuevas[fila].push("");
+    // El "|" es el separador: dejarlo entrar en una celda partiría la fila.
+    nuevas[fila][columna] = valor.replace(/\|/g, "/");
+    emitir(nuevas);
+  };
+
+  return (
+    <div className="stack" style={{ gap: "0.4rem" }}>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <tbody>
+            {filas.map((fila, i) => (
+              <tr key={i}>
+                {Array.from({ length: columnas }).map((_, j) => (
+                  <td key={j} style={{ border: "1px solid var(--color-border, #e5e7eb)", padding: 0 }}>
+                    <label className="visually-hidden" htmlFor={`celda-${i}-${j}`}>
+                      {i === 0 ? `Encabezado de la columna ${j + 1}` : `Fila ${i}, columna ${j + 1}`}
+                    </label>
+                    <input
+                      id={`celda-${i}-${j}`}
+                      value={fila[j] ?? ""}
+                      onChange={(e) => cambiarCelda(i, j, e.target.value)}
+                      style={{
+                        width: "100%",
+                        border: 0,
+                        padding: "0.35rem",
+                        fontWeight: i === 0 ? 600 : 400,
+                        background: i === 0 ? "var(--color-bg-subtle, #f1f5f9)" : "transparent",
+                      }}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="row" style={{ gap: "0.3rem" }}>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => emitir([...filas, Array(columnas).fill("")])}
+        >
+          + Fila
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => emitir(filas.map((f) => [...f, ""]))}
+        >
+          + Columna
+        </button>
+        {filas.length > 1 && (
+          <button type="button" className="secondary" onClick={() => emitir(filas.slice(0, -1))}>
+            − Fila
+          </button>
+        )}
+      </div>
+      <p className="muted" style={{ fontSize: "0.75rem", margin: 0 }}>
+        La primera fila es el encabezado.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Lista de tareas con su marcado.
+ *
+ * El estado de cada casilla viaja en paralelo al texto, en el mismo orden,
+ * porque así se serializa a "- [x] texto" sin tener que interpretar el texto
+ * para saber si estaba marcada.
+ */
+function EditorDeTareas({
+  contenido,
+  hechas,
+  onChange,
+}: {
+  contenido: string;
+  hechas: boolean[];
+  onChange: (contenido: string, hechas: boolean[]) => void;
+}) {
+  const lineas = contenido.split("\n");
+
+  const cambiarTexto = (i: number, valor: string) => {
+    const nuevas = [...lineas];
+    nuevas[i] = valor;
+    onChange(nuevas.join("\n"), hechas);
+  };
+
+  const alternar = (i: number) => {
+    const nuevas = [...hechas];
+    while (nuevas.length < lineas.length) nuevas.push(false);
+    nuevas[i] = !nuevas[i];
+    onChange(contenido, nuevas);
+  };
+
+  return (
+    <div className="stack" style={{ gap: "0.3rem" }}>
+      {lineas.map((linea, i) => (
+        <div key={i} className="row" style={{ alignItems: "center", gap: "0.4rem" }}>
+          <input
+            type="checkbox"
+            checked={hechas[i] ?? false}
+            onChange={() => alternar(i)}
+            aria-label={`Marcar "${linea || `tarea ${i + 1}`}" como hecha`}
+          />
+          <input
+            value={linea}
+            onChange={(e) => cambiarTexto(i, e.target.value)}
+            placeholder="Descripción de la tarea"
+            style={{ flex: 1 }}
+          />
+          {lineas.length > 1 && (
+            <button
+              type="button"
+              className="secondary"
+              onClick={() =>
+                onChange(
+                  lineas.filter((_, j) => j !== i).join("\n"),
+                  hechas.filter((_, j) => j !== i),
+                )
+              }
+              aria-label={`Quitar la tarea ${i + 1}`}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      ))}
+      <button
+        type="button"
+        className="secondary"
+        onClick={() => onChange([...lineas, ""].join("\n"), [...hechas, false])}
+      >
+        + Tarea
+      </button>
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, type Version, ApiError } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 // Los filtros del catálogo (punto 10 del alcance mínimo) los resuelve la API:
 // aquí solo se recogen y se mandan como parámetros de consulta. Filtrar en el
@@ -18,6 +19,7 @@ interface Filtros {
 const SIN_FILTROS: Filtros = { q: "", category: "", level: "" };
 
 export default function HomePage() {
+  const { t } = useI18n();
   const [courses, setCourses] = useState<Version[] | null>(null);
   const [error, setError] = useState("");
   const [filtros, setFiltros] = useState<Filtros>(SIN_FILTROS);
@@ -76,8 +78,8 @@ export default function HomePage() {
     <div>
       <header className="page-header">
         <div>
-          <h1>Catálogo de cursos</h1>
-          <p>Cursos publicados y abiertos a inscripción.</p>
+          <h1>{t("catalogo.titulo")}</h1>
+          <p>{t("catalogo.subtitulo")}</p>
         </div>
       </header>
 
@@ -91,23 +93,23 @@ export default function HomePage() {
         }}
       >
         <div className="form-field">
-          <label htmlFor="q">Buscar cursos</label>
+          <label htmlFor="q">{t("catalogo.buscar")}</label>
           <input
             id="q"
             value={filtros.q}
             onChange={(e) => setFiltros({ ...filtros, q: e.target.value })}
-            placeholder="Título o resumen"
+            placeholder={t("catalogo.buscarPlaceholder")}
           />
         </div>
 
         <div className="form-field">
-          <label htmlFor="categoria">Categoría</label>
+          <label htmlFor="categoria">{t("catalogo.categoria")}</label>
           <select
             id="categoria"
             value={filtros.category}
             onChange={(e) => aplicar({ ...filtros, category: e.target.value })}
           >
-            <option value="">Todas</option>
+            <option value="">{t("catalogo.todas")}</option>
             {opciones.categorias.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -117,13 +119,13 @@ export default function HomePage() {
         </div>
 
         <div className="form-field">
-          <label htmlFor="nivel">Nivel</label>
+          <label htmlFor="nivel">{t("catalogo.nivel")}</label>
           <select
             id="nivel"
             value={filtros.level}
             onChange={(e) => aplicar({ ...filtros, level: e.target.value })}
           >
-            <option value="">Todos</option>
+            <option value="">{t("catalogo.todos")}</option>
             {opciones.niveles.map((n) => (
               <option key={n} value={n}>
                 {n}
@@ -132,10 +134,10 @@ export default function HomePage() {
           </select>
         </div>
 
-        <button type="submit">Buscar</button>
+        <button type="submit">{t("catalogo.buscarBoton")}</button>
         {hayFiltros && (
           <button type="button" className="secondary" onClick={() => aplicar(SIN_FILTROS)}>
-            Limpiar filtros
+            {t("catalogo.limpiar")}
           </button>
         )}
       </form>
@@ -146,19 +148,19 @@ export default function HomePage() {
         </p>
       )}
 
-      {courses === null && !error && <p role="status">Cargando cursos…</p>}
+      {courses === null && !error && <p role="status">{t("catalogo.cargando")}</p>}
 
       {courses && (
         <p role="status" className="muted">
-          {courses.length === 1 ? "1 curso" : `${courses.length} cursos`}
-          {hayFiltros ? " con los filtros aplicados" : " publicados"}
+          {courses.length === 1 ? t("catalogo.unCurso") : t("catalogo.nCursos", { n: courses.length })}
+          {hayFiltros ? t("catalogo.conFiltros") : t("catalogo.publicados")}
         </p>
       )}
 
       {courses?.length === 0 && (
         <div className="estado-vacio">
-          <p>No hay cursos publicados que coincidan con la búsqueda.</p>
-          <p>Prueba con otro término o quita algún filtro.</p>
+          <p>{t("catalogo.sinResultados")}</p>
+          <p>{t("catalogo.pruebaOtro")}</p>
         </div>
       )}
 

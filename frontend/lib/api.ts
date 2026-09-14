@@ -77,8 +77,15 @@ export interface Session {
   current: boolean;
 }
 
+import type { PistaDeSubtitulos } from "@/components/ReproductorHLS";
+
+export type { PistaDeSubtitulos };
+
 export interface ResourceContent {
   type: string;
+  // Identifica el recurso a través de las versiones: lo usa el foro para atar
+  // una conversación a la lección y no a la fila.
+  stable_id: string;
   title: string;
   downloadable: boolean;
   url?: string;
@@ -87,6 +94,24 @@ export interface ResourceContent {
   markdown?: string;
   external_url?: string;
   position_seconds?: number;
+  // El archivo tal como lo subio el profesor, cuando el recurso se presenta
+  // convertido (una presentacion) y ademas es descargable.
+  original_url?: string;
+  // Atributos de seguridad de un iframe. Los decide el servidor a partir de la
+  // lista blanca; el cliente los aplica tal cual.
+  sandbox?: string;
+  allow?: string;
+  referrer_policy?: string;
+}
+
+// Destino autorizado para incrustar.
+export interface IframeDestino {
+  id: string;
+  host: string;
+  include_subdomains: boolean;
+  permissions?: string;
+  description?: string;
+  example_url?: string;
 }
 
 export interface AuditEntry {
@@ -174,6 +199,116 @@ export interface BadgeVerification {
   issued_at: string;
   revoked_at?: string | null;
   image_url?: string;
+}
+
+// Clasificación de los cambios de un borrador de actualización.
+//
+// El alcance resume el impacto sobre el progreso ya registrado: "menor" no
+// cambia lo que hay que completar, "mayor" sí.
+export interface Cambio {
+  tipo: "agregado" | "eliminado" | "modificado" | "movido";
+  elemento: "modulo" | "unidad" | "recurso";
+  stable_id: string;
+  titulo: string;
+  detalle?: string;
+  afecta_progreso: boolean;
+}
+
+export interface Clasificacion {
+  alcance: "ninguno" | "menor" | "mayor";
+  cambios: Cambio[];
+  obligatorios_agregados?: string[];
+  obligatorios_eliminados?: string[];
+}
+
+// Métricas del panel administrativo. El desglose es un mapa abierto para que
+// añadir un estado en la base no obligue a tocar el cliente.
+export interface Conteo {
+  total: number;
+  desglose: Record<string, number>;
+}
+
+export interface Metricas {
+  usuarios: Conteo;
+  cursos: Conteo;
+  inscripciones: Conteo;
+  insignias: Conteo;
+  multimedia: Conteo;
+  evaluaciones: Conteo;
+}
+
+export interface ResumenDeOpcion {
+  stable_id: string;
+  text_md: string;
+  es_correcta: boolean;
+  elegida: number;
+  porcentaje: number;
+}
+
+export interface ResumenDePregunta {
+  stable_id: string;
+  prompt_md: string;
+  respondida: number;
+  en_blanco: number;
+  aciertos: number;
+  tasa_acierto: number;
+  opciones: ResumenDeOpcion[];
+}
+
+export interface ResultadosDeQuiz {
+  quiz_id: string;
+  title: string;
+  resultados: {
+    intentos: number;
+    estudiantes: number;
+    nota_media: number;
+    nota_mediana: number;
+    tasa_aprobado: number;
+    preguntas: ResumenDePregunta[];
+  };
+}
+
+// Una revisión guardada del contenido de un recurso. La lista no trae el
+// contenido: se pide por revisión al mirar una en concreto.
+export interface Revision {
+  id: string;
+  resource_id: string;
+  revision_number: number;
+  content_md?: string;
+  author_email?: string;
+  created_at: string;
+}
+
+// Profesor con acceso de edición a un curso ajeno.
+export interface Colaborador {
+  user_id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  added_at: string;
+}
+
+// Hilo del foro de un curso.
+export interface Hilo {
+  id: string;
+  course_id: string;
+  resource_stable_id?: string;
+  author_name?: string;
+  title: string;
+  body_md: string;
+  locked: boolean;
+  replies: number;
+  created_at: string;
+  last_activity_at: string;
+}
+
+export interface RespuestaDeForo {
+  id: string;
+  thread_id: string;
+  author_name?: string;
+  body_md: string;
+  created_at: string;
+  deleted: boolean;
 }
 
 // Una parte ya recibida por el almacen. El ETag es lo que el cliente reenvia
@@ -278,6 +413,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  // Clasificación de lo que un borrador cambia respecto a lo publicado.
+  versionChanges: (versionId: string) =>
+    request<Clasificacion>(`/api/v1/courses/versions/${versionId}/changes`),
   publishVersion: (versionId: string) =>
     request<{ status: string }>(`/api/v1/courses/versions/${versionId}/publish`, { method: "POST" }),
 
@@ -347,6 +485,109 @@ export const api = {
         }),
       },
     ),
+
+  // La lista blanca de iframes. El profesor la consulta para saber qué
+  // destinos puede incrustar; solo la administración la modifica.
+  listIframeAllowlist: () =>
+    request<{ items: IframeDestino[]; sandbox: string; referrer_policy: string }>("/api/v1/iframe-allowlist"),
+  addIframeDestino: (data: {
+    host: string;
+    include_subdomains: boolean;
+    permissions: string;
+    description: string;
+  }) =>
+    request<IframeDestino>("/api/v1/admin/iframe-allowlist", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  removeIframeDestino: (id: string) =>
+    request<void>(`/api/v1/admin/iframe-allowlist/${id}`, { method: "DELETE" }),
+
+  platformMetrics: () => request<Metricas>("/api/v1/admin/metrics"),
+  // Resultados agregados de una evaluación: los ve su autor o la administración.
+  quizResults: (versionId: string, resourceId: string) =>
+    request<ResultadosDeQuiz>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/results`,
+    ),
+
+  // Historial de revisiones de un recurso de texto.
+  listRevisions: (versionId: string, resourceId: string) =>
+    request<{ items: Revision[] }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions`,
+    ),
+  saveRevision: (versionId: string, resourceId: string, content_md: string) =>
+    request<Revision | { status: string }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions`,
+      { method: "POST", body: JSON.stringify({ content_md }) },
+    ),
+  getRevision: (versionId: string, resourceId: string, numero: number) =>
+    request<Revision>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions/${numero}`,
+    ),
+  restoreRevision: (versionId: string, resourceId: string, numero: number) =>
+    request<{ status: string; restored_from?: number }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/revisions/${numero}/restore`,
+      { method: "POST" },
+    ),
+
+  // Coautoría de un curso. Va bajo /collaborators y no bajo
+  // /courses/{id}/collaborators por un conflicto de patrones en el router del
+  // servidor, que la API documenta.
+  listCollaborators: (courseId: string) =>
+    request<{ items: Colaborador[] }>(`/api/v1/collaborators/${courseId}`),
+  addCollaborator: (courseId: string, email: string) =>
+    request<{ user_id: string; email: string }>(`/api/v1/collaborators/${courseId}`, {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+  removeCollaborator: (courseId: string, userId: string) =>
+    request<void>(`/api/v1/collaborators/${courseId}/${userId}`, { method: "DELETE" }),
+
+  // Subtítulos y transcripción de un recurso reproducible.
+  listCaptions: (resourceId: string) =>
+    request<{ items: PistaDeSubtitulos[] }>(`/api/v1/resources/${resourceId}/captions`),
+  getTranscript: (resourceId: string, idioma: string) =>
+    request<{ resource_title: string; language: string; transcript: string }>(
+      `/api/v1/resources/${resourceId}/transcript/${idioma}`,
+    ),
+  saveCaptions: (
+    versionId: string,
+    resourceId: string,
+    idioma: string,
+    data: { label: string; kind: "subtitles" | "captions"; vtt: string },
+  ) =>
+    request<{ cues: number; duration_ms: number }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/captions/${idioma}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    ),
+
+  // Foro asíncrono. Cuelga de /forum y no de /courses/{id}/forum por un
+  // conflicto de patrones en el router del servidor, que la API documenta.
+  listThreads: (courseId: string, resourceStableId?: string) =>
+    request<{ items: Hilo[] }>(
+      `/api/v1/forum/${courseId}${resourceStableId ? `?resource_stable_id=${resourceStableId}` : ""}`,
+    ),
+  createThread: (courseId: string, data: { title: string; body_md: string; resource_stable_id?: string }) =>
+    request<Hilo>(`/api/v1/forum/${courseId}`, { method: "POST", body: JSON.stringify(data) }),
+  getThread: (threadId: string) =>
+    request<{ thread: Hilo; replies: RespuestaDeForo[] }>(`/api/v1/forum/threads/${threadId}`),
+  replyToThread: (threadId: string, body_md: string) =>
+    request<RespuestaDeForo>(`/api/v1/forum/threads/${threadId}/replies`, {
+      method: "POST",
+      body: JSON.stringify({ body_md }),
+    }),
+  deleteForumPost: (postId: string) =>
+    request<void>(`/api/v1/forum/posts/${postId}`, { method: "DELETE" }),
+  lockThread: (threadId: string, locked: boolean) =>
+    request<{ locked: boolean }>(`/api/v1/forum/threads/${threadId}/lock`, {
+      method: "POST",
+      body: JSON.stringify({ locked }),
+    }),
+
+  // Credencial Open Badges 3.0 de una insignia. Publica: el sentido de una
+  // credencial verificable es que cualquiera la compruebe sin cuenta aquí.
+  openBadgeURL: (code: string) => `${API_URL}/api/v1/badges/${code}/openbadge`,
+  openBadgeJWTURL: (code: string) => `${API_URL}/api/v1/badges/${code}/openbadge.jwt`,
 
   listCatalog: (params: Record<string, string> = {}) =>
     request<{ items: Version[] }>(`/api/v1/catalog?${new URLSearchParams(params)}`),

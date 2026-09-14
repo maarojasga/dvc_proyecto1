@@ -38,6 +38,20 @@ type Config struct {
 	// con firmas actualizadas.
 	ClamAVAddr string
 
+	// BadgeSigningKey es la clave privada Ed25519 con que se firman las
+	// credenciales Open Badges 3.0, en base64. Vacía desactiva la credencial
+	// portátil; la insignia sigue siendo verificable por su URL pública.
+	//
+	// Es material criptográfico, así que viene de una variable de entorno y no
+	// del repositorio: la gestión externa de secretos es una restricción
+	// técnica del proyecto.
+	BadgeSigningKey string
+	// BadgeKeyID identifica la clave dentro del JWKS, para poder rotarla sin
+	// invalidar de golpe lo firmado antes.
+	BadgeKeyID string
+	// IssuerName es la organización que figura como emisora.
+	IssuerName string
+
 	SMTPHost string
 	SMTPPort string
 	SMTPFrom string
@@ -68,6 +82,10 @@ func Load() Config {
 		S3PublicUseSSL:   getBool("S3_PUBLIC_USE_SSL", getBool("S3_USE_SSL", false)),
 
 		ClamAVAddr: getEnv("CLAMAV_ADDR", ""),
+
+		BadgeSigningKey: getEnv("BADGE_SIGNING_KEY", ""),
+		BadgeKeyID:      getEnv("BADGE_KEY_ID", "mooc-badges-1"),
+		IssuerName:      getEnv("ISSUER_NAME", "Plataforma MOOC"),
 
 		SMTPHost: getEnv("SMTP_HOST", "localhost"),
 		SMTPPort: getEnv("SMTP_PORT", "1025"),

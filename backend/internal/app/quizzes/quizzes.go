@@ -121,6 +121,47 @@ type DefinicionOpcion struct {
 //
 // Solo el profesor dueno y sobre una version en borrador: una version
 // publicada es inmutable, asi que cambiar una evaluacion exige despublicar.
+// DefinicionParaInforme resuelve un quiz junto con los textos de sus
+// preguntas y opciones, comprobando que quien pregunta es su autor o la
+// administracion.
+//
+// Existe para el informe agregado: el snapshot de cada intento guarda
+// identificadores y la clave, no los enunciados, asi que el informe los toma
+// de la definicion vigente, que es la que el profesor esta mirando.
+type DefinicionDeInforme struct {
+	Quiz   *quiz.Quiz
+	Textos quiz.TextosDeQuiz
+}
+
+func (s *Service) DefinicionParaInforme(ctx context.Context, actor *user.User, versionID, resourceID uuid.UUID) (*DefinicionDeInforme, error) {
+	if _, _, err := s.courses.GetOwnedVersion(ctx, actor, versionID); err != nil {
+		return nil, err
+	}
+	rec, err := s.courseRepo.GetResource(ctx, versionID, resourceID)
+	if err != nil {
+		return nil, err
+	}
+	if string(rec.Type) != "quiz" {
+		return nil, ErrRecursoNoEsQuiz
+	}
+	q, err := s.quizzes.GetByResource(ctx, resourceID)
+	if err != nil {
+		return nil, err
+	}
+
+	textos := quiz.TextosDeQuiz{
+		Preguntas: map[uuid.UUID]string{},
+		Opciones:  map[uuid.UUID]string{},
+	}
+	for _, pregunta := range q.Questions {
+		textos.Preguntas[pregunta.StableID] = pregunta.PromptMD
+		for _, opcion := range pregunta.Options {
+			textos.Opciones[opcion.StableID] = opcion.TextMD
+		}
+	}
+	return &DefinicionDeInforme{Quiz: q, Textos: textos}, nil
+}
+
 func (s *Service) Definir(ctx context.Context, actor *user.User, versionID, resourceID uuid.UUID, def DefinicionQuiz) (*quiz.Quiz, error) {
 	if _, _, err := s.courses.GetOwnedVersion(ctx, actor, versionID); err != nil {
 		return nil, err

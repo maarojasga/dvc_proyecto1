@@ -6,13 +6,17 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/admin"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/documento"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/quiz"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/subtitulo"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
@@ -28,6 +32,18 @@ type errorBody struct {
 	Code    string   `json:"code"`
 	Message string   `json:"message"`
 	Details []string `json:"details,omitempty"`
+}
+
+// writeJSONSinTipo escribe JSON respetando el Content-Type que el manejador ya
+// haya fijado. Lo necesita quien sirve JSON-LD, que tiene su propio tipo.
+func writeJSONSinTipo(w http.ResponseWriter, status int, v any) {
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(status)
+	if v != nil {
+		_ = json.NewEncoder(w).Encode(v)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -124,6 +140,27 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusUnprocessableEntity, "malware_detected", nil
 	case errors.Is(err, ErrTipoNoCorresponde):
 		return http.StatusUnprocessableEntity, "mime_mismatch", nil
+	case errors.Is(err, ErrHiloBloqueado):
+		return http.StatusConflict, "thread_locked", nil
+	case errors.Is(err, ErrInsigniaRevocada):
+		return http.StatusConflict, "badge_revoked", nil
+	case errors.Is(err, ErrFirmaNoConfigurada):
+		return http.StatusServiceUnavailable, "credential_signing_unavailable", nil
+	case errors.Is(err, subtitulo.ErrNoEsWebVTT):
+		return http.StatusUnprocessableEntity, "not_webvtt", nil
+	case errors.Is(err, admin.ErrNoEsProfesor):
+		// Ni 404 ni un mensaje distinto según el motivo: separar "no existe"
+		// de "no es profesor" convertiría invitar a un colaborador en una
+		// forma de averiguar qué correos hay registrados.
+		return http.StatusUnprocessableEntity, "teacher_not_found", nil
+	case errors.Is(err, documento.ErrFormatoNoSoportado):
+		return http.StatusUnprocessableEntity, "presentation_format_unsupported", nil
+	case errors.Is(err, iframe.ErrHostNoAutorizado):
+		return http.StatusUnprocessableEntity, "iframe_host_not_allowed", nil
+	case errors.Is(err, iframe.ErrEsquemaNoPermitido):
+		return http.StatusUnprocessableEntity, "iframe_scheme_not_allowed", nil
+	case errors.Is(err, iframe.ErrURLInvalida):
+		return http.StatusUnprocessableEntity, "iframe_invalid_url", nil
 	case errors.Is(err, antimalware.ErrEscanerNoDisponible):
 		// El objeto no se pudo escanear, así que no se acepta. Es 503 y no
 		// 422: el archivo puede estar bien, lo que falla es la plataforma.
