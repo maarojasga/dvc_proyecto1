@@ -5,6 +5,7 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/api ./cmd/api
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/worker ./cmd/worker
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/seed ./cmd/seed
 
 FROM alpine:3.20 AS api
 RUN apk add --no-cache ca-certificates
@@ -36,3 +37,11 @@ COPY --from=builder /out/worker /usr/local/bin/worker
 # falla al crear el perfil, con un error que no menciona el permiso.
 ENV HOME=/tmp
 ENTRYPOINT ["worker"]
+
+# Sembrador de datos sintéticos. Va en su propia imagen y no dentro de la API
+# porque no debe poder ejecutarse por accidente en un entorno real: para
+# correrlo hay que levantarlo a propósito, con el perfil "carga".
+FROM alpine:3.20 AS seed
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /out/seed /usr/local/bin/seed
+ENTRYPOINT ["seed"]

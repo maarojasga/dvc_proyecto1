@@ -296,6 +296,34 @@ que por diseño no se crean por registro público: un administrador invita
 profesores desde http://localhost:3000/admin, y el primer administrador se
 siembra con `ADMIN_EMAIL` y `ADMIN_PASSWORD` en el `.env`.
 
+## Demostración de aceptación y prueba de carga
+
+El guion de los nueve segmentos que fija la sección 10.2 del enunciado está en
+[`docs/demostracion.md`](docs/demostracion.md), con una nota en cada segmento
+sobre qué se puede demostrar hoy y qué no.
+
+**No hay que desplegar en un proveedor cloud.** La sección 10.1 pide que la
+demostración se ejecute «con datos sintéticos sobre el sistema desplegado
+mediante Docker Compose», que es exactamente lo que hay:
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose --profile carga run --rm seed   # 500 cuentas, un curso, sesiones
+docker compose --profile carga run --rm k6     # prueba de carga de Etapa 1
+```
+
+La API dejó de publicar el puerto 8080 en el host: ahora lo hace un proxy nginx
+y las instancias quedan detrás, así que `docker compose up -d --scale api=3`
+funciona y el escalamiento a múltiples instancias que pide el criterio de
+arquitectura se puede demostrar en lugar de afirmarse. El límite de tasa sigue
+contando por IP real, porque la API ya leía `X-Forwarded-For`.
+
+Los umbrales de la prueba de carga —y por qué son esos, dado que el enunciado
+fija 2.000 usuarios concurrentes pero ningún p95— están en
+[`load/README.md`](load/README.md). k6 sale con código distinto de cero si
+alguno se incumple, así que sirven para colgar de ellos un paso de CI.
+
 ## Pendientes para las siguientes iteraciones
 
 El alcance mínimo (sección 5.1) y el opcional (5.2) están cubiertos. Lo que
@@ -307,10 +335,9 @@ aceptación (sección 10), ordenado por lo que más pesa para esa demostración:
   cobertura llega hasta la API, no hasta el navegador.
 - **Pipeline de CI**: build, lint, análisis de seguridad, migraciones y
   pruebas, que la sección 10.1 exige completar antes de la demostración.
-- **Prueba de carga de Etapa 1** y el p95 documentado que pide el segmento 9.
-- **Reverse proxy** (nginx/traefik) para escalar la API a varias instancias:
-  hoy publica el puerto 8080 fijo en el host, lo que impide `--scale api=N`.
-  Los workers sí escalan.
+- **Ejecutar** la prueba de carga de Etapa 1. El guion, los umbrales y el
+  sembrador de datos sintéticos ya están (`load/`), pero todavía no se ha
+  corrido contra un entorno levantado, así que no hay números.
 - **OpenTelemetry**: hoy hay logs estructurados y correlación por
   `X-Request-Id`; faltan métricas y trazas.
 - **Cursores y ETag** en las colecciones, que exige la sección 7.
