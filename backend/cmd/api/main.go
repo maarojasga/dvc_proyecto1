@@ -116,6 +116,7 @@ func main() {
 		Redis:         rdb, Queue: queue.NuevoEncolador(queueClient),
 		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
+		AuthRateLimitPerMinute: cfg.AuthRateLimitPerMinute,
 	})
 
 	srv := &http.Server{

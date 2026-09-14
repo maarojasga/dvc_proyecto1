@@ -25,6 +25,11 @@ frontend/.yarn/*
 !frontend/.yarn/releases
 !frontend/.yarn/versions
 frontend/.vercel
+# Resultados de Playwright: informes, trazas y vídeos de una corrida concreta.
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/.playwright/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

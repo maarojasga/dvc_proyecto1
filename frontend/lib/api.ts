@@ -433,10 +433,26 @@ export const api = {
     }),
   deleteUnit: (versionId: string, unitId: string) =>
     request<void>(`/api/v1/courses/versions/${versionId}/units/${unitId}`, { method: "DELETE" }),
-  addResource: (versionId: string, unitId: string, data: Partial<Resource>) =>
+  addResource: (versionId: string, unitId: string, data: NuevoRecurso) =>
     request<Resource>(`/api/v1/courses/versions/${versionId}/units/${unitId}/resources`, {
       method: "POST",
-      body: JSON.stringify(data),
+      // El cuerpo se arma campo a campo en vez de reenviar el objeto tal cual.
+      // La respuesta del recurso viene en PascalCase (es la serialización por
+      // defecto del dominio en Go) pero la petición se declara en snake_case,
+      // así que mandar de vuelta la misma forma que se recibe produce un 400 y
+      // el profesor no puede añadir ningún recurso. Traducir aquí, en el
+      // adaptador al cable, es lo que impide que la asimetría se filtre a las
+      // pantallas.
+      body: JSON.stringify({
+        type: data.type,
+        title: data.title,
+        position: data.position,
+        visible: data.visible,
+        required: data.required,
+        downloadable: data.downloadable ?? false,
+        text_content_md: data.text_content_md ?? "",
+        external_url: data.external_url ?? "",
+      }),
     }),
   deleteResource: (versionId: string, resourceId: string) =>
     request<void>(`/api/v1/courses/versions/${versionId}/resources/${resourceId}`, { method: "DELETE" }),
@@ -711,6 +727,25 @@ export interface Unit {
   Title: string;
   Position: number;
   Resources?: Resource[];
+}
+
+/**
+ * NuevoRecurso es el cuerpo que acepta la API al crear un recurso.
+ *
+ * Va declarado aparte de `Resource` a propósito: la respuesta llega en
+ * PascalCase y la petición se declara en snake_case, y un único tipo para las
+ * dos formas invita a reenviar lo recibido, que es exactamente el error que
+ * dejaba al profesor sin poder añadir recursos.
+ */
+export interface NuevoRecurso {
+  type: string;
+  title: string;
+  position: number;
+  visible: boolean;
+  required: boolean;
+  downloadable?: boolean;
+  text_content_md?: string;
+  external_url?: string;
 }
 
 export interface Resource {

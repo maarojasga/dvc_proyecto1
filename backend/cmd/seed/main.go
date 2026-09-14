@@ -372,7 +372,12 @@ func escribir(destino string, s Salida) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(destino, b, 0o644)
+	// 0600 y no 0644: este archivo lleva tokens de sesión en claro, uno por
+	// estudiante. Son de cuentas sintéticas de un entorno de pruebas, pero un
+	// token de sesión legible por cualquier usuario de la máquina es un hábito
+	// que no conviene tener, y el día que alguien apunte esto a un entorno que
+	// no debía, la diferencia importa.
+	return os.WriteFile(destino, b, 0o600)
 }
 
 func enteroDelEntorno(clave string, porDefecto int) int {

@@ -324,25 +324,62 @@ fija 2.000 usuarios concurrentes pero ningún p95— están en
 [`load/README.md`](load/README.md). k6 sale con código distinto de cero si
 alguno se incumple, así que sirven para colgar de ellos un paso de CI.
 
+## Condición de aceptación (sección 10)
+
+El enunciado exige cuatro cosas para aceptar. Estado real, medido:
+
+| Condición | Estado |
+|---|---|
+| Los nueve flujos críticos superan pruebas **E2E** | **Cubierto.** 34 pruebas en `frontend/e2e/`, una carpeta por segmento, contra la plataforma levantada |
+| **Prueba de carga** de Etapa 1 sin incumplimientos críticos | **Ejecutada y superada.** 42.175 peticiones, 0 % de error, p95 entre 3 y 7 ms. Ver [`load/README.md`](load/README.md) |
+| **Auditoría de accesibilidad** sin incumplimientos críticos | **Cubierta.** axe-core sobre WCAG 2.2 A y AA en 13 pantallas, en español y en inglés: cero violaciones |
+| **CI** completo antes de la demostración | **Cubierto.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml): build, lint, análisis de seguridad, migraciones, pruebas, E2E, accesibilidad y carga |
+
+```bash
+cd frontend && npm run e2e          # los nueve flujos y la accesibilidad
+```
+
+Las E2E necesitan la plataforma en marcha y el administrador sembrado
+(`E2E_ADMIN_EMAIL` y `E2E_ADMIN_PASSWORD`). Levantan un navegador de verdad:
+no simulan la API.
+
+### Lo que encontraron estas pruebas
+
+No son decorativas. En la primera pasada destaparon tres defectos que ni las
+259 pruebas de backend ni las 29 de frontend podían ver, porque ninguna
+cruzaba la frontera entre el navegador y la API:
+
+- **Un profesor no podía añadir ningún recurso.** El editor mandaba el cuerpo
+  en PascalCase (`Type`, `Title`) y la API lo declara en snake_case, así que
+  toda creación de recurso respondía 400. Es el flujo central de la autoría, y
+  estaba roto. Las pruebas de backend no lo veían porque llaman a la API con
+  el cuerpo correcto; las de frontend, porque solo cubren la conversión de
+  Markdown.
+- **La casilla de «opción correcta» de un quiz no tenía etiqueta.** Un profesor
+  que redacte con lector de pantalla no podía saber cuál de las casillas marca
+  la respuesta buena. axe lo clasifica como crítico.
+- **Contraste insuficiente** en el botón de mostrar contraseña: 3,67:1 sobre
+  blanco, por debajo del 4,5:1 que exige WCAG 2.2 AA.
+
+Los tres están corregidos, y cada uno tiene ahora una prueba que falla si
+vuelve.
+
 ## Pendientes para las siguientes iteraciones
 
-El alcance mínimo (sección 5.1) y el opcional (5.2) están cubiertos. Lo que
-falta pertenece a las restricciones técnicas (sección 7) y a la demostración de
-aceptación (sección 10), ordenado por lo que más pesa para esa demostración:
+El alcance mínimo (sección 5.1), el opcional (5.2) y la condición de
+aceptación (sección 10) están cubiertos. Lo que queda pertenece a las
+restricciones técnicas de la sección 7 y a la caracterización del sistema:
 
-- **Pruebas E2E** de los nueve flujos críticos y auditoría automática de
-  accesibilidad. Es condición de aceptación explícita y hoy no hay ninguna: la
-  cobertura llega hasta la API, no hasta el navegador.
-- **Pipeline de CI**: build, lint, análisis de seguridad, migraciones y
-  pruebas, que la sección 10.1 exige completar antes de la demostración.
-- **Ejecutar** la prueba de carga de Etapa 1. El guion, los umbrales y el
-  sembrador de datos sintéticos ya están (`load/`), pero todavía no se ha
-  corrido contra un entorno levantado, así que no hay números.
 - **OpenTelemetry**: hoy hay logs estructurados y correlación por
-  `X-Request-Id`; faltan métricas y trazas.
+  `X-Request-Id`; faltan métricas y trazas. Con los márgenes actuales de la
+  prueba de carga no han hecho falta; para encontrar el límite real, sí.
 - **Cursores y ETag** en las colecciones, que exige la sección 7.
 - **Backup y restauración** con RPO ≤ 15 min y RTO ≤ 4 h, y la prueba de
   recuperación que los acredita.
+- **El escalón de 2.000 concurrentes** del enunciado. La prueba de carga pasa
+  Etapa 1 con dos órdenes de magnitud de margen, así que todavía no se sabe
+  dónde está el techo: hace falta sembrar esas cuentas y una máquina que no
+  sea la de desarrollo.
 
 Queda un borde consciente, no bloqueante: el escáner antimalware integrado no
 lleva firmas. Para la demostración conviene levantar el perfil `antivirus` y

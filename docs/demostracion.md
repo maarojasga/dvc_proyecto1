@@ -79,8 +79,8 @@ reanuda en el segundo donde se dejó → visor PDF → navegación completa por
 teclado. Aprovechar para enseñar el cambio de idioma: la interfaz entera pasa a
 inglés, fechas incluidas.
 
-> Pendiente: la auditoría automática de accesibilidad (axe / Lighthouse) es
-> condición de aceptación y todavía no existe.
+> La auditoría automática de accesibilidad cubre esta pantalla:
+> `frontend/e2e/accesibilidad.spec.ts` la audita con axe en los dos idiomas.
 
 ### 6. Quiz
 **Criterio:** evaluación académica.
@@ -113,8 +113,9 @@ docker compose up -d --scale api=3        # el proxy reparte solo
 docker compose --profile carga run --rm k6
 ```
 
-Enseñar el p95 por escenario y los umbrales cumpliéndose (o no). Ver
-`load/README.md` para los umbrales y por qué son esos.
+Enseñar el p95 por escenario y los umbrales cumpliéndose. Ver
+`load/README.md` para los umbrales, por qué son esos y qué pasó al subir el
+escalón a 1.000 VU.
 
 > Pendiente, y hay que decirlo en el video: **backup, restauración y la prueba
 > de RPO ≤ 15 min / RTO ≤ 4 h no están**. Tampoco la inyección de fallos
@@ -122,16 +123,41 @@ Enseñar el p95 por escenario y los umbrales cumpliéndose (o no). Ver
 
 ## Estado real frente a la condición de aceptación
 
-La sección 10 exige tres cosas para aceptar. Hoy:
+La sección 10 exige cuatro cosas para aceptar. Las cuatro están:
 
 | Condición | Estado |
 |---|---|
-| Los nueve flujos críticos superan pruebas **E2E** | **No.** Hay 259 pruebas de backend y 29 de frontend, pero llegan hasta la API, no hasta el navegador |
-| La **prueba de carga** de Etapa 1 sin incumplimientos críticos | Escrita y con umbrales; **falta ejecutarla** |
-| La **auditoría de accesibilidad** sin incumplimientos críticos | **No existe** |
-| **CI** completo antes de la demostración | **No existe** |
+| Los nueve flujos críticos superan pruebas **E2E** | 34 pruebas en `frontend/e2e/`, una por segmento, contra la plataforma levantada |
+| La **prueba de carga** de Etapa 1 sin incumplimientos críticos | Ejecutada: 42.175 peticiones, 0 % de error, p95 de 3 a 7 ms |
+| La **auditoría de accesibilidad** sin incumplimientos críticos | axe-core sobre WCAG 2.2 A y AA en 13 pantallas, español e inglés: cero violaciones |
+| **CI** completo antes de la demostración | `.github/workflows/ci.yml` corre los cinco pasos que pide 10.1 |
 
-Presentar el video sin esto es posible —los nueve segmentos se pueden grabar a
-mano sobre el sistema desplegado—, pero conviene decir en el propio video qué
-está cubierto por pruebas automáticas y qué se está enseñando a mano. Es la
-diferencia entre una demostración y una demostración acreditada.
+Para reproducirlo:
+
+```bash
+cd frontend && npm run e2e && npm run e2e:informe
+```
+
+### Qué decir en el vídeo, y qué no
+
+Las pruebas encontraron tres defectos reales en su primera pasada, y merece la
+pena contarlo: es la mejor evidencia de que no son decorativas. Un profesor no
+podía añadir ningún recurso (el editor mandaba PascalCase y la API espera
+snake_case, así que todo devolvía 400); la casilla de «opción correcta» de un
+quiz no tenía etiqueta, de modo que un profesor con lector de pantalla no sabía
+cuál marcar; y el botón de mostrar contraseña quedaba en 3,67:1 de contraste,
+por debajo del mínimo AA. Los tres están corregidos y con una prueba que falla
+si vuelven.
+
+Lo que **no** conviene afirmar en el vídeo:
+
+- Que la plataforma «aguanta 2.000 concurrentes». No se ha medido. Lo medido
+  es 200 VU con dos órdenes de magnitud de margen, que sugiere holgura pero no
+  la acredita.
+- Que la plataforma «es accesible». Lo acreditado es que no tiene los defectos
+  que una máquina detecta. axe cubre del orden de la mitad de los problemas
+  reales; el orden de foco y el recorrido con lector de pantalla siguen
+  necesitando a una persona.
+- Que la recuperación cumple RPO ≤ 15 min y RTO ≤ 4 h. Eso sigue sin probarse,
+  y está dicho en el segmento 9.
+

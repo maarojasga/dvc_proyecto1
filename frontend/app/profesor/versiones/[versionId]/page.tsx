@@ -750,14 +750,14 @@ function AddResourceForm({
     setError("");
     try {
       await api.addResource(versionId, unitId, {
-        Type: type,
-        Title: title,
-        Position: nextPosition,
-        Visible: visible,
-        Required: required,
-        Downloadable: false,
-        TextContentMD: type === "text" ? textContent : undefined,
-        ExternalURL: type === "link" || type === "iframe" ? externalUrl : undefined,
+        type,
+        title,
+        position: nextPosition,
+        visible,
+        required,
+        downloadable: false,
+        text_content_md: type === "text" ? textContent : undefined,
+        external_url: type === "link" || type === "iframe" ? externalUrl : undefined,
       });
       setTitle("");
       setTextContent("");

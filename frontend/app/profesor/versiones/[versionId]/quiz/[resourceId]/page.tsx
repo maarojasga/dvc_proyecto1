@@ -323,15 +323,31 @@ export default function QuizAuthoringPage() {
               <ul className="stack" style={{ gap: "0.35rem" }}>
                 {q.options.map((o, oIndex) => (
                   <li key={oIndex} className="row" style={{ alignItems: "center" }}>
+                    {/* Los dos controles llevan etiqueta propia. El
+                        marcador no puede apoyarse en el texto de al lado
+                        —está vacío hasta que el profesor escribe— y el campo
+                        de texto no puede apoyarse en su placeholder, que
+                        desaparece al teclear y que los lectores de pantalla
+                        no anuncian como nombre. Sin esto, quien redacta un
+                        quiz con lector de pantalla no sabe cuál de las
+                        casillas marca la respuesta correcta. */}
                     <input
                       type={q.type === "single" ? "radio" : "checkbox"}
                       name={`correcta-${qIndex}`}
                       checked={o.is_correct}
+                      aria-label={t("quizAutoria.marcarCorrecta", {
+                        n: oIndex + 1,
+                        pregunta: qIndex + 1,
+                      })}
                       onChange={(e) => updateOption(qIndex, oIndex, { is_correct: e.target.checked })}
                     />
                     <input
                       style={{ flex: 1 }}
                       required
+                      aria-label={t("quizAutoria.textoDeOpcion", {
+                        n: oIndex + 1,
+                        pregunta: qIndex + 1,
+                      })}
                       placeholder={t("quizAutoria.opcion", { n: oIndex + 1 })}
                       value={o.text_md}
                       onChange={(e) => updateOption(qIndex, oIndex, { text_md: e.target.value })}

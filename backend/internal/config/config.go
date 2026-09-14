@@ -59,6 +59,13 @@ type Config struct {
 	SessionTTL    time.Duration
 	PublicBaseURL string // URL pública del frontend, para links de verificación/reseteo
 	CookieSecure  bool
+	// AuthRateLimitPerMinute acota los intentos de registro, login y
+	// restablecimiento por IP y minuto. Es configurable porque el valor bueno
+	// depende del despliegue: diez protege una instalación real, pero una
+	// suite E2E que crea decenas de cuentas desde una sola IP se ahoga con él y
+	// acabaría midiendo el limitador en vez del producto. El valor por defecto
+	// es el de producción; subirlo es una decisión explícita del entorno.
+	AuthRateLimitPerMinute int
 }
 
 // Load construye la configuración a partir de variables de entorno, con valores
@@ -91,9 +98,10 @@ func Load() Config {
 		SMTPPort: getEnv("SMTP_PORT", "1025"),
 		SMTPFrom: getEnv("SMTP_FROM", "no-reply@mooc.local"),
 
-		SessionTTL:    getDuration("SESSION_TTL", 30*24*time.Hour),
-		PublicBaseURL: getEnv("PUBLIC_BASE_URL", "http://localhost:3000"),
-		CookieSecure:  getBool("COOKIE_SECURE", false),
+		SessionTTL:             getDuration("SESSION_TTL", 30*24*time.Hour),
+		PublicBaseURL:          getEnv("PUBLIC_BASE_URL", "http://localhost:3000"),
+		CookieSecure:           getBool("COOKIE_SECURE", false),
+		AuthRateLimitPerMinute: getInt("AUTH_RATE_LIMIT_PER_MINUTE", 10),
 	}
 }
 
@@ -126,4 +134,19 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// getInt lee un entero positivo del entorno. Un valor ausente, no numérico o
+// no positivo cae al de por defecto: un límite de cero dejaría la plataforma
+// sin poder autenticar a nadie, que es peor que ignorar la configuración.
+func getInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }

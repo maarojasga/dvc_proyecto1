@@ -28,6 +28,9 @@ const BASE = __ENV.BASE_URL || "http://localhost:8080";
 const ESCENARIO = __ENV.ESCENARIO || "/salida/escenario.json";
 const VUS = Number(__ENV.VUS_OBJETIVO || 200);
 const MESETA = __ENV.MESETA || "3m";
+// Dónde se deja la evidencia. Por defecto el volumen del contenedor; se
+// cambia al correr fuera de Docker.
+const SALIDA = __ENV.SALIDA || "/salida";
 
 // El archivo lo produce `cmd/seed`. SharedArray lo carga una vez y lo comparte
 // entre todos los VU: cargarlo por VU multiplicaría por 200 la memoria y el
@@ -134,6 +137,31 @@ export const options = {
     checks: ["rate>0.99"],
   },
 };
+
+/**
+ * setup corre una vez antes de la prueba y valida el escenario.
+ *
+ * Existe por una lección concreta: con menos cuentas sembradas que VU, dos
+ * usuarios virtuales comparten estudiante, y mientras uno guarda respuestas el
+ * otro envía el intento. El servidor responde 409 —correctamente, porque un
+ * intento cerrado no admite más respuestas— y la prueba lo cuenta como error
+ * de la plataforma. En una corrida a 1.000 VU con 200 cuentas eso produjo un
+ * 0,6 % de "errores" sin un solo 5xx detrás. Medir la contención del arnés y
+ * llamarlo degradación del servicio es la peor forma de fallar una prueba de
+ * carga, así que se corta antes de empezar.
+ */
+export function setup() {
+  const cuentas = escenario.estudiantes?.length ?? 0;
+  if (cuentas < VUS) {
+    throw new Error(
+      `el escenario tiene ${cuentas} cuentas y la prueba pide ${VUS} VU: ` +
+        `siembra al menos ${VUS} (SEED_STUDENTS=${VUS}) o baja VUS_OBJETIVO. ` +
+        `Compartir cuentas entre usuarios virtuales produce conflictos del arnés ` +
+        `que se confundirían con fallos del servidor.`,
+    );
+  }
+  return { cuentas };
+}
 
 function sesion(indice) {
   const cuentas = escenario.estudiantes;
@@ -305,7 +333,7 @@ export function iniciarSesion() {
 export function handleSummary(data) {
   return {
     stdout: resumenLegible(data),
-    "/salida/resumen-etapa1.json": JSON.stringify(data, null, 2),
+    [`${SALIDA}/resumen-etapa1.json`]: JSON.stringify(data, null, 2),
   };
 }
 

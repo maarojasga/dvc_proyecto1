@@ -93,6 +93,59 @@ el worker y en FFmpeg, tiene su propio segmento en la demostración, y meterlo
 aquí convertiría el p95 de la API en el p95 de FFmpeg. El curso sintético es
 todo texto y quizzes justamente por eso.
 
+## Resultados medidos
+
+Primera corrida real, sobre la pila completa (Postgres 16, Redis 7, MinIO, API
+y worker) en una máquina de desarrollo. El escenario tenía 200 cuentas
+sembradas y un curso de 27 recursos.
+
+| Métrica | Umbral | Medido a 200 VU | Margen |
+|---|---|---|---|
+| Peticiones | — | 42.175 en 4 min | — |
+| Tasa de error | < 0,5 % | **0,000 %** | — |
+| p95 catálogo | < 400 ms | **3 ms** | 133× |
+| p95 consumo | < 600 ms | **7 ms** | 86× |
+| p95 quiz | < 900 ms | **7 ms** | 129× |
+| p95 login | < 2000 ms | **272 ms** | 7,4× |
+| Comprobaciones | > 99 % | **100 %** | — |
+
+Etapa 1 pasa sin acercarse a ningún umbral. Conviene leer eso con cuidado:
+**los márgenes son tan amplios que los umbrales no están midiendo nada
+todavía**. Sirven para detectar una regresión grosera, no para caracterizar el
+sistema. El p95 del login es el único número informativo, y lo que mide es
+Argon2id, que cuesta a propósito.
+
+### Dónde empieza a doler
+
+Se subió el escalón hasta encontrar el límite. A **1.000 VU**:
+
+- p95 sigue en un dígito de milisegundos (catálogo 4 ms, consumo 11 ms).
+- **Ni un solo 5xx** en 120.632 peticiones.
+- La tasa de error sube a 0,602 % y el umbral **falla**, que es lo que tiene
+  que hacer.
+
+Pero al mirar qué fallaba, no era la plataforma: 725 de los 730 errores eran
+`409 Conflict` en `PUT /quiz/attempts/{id}/answers`. Con 200 cuentas sembradas
+y 1.000 usuarios virtuales, varios VU compartían estudiante, y mientras uno
+guardaba respuestas otro enviaba el intento. El servidor respondía
+correctamente —un intento cerrado no admite más respuestas— y la prueba lo
+contaba como degradación del servicio.
+
+Era un defecto del arnés, y medir la contención del generador de carga
+llamándola degradación del servidor es la peor forma de fallar una prueba de
+carga. Ahora `setup()` corta antes de empezar si hay menos cuentas que VU:
+
+```
+el escenario tiene 200 cuentas y la prueba pide 400 VU:
+siembra al menos 400 (SEED_STUDENTS=400) o baja VUS_OBJETIVO.
+```
+
+**Conclusión honesta**: con este escenario no se ha encontrado el límite real
+de la plataforma. Lo que se sabe es que a 200 VU sobra capacidad por dos
+órdenes de magnitud, y que el siguiente paso para caracterizarla de verdad es
+sembrar 2.000 cuentas y subir hasta que el p95 se mueva o aparezca un 5xx.
+Hasta entonces, «Etapa 1 pasa» significa exactamente eso y nada más.
+
 ## Lo que esta prueba todavía no acredita
 
 El segmento 9 pide más de lo que hay aquí. Queda pendiente, y no se puede
@@ -100,13 +153,11 @@ presentar como cubierto:
 
 - **Observabilidad**: hoy hay logs estructurados y correlación por
   `X-Request-Id`; faltan métricas y trazas (OpenTelemetry) que permitan ver
-  *dónde* se va el p95 cuando se rompe un umbral.
+  *dónde* se va el p95 cuando se rompe un umbral. Con los márgenes actuales no
+  ha hecho falta; en cuanto se busque el límite real, sí.
 - **Fallos inyectados** durante la carga: tirar una réplica de la API a mitad
   de la meseta y demostrar que el p95 se recupera.
 - **Backup y restauración** con RPO ≤ 15 min y RTO ≤ 4 h, y la prueba de
   recuperación que los acredita.
-- **Los resultados**. Esta prueba está escrita y verificada de forma estática,
-  pero **no se ha ejecutado todavía**: el entorno donde se preparó no tiene
-  demonio de Docker. La tabla de umbrales es la hipótesis a contrastar; los
-  números reales y sus desviaciones van en este mismo archivo tras la primera
-  corrida.
+- **El escalón de 2.000 concurrentes** del enunciado, que exige sembrar al
+  menos esas cuentas y una máquina que no sea la de desarrollo.
