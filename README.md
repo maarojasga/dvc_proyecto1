@@ -371,6 +371,18 @@ Dos cosas se corrigieron de paso, porque el episodio las puso a la vista:
   justamente cómo `14.2.35` se quedó quieto mientras acumulaba advisories; con
   el lockfile y `npm ci`, la reproducibilidad no depende de congelar el rango.
 
+Para que no vuelva a pasar, `.github/dependabot.yml` vigila npm, Go, las
+imágenes base de los contenedores y las propias acciones del pipeline. Los
+parches y las versiones menores llegan agrupados en un PR semanal; las mayores
+van sueltas y **no se ignoran**, precisamente porque la corrección de estos
+advisories era una mayor.
+
+Falta un paso que no se puede dar desde el repositorio: encender
+**Dependabot alerts** y **Dependabot security updates** en
+Settings → Code security. El archivo configura las actualizaciones de versión;
+las de seguridad son las que avisan en cuanto aparece un advisory, sin esperar
+al lunes.
+
 ### Lo que encontraron estas pruebas
 
 No son decorativas. En la primera pasada destaparon tres defectos que ni las
