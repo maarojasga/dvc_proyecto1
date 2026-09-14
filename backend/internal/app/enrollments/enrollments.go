@@ -108,8 +108,13 @@ var ErrPosicionInvalida = errors.New("enrollments: posición de reproducción in
 // objeto para lo que se sirve desde el almacenamiento, el Markdown para el
 // texto, o la URL externa para enlaces e iframes.
 type Contenido struct {
-	Tipo        string
-	Titulo      string
+	Tipo   string
+	Titulo string
+	// StableID identifica el recurso a través de las versiones. Lo necesita el
+	// foro, que ata las conversaciones a la lección y no a la fila: una
+	// discusión sobre una clase sigue valiendo cuando se publica una versión
+	// nueva del curso.
+	StableID    uuid.UUID
 	Descargable bool
 	ClaveObjeto string
 	Markdown    string
@@ -173,7 +178,7 @@ func (s *Service) ContenidoDeRecurso(ctx context.Context, actor *user.User, reso
 	}
 
 	out := &Contenido{
-		Tipo: rec.Type, Titulo: rec.Title, Descargable: rec.Downloadable,
+		Tipo: rec.Type, Titulo: rec.Title, StableID: rec.StableID, Descargable: rec.Downloadable,
 		Markdown: rec.TextContent, URLExterna: rec.ExternalURL,
 	}
 

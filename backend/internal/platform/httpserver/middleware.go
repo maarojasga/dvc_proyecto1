@@ -29,6 +29,14 @@ var (
 	// ErrColaNoDisponible indica que la instancia no tiene inspector de cola
 	// configurado, así que no puede informar de su estado.
 	ErrColaNoDisponible = errors.New("httpserver: la inspección de la cola no está disponible")
+	// ErrHiloBloqueado indica una conversación cerrada por el profesor.
+	ErrHiloBloqueado = errors.New("httpserver: el hilo está cerrado a nuevas respuestas")
+	// ErrInsigniaRevocada impide emitir una credencial de un logro retirado:
+	// una credencial firmada no se puede desdecir.
+	ErrInsigniaRevocada = errors.New("httpserver: la insignia fue revocada")
+	// ErrFirmaNoConfigurada indica que el despliegue no tiene clave de firma,
+	// así que no puede emitir credenciales portátiles.
+	ErrFirmaNoConfigurada = errors.New("httpserver: no hay clave configurada para firmar credenciales")
 )
 
 type ctxKey int

@@ -39,7 +39,11 @@ El dominio no conoce HTTP, SQL ni el proveedor cloud; los adaptadores viven en
 | `domain/enrollment` | inscripción, retiro y reinscripción |
 | `domain/quiz` | autoría de evaluaciones, intentos y calificación en servidor |
 | `domain/progress` | avance validado, transición a `completed` y `approved` |
-| `domain/badge` | emisión idempotente y verificación pública de insignias |
+| `domain/badge` | emisión idempotente, verificación pública y credencial Open Badges 3.0 |
+| `domain/cambios` | comparación de un borrador con lo publicado |
+| `domain/documento` | reconocimiento de presentaciones PPTX y ODP |
+| `domain/iframe` | lista blanca, sandbox y política de permisos |
+| `domain/subtitulo` | análisis de WebVTT y derivación de la transcripción |
 | `platform/httpserver` | routing, auth, rate limiting, CSRF |
 | `platform/postgres` | repositorios sobre la fuente de verdad transaccional |
 | `platform/redisclient` | sesiones, caché y límites |
@@ -47,6 +51,7 @@ El dominio no conoce HTTP, SQL ni el proveedor cloud; los adaptadores viven en
 | `platform/storage` | S3/MinIO: originales, HLS, PDFs e imágenes |
 | `platform/antimalware` | escaneo de las cargas: escáner integrado y ClamAV |
 | `platform/media` | transcodificación a HLS con FFmpeg |
+| `platform/documentos` | conversión de presentaciones a PDF con LibreOffice |
 
 La API y los workers comparten `internal/config` y no guardan estado local, de
 modo que cualquier instancia es reemplazable.
@@ -66,6 +71,19 @@ El App Router va plano, con una ruta por pantalla y un solo layout:
 La autorización efectiva es del servidor. Lo que hace el frontend es no
 enseñar lo que no corresponde; nunca sustituye la verificación de rol,
 propiedad e inscripción que hace cada endpoint.
+
+## Credenciales portátiles
+
+Una insignia vive en tres formas, y conviene no confundirlas:
+
+- El **registro** en la base, que es la fuente de verdad y la que se revoca.
+- La **URL pública de verificación**, que responde siempre y dice si sigue
+  vigente. Es lo que se comparte cuando importa el estado actual.
+- La **credencial Open Badges 3.0**, un documento firmado que se verifica con
+  la clave pública del emisor sin volver a llamar aquí. Es portátil, y por eso
+  mismo no puede afirmar un estado: una firma no cambia de opinión. La
+  credencial apunta a la URL de verificación en lugar de declararse vigente, y
+  una insignia revocada deja de emitirse como credencial.
 
 ## Datos que el cliente no debe recibir
 

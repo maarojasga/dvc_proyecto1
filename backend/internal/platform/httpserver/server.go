@@ -46,6 +46,13 @@ type Deps struct {
 	Colaboradores Colaboradores
 	// Exportacion reúne los datos personales de una cuenta.
 	Exportacion Exportacion
+	// Subtitulos guarda las pistas y sus transcripciones.
+	Subtitulos Subtitulos
+	// Foros es el foro asíncrono de cada curso.
+	Foros Foros
+	// Credenciales firma las credenciales Open Badges 3.0. Sin clave, la
+	// plataforma sigue emitiendo insignias verificables por su URL pública.
+	Credenciales EmisorDeCredenciales
 	// Auditor deja constancia en la bitácora inmutable de las acciones que no
 	// pasan por un servicio de aplicación.
 	Auditor Auditor
@@ -79,6 +86,9 @@ func NewRouter(d Deps) http.Handler {
 	h.registerRevisiones(mux)
 	h.registerColaboradores(mux)
 	h.registerExportacion(mux)
+	h.registerSubtitulos(mux)
+	h.registerForos(mux)
+	h.registerOpenBadges(mux)
 	h.registerOperacion(mux)
 
 	return Chain(mux,

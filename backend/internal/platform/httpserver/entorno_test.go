@@ -3,6 +3,7 @@ package httpserver_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -168,6 +169,9 @@ func nuevoEntorno(t *testing.T) *entorno {
 		Metricas:      postgres.NewMetricasRepo(pool),
 		Revisiones:    postgres.NewRevisionesRepo(pool),
 		Colaboradores: colaboradores,
+		Subtitulos:    postgres.NewSubtitulosRepo(pool),
+		Foros:         postgres.NewForosRepo(pool),
+		Credenciales:  credencialesDePrueba(),
 		Exportacion:   postgres.NewExportacionRepo(pool),
 		Auditor:       users,
 		Entrega:       entregaPorCDN{base: "https://cdn.pruebas.local"},
@@ -367,4 +371,18 @@ func (e *entorno) contar(consulta string, args ...any) int {
 		e.t.Fatalf("consulta %q: %v", consulta, err)
 	}
 	return n
+}
+
+// credencialesDePrueba genera una clave efímera para firmar las credenciales
+// Open Badges. Es de usar y tirar: lo que se verifica es que la firma cuadre
+// con su propia clave pública, no que la clave persista.
+func credencialesDePrueba() httpserver.EmisorDeCredenciales {
+	publica, privada, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		panic(err)
+	}
+	return httpserver.EmisorDeCredenciales{
+		Privada: privada, Publica: publica, KeyID: "pruebas-1",
+		Nombre: "Universidad de Pruebas", BaseURL: "http://localhost:3000",
+	}
 }

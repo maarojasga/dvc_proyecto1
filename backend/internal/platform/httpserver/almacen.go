@@ -34,6 +34,10 @@ type AlmacenDeObjetos interface {
 	StatObject(ctx context.Context, objectKey string) (storage.ObjetoInfo, error)
 	AbrirObjeto(ctx context.Context, objectKey string) (io.ReadCloser, error)
 	RemoveObject(ctx context.Context, objectKey string) error
+	// GuardarObjeto escribe algo que genera la propia plataforma (hoy, una
+	// pista de subtítulos). Los binarios que suben los usuarios no pasan por
+	// aquí: esos van directos al almacén con una URL prefirmada.
+	GuardarObjeto(ctx context.Context, objectKey string, r io.Reader, tamano int64, contentType string) error
 }
 
 // vigenciaDeCarga es lo que dura una carga directa al almacén. La especifica

@@ -77,8 +77,15 @@ export interface Session {
   current: boolean;
 }
 
+import type { PistaDeSubtitulos } from "@/components/ReproductorHLS";
+
+export type { PistaDeSubtitulos };
+
 export interface ResourceContent {
   type: string;
+  // Identifica el recurso a través de las versiones: lo usa el foro para atar
+  // una conversación a la lección y no a la fila.
+  stable_id: string;
   title: string;
   downloadable: boolean;
   url?: string;
@@ -279,6 +286,29 @@ export interface Colaborador {
   full_name: string;
   role: string;
   added_at: string;
+}
+
+// Hilo del foro de un curso.
+export interface Hilo {
+  id: string;
+  course_id: string;
+  resource_stable_id?: string;
+  author_name?: string;
+  title: string;
+  body_md: string;
+  locked: boolean;
+  replies: number;
+  created_at: string;
+  last_activity_at: string;
+}
+
+export interface RespuestaDeForo {
+  id: string;
+  thread_id: string;
+  author_name?: string;
+  body_md: string;
+  created_at: string;
+  deleted: boolean;
 }
 
 // Una parte ya recibida por el almacen. El ETag es lo que el cliente reenvia
@@ -512,6 +542,52 @@ export const api = {
     }),
   removeCollaborator: (courseId: string, userId: string) =>
     request<void>(`/api/v1/collaborators/${courseId}/${userId}`, { method: "DELETE" }),
+
+  // Subtítulos y transcripción de un recurso reproducible.
+  listCaptions: (resourceId: string) =>
+    request<{ items: PistaDeSubtitulos[] }>(`/api/v1/resources/${resourceId}/captions`),
+  getTranscript: (resourceId: string, idioma: string) =>
+    request<{ resource_title: string; language: string; transcript: string }>(
+      `/api/v1/resources/${resourceId}/transcript/${idioma}`,
+    ),
+  saveCaptions: (
+    versionId: string,
+    resourceId: string,
+    idioma: string,
+    data: { label: string; kind: "subtitles" | "captions"; vtt: string },
+  ) =>
+    request<{ cues: number; duration_ms: number }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/captions/${idioma}`,
+      { method: "PUT", body: JSON.stringify(data) },
+    ),
+
+  // Foro asíncrono. Cuelga de /forum y no de /courses/{id}/forum por un
+  // conflicto de patrones en el router del servidor, que la API documenta.
+  listThreads: (courseId: string, resourceStableId?: string) =>
+    request<{ items: Hilo[] }>(
+      `/api/v1/forum/${courseId}${resourceStableId ? `?resource_stable_id=${resourceStableId}` : ""}`,
+    ),
+  createThread: (courseId: string, data: { title: string; body_md: string; resource_stable_id?: string }) =>
+    request<Hilo>(`/api/v1/forum/${courseId}`, { method: "POST", body: JSON.stringify(data) }),
+  getThread: (threadId: string) =>
+    request<{ thread: Hilo; replies: RespuestaDeForo[] }>(`/api/v1/forum/threads/${threadId}`),
+  replyToThread: (threadId: string, body_md: string) =>
+    request<RespuestaDeForo>(`/api/v1/forum/threads/${threadId}/replies`, {
+      method: "POST",
+      body: JSON.stringify({ body_md }),
+    }),
+  deleteForumPost: (postId: string) =>
+    request<void>(`/api/v1/forum/posts/${postId}`, { method: "DELETE" }),
+  lockThread: (threadId: string, locked: boolean) =>
+    request<{ locked: boolean }>(`/api/v1/forum/threads/${threadId}/lock`, {
+      method: "POST",
+      body: JSON.stringify({ locked }),
+    }),
+
+  // Credencial Open Badges 3.0 de una insignia. Publica: el sentido de una
+  // credencial verificable es que cualquiera la compruebe sin cuenta aquí.
+  openBadgeURL: (code: string) => `${API_URL}/api/v1/badges/${code}/openbadge`,
+  openBadgeJWTURL: (code: string) => `${API_URL}/api/v1/badges/${code}/openbadge.jwt`,
 
   listCatalog: (params: Record<string, string> = {}) =>
     request<{ items: Version[] }>(`/api/v1/catalog?${new URLSearchParams(params)}`),

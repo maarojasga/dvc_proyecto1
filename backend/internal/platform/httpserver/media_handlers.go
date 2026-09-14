@@ -31,7 +31,10 @@ func (h *handlers) registerMedia(mux *http.ServeMux) {
 }
 
 type contentResponse struct {
-	Type         string `json:"type"`
+	Type string `json:"type"`
+	// StableID identifica el recurso a través de las versiones. Lo usa el foro
+	// para atar una conversación a la lección y no a la fila.
+	StableID     string `json:"stable_id"`
 	Title        string `json:"title"`
 	Downloadable bool   `json:"downloadable"`
 	// URL del objeto: la lista maestra HLS en video y audio, el archivo en
@@ -86,7 +89,7 @@ func (h *handlers) resourceContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := contentResponse{
-		Type: contenido.Tipo, Title: contenido.Titulo,
+		Type: contenido.Tipo, StableID: contenido.StableID.String(), Title: contenido.Titulo,
 		Downloadable: contenido.Descargable, Markdown: contenido.Markdown,
 		ExternalURL: contenido.URLExterna, PositionSeconds: contenido.PosicionSegundos,
 		Sandbox: contenido.Sandbox, Allow: contenido.Permisos,

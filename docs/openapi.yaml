@@ -908,6 +908,300 @@ paths:
                     description: Valor del atributo sandbox con que se sirve todo marco.
                   referrer_policy: { type: string }
 
+  /resources/{resourceId}/captions:
+    get:
+      tags: [Multimedia]
+      summary: Pistas de subtítulos de un recurso
+      description: >
+        Autoriza por la misma vía que el contenido: si el recurso no se le
+        puede entregar a quien pregunta, sus subtítulos tampoco. La URL de cada
+        pista es la del WebVTT, firmada o servida por el CDN, y es lo que el
+        reproductor pone en `<track src>`.
+      operationId: listCaptions
+      parameters:
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Pistas disponibles.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        language: { type: string }
+                        label: { type: string }
+                        kind: { type: string, enum: [subtitles, captions] }
+                        url: { type: string, format: uri }
+
+  /resources/{resourceId}/transcript/{idioma}:
+    get:
+      tags: [Multimedia]
+      summary: Transcripción de un recurso reproducible
+      description: >
+        La transcripción se deriva de los subtítulos, que es donde ya está el
+        texto: pedir las dos cosas por separado garantizaría que acaben
+        diciendo cosas distintas. Es lo que hace el material legible para quien
+        no puede o no quiere reproducirlo, y lo que permite buscar dentro de
+        una clase grabada.
+      operationId: getTranscript
+      parameters:
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: idioma, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Texto corrido de la pista.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resource_title: { type: string }
+                  language: { type: string }
+                  transcript: { type: string }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/captions/{idioma}:
+    put:
+      tags: [Multimedia]
+      summary: Sube o reemplaza la pista de un idioma
+      description: >
+        El archivo va en el cuerpo JSON y no como carga directa al almacén, al
+        contrario que el vídeo, porque el servidor necesita leerlo para derivar
+        la transcripción. Reemplaza en lugar de acumular: subir otra vez el
+        mismo idioma es corregir la pista, no añadir una segunda que el
+        reproductor no sabría cuál elegir.
+
+        Solo se acepta WebVTT. Un SRT es casi idéntico pero el navegador lo
+        rechaza, así que aceptarlo aquí solo trasladaría el fallo a la pantalla
+        del estudiante.
+      operationId: saveCaptions
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: idioma, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vtt]
+              properties:
+                vtt: { type: string }
+                label: { type: string }
+                kind: { type: string, enum: [subtitles, captions] }
+      responses:
+        "200": { description: Pista guardada, con el número de fragmentos y la duración. }
+        "422": { $ref: "#/components/responses/Problema" }
+    delete:
+      tags: [Multimedia]
+      summary: Retira la pista de un idioma
+      operationId: deleteCaptions
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: idioma, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Pista retirada. }
+
+  /forum/{courseId}:
+    get:
+      tags: [Foro]
+      summary: Hilos del foro de un curso
+      description: >
+        El foro es del curso, no un tablón público: se lee y se escribe con
+        acceso a su contenido —estudiante inscrito, profesor dueño o
+        colaborador, administración—. Con `resource_stable_id` se acota a lo
+        que se discute sobre una lección.
+
+        Cuelga de /forum y no de /courses/{courseId}/forum por el mismo
+        conflicto de patrones que llevó el progreso a
+        /enrollments/{courseId}/progress.
+      operationId: listThreads
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resource_stable_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Hilos, el más activo primero.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Hilo" }
+        "403": { $ref: "#/components/responses/Problema" }
+    post:
+      tags: [Foro]
+      summary: Abre un hilo
+      description: >
+        Un hilo sobre una lección se ata a su `stable_id` y no a su
+        identificador de fila, de modo que la conversación sobrevive a la
+        publicación de una versión nueva.
+      operationId: createThread
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, body_md]
+              properties:
+                title: { type: string }
+                body_md: { type: string }
+                resource_stable_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Hilo abierto.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hilo" }
+
+  /forum/threads/{threadId}:
+    get:
+      tags: [Foro]
+      summary: Un hilo con sus respuestas
+      description: >
+        Las respuestas eliminadas se devuelven marcadas y sin cuerpo, no se
+        omiten: quitar un mensaje intermedio de una conversación deja sin
+        sentido a los que le respondían.
+      operationId: getThread
+      parameters:
+        - { name: threadId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Hilo y respuestas. }
+        "403": { $ref: "#/components/responses/Problema" }
+
+  /forum/threads/{threadId}/replies:
+    post:
+      tags: [Foro]
+      summary: Responde a un hilo
+      operationId: replyToThread
+      parameters:
+        - { name: threadId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body_md]
+              properties:
+                body_md: { type: string }
+      responses:
+        "201": { description: Respuesta publicada. }
+        "409": { description: El hilo está cerrado a nuevas respuestas. }
+
+  /forum/threads/{threadId}/lock:
+    post:
+      tags: [Foro]
+      summary: Cierra o reabre un hilo (solo el profesor del curso)
+      operationId: lockThread
+      parameters:
+        - { name: threadId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { locked: { type: boolean } }
+      responses:
+        "200": { description: Estado del hilo actualizado. }
+
+  /forum/posts/{postId}:
+    delete:
+      tags: [Foro]
+      summary: Oculta una respuesta
+      description: >
+        La puede borrar su autor o el profesor del curso; la administración,
+        siempre. La respuesta conserva su lugar en la conversación, marcada
+        como eliminada y sin cuerpo.
+      operationId: deleteForumPost
+      parameters:
+        - { name: postId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Respuesta ocultada. }
+        "403": { $ref: "#/components/responses/Problema" }
+
+  /badges/{code}/openbadge:
+    get:
+      tags: [Insignias]
+      summary: La insignia como credencial Open Badges 3.0
+      description: >
+        Open Badges 3.0 deja de ser una imagen con metadatos y pasa a ser una
+        Credencial Verificable del W3C. Esta respuesta es el documento JSON-LD
+        sin firmar, legible y apto para inspección.
+
+        No lleva nada de la persona: el sujeto se identifica por la propia URL
+        de verificación. Una insignia revocada responde 409: una credencial
+        firmada no se puede desdecir, y para el estado está la URL pública.
+      operationId: openBadgeCredential
+      security: []
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Credencial JSON-LD.
+          content:
+            application/ld+json:
+              schema: { type: object }
+        "409": { description: La insignia fue revocada. }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /badges/{code}/openbadge.jwt:
+    get:
+      tags: [Insignias]
+      summary: La credencial firmada como VC-JWT
+      description: >
+        La credencial como carga de un JWS firmado con Ed25519. Se elige esta
+        prueba y no una Data Integrity porque las pruebas de integridad exigen
+        canonicalizar el JSON-LD, y una canonicalización a medias produce
+        firmas que unos verificadores aceptan y otros no, que es peor que no
+        firmar.
+
+        Se verifica con la clave publicada en /.well-known/jwks.json, sin
+        volver a llamar a esta plataforma. Un despliegue sin clave configurada
+        responde 503: las insignias siguen siendo verificables por su URL
+        pública, y lo único que falta es la credencial portátil.
+      operationId: openBadgeJWT
+      security: []
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: VC-JWT.
+          content:
+            application/vc+ld+json+jwt:
+              schema: { type: string }
+        "503": { description: El despliegue no tiene clave de firma configurada. }
+
+  /.well-known/jwks.json:
+    get:
+      tags: [Insignias]
+      summary: Claves públicas con que se verifican las credenciales
+      description: >
+        Pública y cacheable: el sentido de una credencial verificable es que
+        cualquiera la compruebe sin tener cuenta aquí, y un verificador pide
+        este documento por cada credencial.
+      operationId: jwks
+      security: []
+      responses:
+        "200":
+          description: Conjunto de claves (RFC 8037, curva Ed25519).
+          content:
+            application/json:
+              schema: { type: object }
+
   /me/export:
     get:
       tags: [Cuenta]
@@ -1614,6 +1908,26 @@ components:
       type: http
       scheme: bearer
   schemas:
+    Hilo:
+      type: object
+      required: [id, course_id, title, body_md, locked]
+      properties:
+        id: { type: string, format: uuid }
+        course_id: { type: string, format: uuid }
+        resource_stable_id:
+          type: string
+          format: uuid
+          description: >
+            Ata el hilo a una lección. Es el stable_id, no el identificador de
+            fila, para que la conversación sobreviva a una versión nueva.
+        author_name: { type: string }
+        title: { type: string }
+        body_md: { type: string }
+        locked: { type: boolean }
+        replies: { type: integer }
+        created_at: { type: string, format: date-time }
+        last_activity_at: { type: string, format: date-time }
+
     Colaborador:
       type: object
       required: [user_id, email, role]

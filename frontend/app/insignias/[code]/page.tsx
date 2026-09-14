@@ -111,6 +111,21 @@ export default function VerificacionInsigniaPage() {
               </div>
             )}
           </dl>
+
+          {/* Open Badges 3.0: la credencial es portátil, se verifica con la
+              clave pública del emisor sin volver a llamar a esta plataforma.
+              Solo se ofrece mientras la insignia siga vigente: una credencial
+              firmada no se puede desdecir cuando alguien revoca. */}
+          {insignia.valid && (
+            <p className="row">
+              <a href={api.openBadgeURL(insignia.code)} target="_blank" rel="noopener noreferrer">
+                Ver la credencial Open Badges 3.0
+              </a>
+              <a href={api.openBadgeJWTURL(insignia.code)} target="_blank" rel="noopener noreferrer">
+                Descargarla firmada
+              </a>
+            </p>
+          )}
         </div>
       )}
     </div>

@@ -16,6 +16,7 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/quiz"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/subtitulo"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
@@ -31,6 +32,18 @@ type errorBody struct {
 	Code    string   `json:"code"`
 	Message string   `json:"message"`
 	Details []string `json:"details,omitempty"`
+}
+
+// writeJSONSinTipo escribe JSON respetando el Content-Type que el manejador ya
+// haya fijado. Lo necesita quien sirve JSON-LD, que tiene su propio tipo.
+func writeJSONSinTipo(w http.ResponseWriter, status int, v any) {
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(status)
+	if v != nil {
+		_ = json.NewEncoder(w).Encode(v)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -127,6 +140,14 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusUnprocessableEntity, "malware_detected", nil
 	case errors.Is(err, ErrTipoNoCorresponde):
 		return http.StatusUnprocessableEntity, "mime_mismatch", nil
+	case errors.Is(err, ErrHiloBloqueado):
+		return http.StatusConflict, "thread_locked", nil
+	case errors.Is(err, ErrInsigniaRevocada):
+		return http.StatusConflict, "badge_revoked", nil
+	case errors.Is(err, ErrFirmaNoConfigurada):
+		return http.StatusServiceUnavailable, "credential_signing_unavailable", nil
+	case errors.Is(err, subtitulo.ErrNoEsWebVTT):
+		return http.StatusUnprocessableEntity, "not_webvtt", nil
 	case errors.Is(err, admin.ErrNoEsProfesor):
 		// Ni 404 ni un mensaje distinto según el motivo: separar "no existe"
 		// de "no es profesor" convertiría invitar a un colaborador en una

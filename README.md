@@ -35,6 +35,37 @@ De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
 3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
 protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
 
+### Alcance opcional (sección 5.2)
+
+| Punto | Estado |
+|---|---|
+| Conversión de PPTX y ODP a PDF con previsualización | Completo: worker con LibreOffice headless, original conservado, visor de PDF existente |
+| Iframes restringidos: lista blanca, sandbox y política de permisos | Completo, con administración de la lista y auditoría de las altas y bajas |
+| Editor completo: tablas, fórmulas, tareas e historial de revisiones | Completo: ocho tipos de bloque con 29 pruebas de ida y vuelta, e historial numerado, atribuido y restaurable |
+| Borradores de actualización con clasificación de cambios y migración de progreso | Completo: alcance menor/mayor según si cambia lo exigido, y migración de las inscripciones al publicar |
+| Panel administrativo con métricas y resultados agregados por quiz | Completo: estado de la plataforma e informe por evaluación con distribución por opción |
+| Coautoría básica, exportación de datos personales e internacionalización | Completo: coeditores que no reparten acceso, descarga de datos propios, y español e inglés |
+| Subtítulos, transcripciones, foros asíncronos y Open Badges 3.0 | Completo: WebVTT con transcripción derivada, foro por curso o lección, y credencial verificable firmada con Ed25519 |
+
+Tres notas sobre decisiones que conviene conocer antes de la demostración:
+
+- **Los `.ppt` heredados no se aceptan**, y no es un olvido: son contenedores
+  OLE y el escáner antimalware los rechaza por admitir macros. El alcance pide
+  PPTX y ODP, que son ZIP.
+- **La credencial Open Badges se firma solo si hay `BADGE_SIGNING_KEY`.** Sin
+  ella la plataforma arranca igual y las insignias siguen siendo verificables
+  por su URL pública; lo único que no se ofrece es la credencial portátil. No
+  se genera una clave al vuelo como sustituto: cada reinicio produciría otra y
+  lo firmado antes dejaría de verificarse.
+- **Una insignia revocada no se emite como credencial.** Una credencial firmada
+  no se puede desdecir; para el estado está la URL pública de verificación, que
+  sigue respondiendo y dice que ya no vale.
+
+```bash
+# Clave de firma para las credenciales (Ed25519, en base64):
+openssl genpkey -algorithm ed25519 -outform DER | base64 -w0
+```
+
 ### Verificación de las cargas
 
 Todo binario entra por el mismo sitio, se haya subido de una vez o por partes:
@@ -198,13 +229,21 @@ TEST_DATABASE_URL="postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable" \
 TEST_REDIS_ADDR=localhost:6379 go test ./...
 
 cd ../frontend
-npm ci && npm run lint && npm run typecheck && npm run build
+npm ci && npm run lint && npm run typecheck && npm test && npm run build
 ```
 
 Sin `TEST_DATABASE_URL` y `TEST_REDIS_ADDR`, las pruebas de integración se
 omiten en lugar de fallar y solo corren las unitarias.
 
-El backend trae 149 pruebas: las de dominio corren siempre y las de integración
+El frontend trae además 29 pruebas de ida y vuelta entre el AST del editor de
+bloques y el Markdown extendido canónico, una por tipo de nodo, que es lo que
+recomienda la sección 11 del enunciado. Lo que fijan no es que el Markdown
+vuelva letra por letra —eso obligaría a conservar las grafías alternativas que
+el formato admite— sino que la forma canónica sea un punto fijo: convertir dos
+veces da lo mismo que una, que es lo que importa cuando un documento se abre y
+se guarda muchas veces.
+
+El backend trae 259 pruebas: las de dominio corren siempre y las de integración
 ejercen la API contra PostgreSQL y Redis reales, porque lo que verifican
 —unicidad, consumo atómico de tokens, revocación inmediata, inmutabilidad de
 una versión publicada, alcance de cada mutación a su propia versión, toma
@@ -249,9 +288,9 @@ siembra con `ADMIN_EMAIL` y `ADMIN_PASSWORD` en el `.env`.
 
 ## Pendientes para las siguientes iteraciones
 
-El alcance mínimo (sección 5.1) está cubierto. Lo que falta pertenece a las
-restricciones técnicas (sección 7) y a la demostración de aceptación
-(sección 10), ordenado por lo que más pesa para esa demostración:
+El alcance mínimo (sección 5.1) y el opcional (5.2) están cubiertos. Lo que
+falta pertenece a las restricciones técnicas (sección 7) y a la demostración de
+aceptación (sección 10), ordenado por lo que más pesa para esa demostración:
 
 - **Pruebas E2E** de los nueve flujos críticos y auditoría automática de
   accesibilidad. Es condición de aceptación explícita y hoy no hay ninguna: la
@@ -268,13 +307,9 @@ restricciones técnicas (sección 7) y a la demostración de aceptación
 - **Backup y restauración** con RPO ≤ 15 min y RTO ≤ 4 h, y la prueba de
   recuperación que los acredita.
 
-Del alcance mínimo quedan dos bordes conscientes, ninguno bloqueante:
-
-- El editor de bloques cubre el subconjunto del MVP (encabezado, párrafo,
-  lista, código y aviso). Tablas, fórmulas e historial visible de revisiones
-  son alcance opcional (sección 5.2).
-- El escáner antimalware integrado no lleva firmas. Para la demostración
-  conviene levantar el perfil `antivirus` y apuntar `CLAMAV_ADDR` a clamd.
+Queda un borde consciente, no bloqueante: el escáner antimalware integrado no
+lleva firmas. Para la demostración conviene levantar el perfil `antivirus` y
+apuntar `CLAMAV_ADDR` a clamd.
 
 ## Versionado de datos
 

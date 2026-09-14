@@ -2,6 +2,14 @@
 
 import { useEffect, useRef } from "react";
 
+/** PistaDeSubtitulos es un <track> ya resuelto por el servidor. */
+export interface PistaDeSubtitulos {
+  language: string;
+  label: string;
+  kind: "subtitles" | "captions";
+  url: string;
+}
+
 /**
  * Reproductor adaptativo de video y audio sobre HLS.
  *
@@ -20,6 +28,7 @@ export function ReproductorHLS({
   posicionInicial = 0,
   onPosicion,
   titulo,
+  pistas = [],
 }: {
   src: string;
   tipo: "video" | "audio";
@@ -28,6 +37,8 @@ export function ReproductorHLS({
   /** Se llama con la posición actual para que el llamador la reporte. */
   onPosicion?: (segundos: number) => void;
   titulo: string;
+  /** Subtítulos disponibles, ya autorizados por el servidor. */
+  pistas?: PistaDeSubtitulos[];
 }) {
   const ref = useRef<HTMLMediaElement | null>(null);
   // El callback se guarda en una referencia para que cambiarlo no reinicie la
@@ -94,7 +105,11 @@ export function ReproductorHLS({
         preload="metadata"
         aria-label={`Audio: ${titulo}`}
         style={{ width: "100%" }}
-      />
+      >
+        {pistas.map((p) => (
+          <track key={p.language} kind={p.kind} src={p.url} srcLang={p.language} label={p.label} />
+        ))}
+      </audio>
     );
   }
 
@@ -106,6 +121,14 @@ export function ReproductorHLS({
       preload="metadata"
       aria-label={`Video: ${titulo}`}
       style={{ width: "100%", maxHeight: "70vh", background: "#000", borderRadius: "var(--radius)" }}
-    />
+    >
+      {/* Los subtítulos van como <track> nativos: el navegador ya sabe
+          mostrarlos, dejar elegir idioma y respetar las preferencias de
+          accesibilidad del sistema. Un renderizador propio tendría que
+          ganarse todo eso desde cero. */}
+      {pistas.map((p) => (
+        <track key={p.language} kind={p.kind} src={p.url} srcLang={p.language} label={p.label} />
+      ))}
+    </video>
   );
 }
