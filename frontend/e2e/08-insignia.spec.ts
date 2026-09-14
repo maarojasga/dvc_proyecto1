@@ -2,9 +2,9 @@ import { test, expect } from "@playwright/test";
 import {
   API,
   conToken,
-  credencialesDeAdmin,
-  registrarEstudiante,
+    registrarEstudiante,
   sufijo,
+  tokenDeAdmin,
   tokenDeSesion,
 } from "./ayudas";
 import { publicarCursoDePrueba } from "./preparar-curso";
@@ -58,8 +58,7 @@ test.describe("8. Insignia y actualización", () => {
     page,
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
 
     const estudiante = await registrarEstudiante(request, sufijo());
@@ -97,8 +96,7 @@ test.describe("8. Insignia y actualización", () => {
   });
 
   test("revocar una insignia la invalida y queda en la bitácora", async ({ request }) => {
-    const admin = credencialesDeAdmin();
-    const tokenAdmin = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenAdmin = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenAdmin);
 
     const estudiante = await registrarEstudiante(request, sufijo());
@@ -129,8 +127,7 @@ test.describe("8. Insignia y actualización", () => {
   });
 
   test("publicar una actualización conserva el progreso por stable_id", async ({ request }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     // Con el 50 % de obligatorios basta completar la lección para avanzar.
     const curso = await publicarCursoDePrueba(request, tokenProfesor, { pctObligatorios: 50 });
 

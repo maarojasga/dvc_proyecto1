@@ -2,9 +2,9 @@ import { test, expect } from "@playwright/test";
 import {
   API,
   conToken,
-  credencialesDeAdmin,
-  registrarEstudiante,
+    registrarEstudiante,
   sufijo,
+  tokenDeAdmin,
   tokenDeSesion,
 } from "./ayudas";
 import { publicarCursoDePrueba } from "./preparar-curso";
@@ -23,8 +23,7 @@ test.describe("7. Progreso y aprobación", () => {
   test("el avance lo decide el servidor a partir de señales, no del cliente", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
 
     const estudiante = await registrarEstudiante(request, sufijo());
@@ -77,8 +76,7 @@ test.describe("7. Progreso y aprobación", () => {
   test("completar los obligatorios y aprobar la evaluación lleva el curso a approved", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
 
     const estudiante = await registrarEstudiante(request, sufijo());

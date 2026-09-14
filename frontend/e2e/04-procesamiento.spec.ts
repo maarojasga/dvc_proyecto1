@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { API, conToken, credencialesDeAdmin, sufijo, tokenDeSesion } from "./ayudas";
+import { API, conToken, credencialesDeAdmin, sufijo, tokenDeAdmin,
+  tokenDeSesion } from "./ayudas";
 import { createHash } from "node:crypto";
 
 /**
@@ -21,8 +22,7 @@ test.describe("4. Procesamiento y fallos", () => {
   test("confirmar la carga encola sin bloquear la API y conserva el original", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const marca = sufijo();
 
     const creacion = await request.post(`${API}/api/v1/courses`, {
@@ -107,8 +107,7 @@ test.describe("4. Procesamiento y fallos", () => {
   test("un recurso que aún se procesa no se entrega como si estuviera listo", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const marca = sufijo();
 
     const { version_id: versionId } = await (

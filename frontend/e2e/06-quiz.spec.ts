@@ -2,10 +2,10 @@ import { test, expect } from "@playwright/test";
 import {
   API,
   conToken,
-  credencialesDeAdmin,
-  entrarPorLaInterfaz,
+    entrarPorLaInterfaz,
   registrarEstudiante,
   sufijo,
+  tokenDeAdmin,
   tokenDeSesion,
 } from "./ayudas";
 import { publicarCursoDePrueba } from "./preparar-curso";
@@ -22,8 +22,7 @@ import { publicarCursoDePrueba } from "./preparar-curso";
  */
 test.describe("6. Quiz", () => {
   test("la clave correcta nunca llega al cliente", async ({ request }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
 
     const estudiante = await registrarEstudiante(request, sufijo());
@@ -57,8 +56,7 @@ test.describe("6. Quiz", () => {
   test("los guardados parciales sobreviven a recargar, y el envío es idempotente", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
 
     const estudiante = await registrarEstudiante(request, sufijo());
@@ -124,8 +122,7 @@ test.describe("6. Quiz", () => {
     page,
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
 
     const estudiante = await registrarEstudiante(request, sufijo());

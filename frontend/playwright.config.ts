@@ -23,9 +23,14 @@ const API_URL = process.env.E2E_API_URL ?? "http://localhost:8080";
 
 export default defineConfig({
   testDir: "./e2e",
-  // Los flujos tocan estado compartido (el catálogo, el curso sembrado), así
-  // que se ejecutan en serie. Paralelizarlos daría carreras que se leerían
-  // como fallos del producto y no del arnés.
+  // Los flujos tocan estado compartido (el catálogo, el curso sembrado, y el
+  // presupuesto del limitador de tasa, que se cuenta por IP), así que se
+  // ejecutan en serie y en el orden del nombre del archivo. Paralelizarlos
+  // daría carreras que se leerían como fallos del producto y no del arnés.
+  //
+  // El orden importa: 99-limite-de-tasa agota a propósito el presupuesto de
+  // autenticación, así que va numerado para caer el último. Por eso los
+  // archivos llevan prefijo, incluido 10-accesibilidad.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
