@@ -458,6 +458,9 @@ function ResourceRow({
           {r.ProcessingStatus !== "none" && <span className="badge">procesamiento: {r.ProcessingStatus}</span>}
           {!r.Visible && <span className="badge">oculto</span>}
         </span>
+        {r.Type === "quiz" && (
+          <Link href={`/profesor/versiones/${versionId}/quiz/${r.ID}`}>Definir evaluación</Link>
+        )}
         {editable && BINARY_TYPES.has(r.Type) && (
           <label className="row" style={{ marginBottom: 0 }}>
             <span className="badge" style={{ cursor: uploading ? "not-allowed" : "pointer", background: uploading ? "#3b82f6" : undefined, color: uploading ? "white" : undefined }}>

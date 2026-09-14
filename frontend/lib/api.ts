@@ -101,6 +101,80 @@ export interface AuditEntry {
   created_at: string;
 }
 
+export interface QuizOption {
+  stable_id: string;
+  text_md: string;
+}
+
+export interface QuizQuestion {
+  stable_id: string;
+  prompt_md: string;
+  type: "single" | "multiple";
+  points: number;
+  options: QuizOption[];
+}
+
+export interface QuizAttempt {
+  attempt_id: string;
+  quiz_id: string;
+  title: string;
+  attempt_number: number;
+  status: "in_progress" | "submitted" | "expired";
+  started_at: string;
+  expires_at?: string;
+  questions: QuizQuestion[];
+  // Clave: stable_id de la pregunta. Valor: stable_id de las opciones marcadas.
+  answers: Record<string, string[]>;
+  // Solo llegan si la politica de retroalimentacion del quiz los permite en
+  // este momento (por ejemplo, tras enviar el intento).
+  score?: number;
+  passed?: boolean;
+}
+
+export interface QuizQuestionDraft {
+  prompt_md: string;
+  type: "single" | "multiple";
+  points: number;
+  options: { text_md: string; is_correct: boolean }[];
+}
+
+export interface CourseProgress {
+  enrollment_id: string;
+  course_id: string;
+  status: "active" | "withdrawn" | "completed" | "approved";
+  required_percent: number;
+  required_total: number;
+  required_completed: number;
+  quizzes_pending: number;
+  completed_at?: string;
+  approved_at?: string;
+  badge_code?: string;
+}
+
+// Vista propia de una insignia (autenticado): el struct de dominio no declara
+// tags JSON, asi que Go serializa los nombres de campo tal cual.
+export interface Badge {
+  ID: string;
+  EnrollmentID: string;
+  CourseID: string;
+  StudentID: string;
+  VerificationCode: string;
+  ImageObjectKey: string;
+  IssuedAt: string;
+  RevokedAt?: string | null;
+  RevokedReason?: string;
+}
+
+// Verificacion publica de una insignia: no exige sesion ni expone datos
+// personales, por eso es un DTO aparte con sus propios tags JSON.
+export interface BadgeVerification {
+  code: string;
+  course_id: string;
+  valid: boolean;
+  issued_at: string;
+  revoked_at?: string | null;
+}
+
 export const api = {
   me: () => request<User>("/api/v1/auth/me"),
   // Responde igual exista o no el correo, así que no devuelve el usuario.
@@ -249,6 +323,75 @@ export const api = {
   listMyEnrollments: () => request<{ items: Enrollment[] }>("/api/v1/enrollments/mine"),
   withdraw: (courseId: string) =>
     request<{ status: string }>(`/api/v1/enrollments/${courseId}/withdraw`, { method: "POST" }),
+
+  // Autoria del quiz. Solo el profesor dueno y sobre un borrador; la
+  // respuesta nunca trae la clave correcta, ni siquiera para quien lo define.
+  defineQuiz: (
+    versionId: string,
+    resourceId: string,
+    data: {
+      title: string;
+      time_limit_seconds?: number | null;
+      max_attempts?: number | null;
+      pass_score: number;
+      feedback_policy: "immediate" | "after_submit" | "after_close" | "none";
+      shuffle_questions: boolean;
+      questions: QuizQuestionDraft[];
+    },
+  ) =>
+    request<{ quiz_id: string; questions: number }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/quiz`,
+      { method: "PUT", body: JSON.stringify(data) },
+    ),
+
+  // Abre un intento, o devuelve el que ya estuviera en curso: recargar la
+  // pagina no debe gastar otro intento.
+  startQuizAttempt: (resourceId: string) =>
+    request<QuizAttempt>(`/api/v1/resources/${resourceId}/quiz/attempts`, { method: "POST" }),
+  getQuizAttempt: (attemptId: string) => request<QuizAttempt>(`/api/v1/quiz/attempts/${attemptId}`),
+  // Guardado parcial de una pregunta; se llama en cada cambio de seleccion.
+  saveQuizAnswer: (attemptId: string, questionStableId: string, selectedOptionStableIds: string[]) =>
+    request<void>(`/api/v1/quiz/attempts/${attemptId}/answers`, {
+      method: "PUT",
+      body: JSON.stringify({
+        question_stable_id: questionStableId,
+        selected_option_stable_ids: selectedOptionStableIds,
+      }),
+    }),
+  // La Idempotency-Key hace que reintentar tras un corte de red devuelva la
+  // misma nota en vez de calificar otra vez.
+  submitQuizAttempt: (attemptId: string, idempotencyKey: string) =>
+    request<QuizAttempt>(`/api/v1/quiz/attempts/${attemptId}/submit`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+    }),
+
+  // El cliente solo reporta que abrio, que sigue ahi o que cerro; el servidor
+  // decide cuanto tiempo acredita. Un porcentaje enviado desde aqui no serviria
+  // de nada: la API lo rechazaria. `keepalive` deja que la peticion de cierre
+  // sobreviva a que la pagina se este descargando (cambio de pestana o cierre).
+  recordProgress: (
+    resourceId: string,
+    type: "open" | "heartbeat" | "close",
+    complete = false,
+    opts: { keepalive?: boolean } = {},
+  ) =>
+    request<CourseProgress>(`/api/v1/resources/${resourceId}/progress`, {
+      method: "POST",
+      body: JSON.stringify({ type, complete }),
+      keepalive: opts.keepalive,
+    }),
+  getCourseProgress: (courseId: string) =>
+    request<CourseProgress>(`/api/v1/enrollments/${courseId}/progress`),
+
+  listMyBadges: () => request<{ items: Badge[] }>("/api/v1/badges/mine"),
+  // Publica y sin sesion: ese es el sentido de una insignia verificable.
+  verifyBadge: (code: string) => request<BadgeVerification>(`/api/v1/badges/${code}`),
+  revokeBadge: (code: string, reason: string) =>
+    request<{ status: string }>(`/api/v1/badges/${code}/revoke`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
 };
 
 export interface Course {

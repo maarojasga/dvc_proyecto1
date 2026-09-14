@@ -116,7 +116,7 @@ func TestLaClaveCorrectaNuncaLlegaAlCliente(t *testing.T) {
 	recursoID, cursoID := env.cursoConQuiz("prof@example.com", "curso-quiz")
 	estudiante := env.inscribir("ana@example.com", cursoID)
 
-	res := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/quiz/intentos", nil)
+	res := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/quiz/attempts", nil)
 	if res.Estado != http.StatusCreated {
 		t.Fatalf("iniciar intento: %d %s", res.Estado, res.Crudo)
 	}
@@ -136,8 +136,8 @@ func TestReiniciarNoGastaOtroIntento(t *testing.T) {
 	recursoID, cursoID := env.cursoConQuiz("prof@example.com", "curso-quiz")
 	estudiante := env.inscribir("ana@example.com", cursoID)
 
-	primero := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/quiz/intentos", nil)
-	segundo := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/quiz/intentos", nil)
+	primero := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/quiz/attempts", nil)
+	segundo := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/quiz/attempts", nil)
 
 	if primero.campo(t, "attempt_id") != segundo.campo(t, "attempt_id") {
 		t.Error("volver a pedir el intento abierto debería devolver el mismo, no crear otro")
@@ -152,7 +152,7 @@ func TestElEnvioSeCalificaEnServidorYEsIdempotente(t *testing.T) {
 	recursoID, cursoID := env.cursoConQuiz("prof@example.com", "curso-quiz")
 	estudiante := env.inscribir("ana@example.com", cursoID)
 
-	intento := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/quiz/intentos", nil)
+	intento := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/quiz/attempts", nil)
 	attemptID, _ := intento.campo(t, "attempt_id").(string)
 
 	// Se responde bien solo la primera pregunta: la nota debe ser 50 y no
@@ -165,7 +165,7 @@ func TestElEnvioSeCalificaEnServidorYEsIdempotente(t *testing.T) {
 			correcta, _ = o["stable_id"].(string)
 		}
 	}
-	res := estudiante.hacer(http.MethodPut, "/quiz/intentos/"+attemptID+"/respuestas", map[string]any{
+	res := estudiante.hacer(http.MethodPut, "/quiz/attempts/"+attemptID+"/answers", map[string]any{
 		"question_stable_id":         primera["stable_id"],
 		"selected_option_stable_ids": []string{correcta},
 	})
@@ -173,7 +173,7 @@ func TestElEnvioSeCalificaEnServidorYEsIdempotente(t *testing.T) {
 		t.Fatalf("guardado parcial: %d %s", res.Estado, res.Crudo)
 	}
 
-	envio := estudiante.hacer(http.MethodPost, "/quiz/intentos/"+attemptID+"/enviar", nil,
+	envio := estudiante.hacer(http.MethodPost, "/quiz/attempts/"+attemptID+"/submit", nil,
 		[2]string{"Idempotency-Key", "clave-de-envio-1"})
 	if envio.Estado != http.StatusOK {
 		t.Fatalf("envío: %d %s", envio.Estado, envio.Crudo)
@@ -188,7 +188,7 @@ func TestElEnvioSeCalificaEnServidorYEsIdempotente(t *testing.T) {
 
 	// Reintentar con la misma clave devuelve la nota guardada en vez de
 	// calificar otra vez.
-	repetido := estudiante.hacer(http.MethodPost, "/quiz/intentos/"+attemptID+"/enviar", nil,
+	repetido := estudiante.hacer(http.MethodPost, "/quiz/attempts/"+attemptID+"/submit", nil,
 		[2]string{"Idempotency-Key", "clave-de-envio-1"})
 	if repetido.Estado != http.StatusOK {
 		t.Fatalf("reenvío: %d %s", repetido.Estado, repetido.Crudo)
@@ -207,11 +207,11 @@ func TestNoSePuedeResponderConOpcionesDeOtroQuiz(t *testing.T) {
 	recursoID, cursoID := env.cursoConQuiz("prof@example.com", "curso-quiz")
 	estudiante := env.inscribir("ana@example.com", cursoID)
 
-	intento := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/quiz/intentos", nil)
+	intento := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/quiz/attempts", nil)
 	attemptID, _ := intento.campo(t, "attempt_id").(string)
 	preguntas := preguntasDelIntento(t, intento)
 
-	res := estudiante.hacer(http.MethodPut, "/quiz/intentos/"+attemptID+"/respuestas", map[string]any{
+	res := estudiante.hacer(http.MethodPut, "/quiz/attempts/"+attemptID+"/answers", map[string]any{
 		"question_stable_id":         preguntas[0]["stable_id"],
 		"selected_option_stable_ids": []string{"11111111-1111-1111-1111-111111111111"},
 	})
@@ -226,12 +226,12 @@ func TestElIntentoAjenoNoSeRevela(t *testing.T) {
 	ana := env.inscribir("ana@example.com", cursoID)
 	beto := env.inscribir("beto@example.com", cursoID)
 
-	intento := ana.hacer(http.MethodPost, "/recursos/"+recursoID+"/quiz/intentos", nil)
+	intento := ana.hacer(http.MethodPost, "/resources/"+recursoID+"/quiz/attempts", nil)
 	attemptID, _ := intento.campo(t, "attempt_id").(string)
 
 	// Se responde 404 y no 403: confirmar que el intento existe ya sería
 	// filtrar información de otra estudiante.
-	if res := beto.hacer(http.MethodGet, "/quiz/intentos/"+attemptID, nil); res.Estado != http.StatusNotFound {
+	if res := beto.hacer(http.MethodGet, "/quiz/attempts/"+attemptID, nil); res.Estado != http.StatusNotFound {
 		t.Errorf("el intento ajeno debería responder 404, se obtuvo %d %s", res.Estado, res.Crudo)
 	}
 }
@@ -243,16 +243,16 @@ func TestAprobarElQuizEmiteUnaInsigniaUnicaYVerificable(t *testing.T) {
 
 	// El quiz es el único recurso obligatorio, así que completarlo y aprobarlo
 	// debe bastar para aprobar el curso y emitir la insignia.
-	intento := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/quiz/intentos", nil)
+	intento := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/quiz/attempts", nil)
 	attemptID, _ := intento.campo(t, "attempt_id").(string)
 	responderTodoBien(t, estudiante, attemptID, preguntasDelIntento(t, intento))
 
-	if res := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/progreso",
+	if res := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/progress",
 		map[string]any{"type": "close", "complete": true}); res.Estado != http.StatusOK {
 		t.Fatalf("progreso: %d %s", res.Estado, res.Crudo)
 	}
 
-	envio := estudiante.hacer(http.MethodPost, "/quiz/intentos/"+attemptID+"/enviar", nil)
+	envio := estudiante.hacer(http.MethodPost, "/quiz/attempts/"+attemptID+"/submit", nil)
 	if envio.Estado != http.StatusOK {
 		t.Fatalf("envío: %d %s", envio.Estado, envio.Crudo)
 	}
@@ -260,7 +260,7 @@ func TestAprobarElQuizEmiteUnaInsigniaUnicaYVerificable(t *testing.T) {
 		t.Fatalf("responder todo bien debería aprobar: %s", envio.Crudo)
 	}
 
-	resumen := estudiante.hacer(http.MethodGet, "/cursos/"+cursoID+"/progreso", nil)
+	resumen := estudiante.hacer(http.MethodGet, "/enrollments/"+cursoID+"/progress", nil)
 	if estado, _ := resumen.campo(t, "status").(string); estado != "approved" {
 		t.Fatalf("el curso debería quedar approved, quedó %q: %s", estado, resumen.Crudo)
 	}
@@ -273,7 +273,7 @@ func TestAprobarElQuizEmiteUnaInsigniaUnicaYVerificable(t *testing.T) {
 	}
 
 	// La verificación es pública y no puede exponer el correo del estudiante.
-	publico := env.cliente().hacer(http.MethodGet, "/insignias/"+codigo, nil)
+	publico := env.cliente().hacer(http.MethodGet, "/badges/"+codigo, nil)
 	if publico.Estado != http.StatusOK {
 		t.Fatalf("verificación pública: %d %s", publico.Estado, publico.Crudo)
 	}
@@ -298,12 +298,12 @@ func TestUnCursoSinObligatoriosNoRepartInsigniasGratis(t *testing.T) {
 	}
 
 	estudiante := env.inscribir("ana@example.com", cursoID)
-	if res := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/progreso",
+	if res := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/progress",
 		map[string]any{"type": "close", "complete": true}); res.Estado != http.StatusOK {
 		t.Fatalf("progreso: %d %s", res.Estado, res.Crudo)
 	}
 
-	resumen := estudiante.hacer(http.MethodGet, "/cursos/"+cursoID+"/progreso", nil)
+	resumen := estudiante.hacer(http.MethodGet, "/enrollments/"+cursoID+"/progress", nil)
 	if estado, _ := resumen.campo(t, "status").(string); estado == "approved" {
 		t.Errorf("un curso sin obligatorios no debería aprobar a nadie: %s", resumen.Crudo)
 	}
@@ -319,8 +319,8 @@ func TestElHeartbeatImplausibleSeRechazaYSeAudita(t *testing.T) {
 
 	// Dos heartbeats seguidos: el segundo llega mucho antes del intervalo
 	// mínimo, así que no debe acreditar tiempo.
-	estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/progreso", map[string]any{"type": "open"})
-	if res := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/progreso",
+	estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/progress", map[string]any{"type": "open"})
+	if res := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/progress",
 		map[string]any{"type": "heartbeat"}); res.Estado != http.StatusOK {
 		t.Fatalf("heartbeat: %d %s", res.Estado, res.Crudo)
 	}
@@ -341,7 +341,7 @@ func TestElProgresoNoAceptaPorcentajesDelCliente(t *testing.T) {
 	estudiante := env.inscribir("ana@example.com", cursoID)
 
 	// El cliente intenta declararse completo con un tipo de evento inventado.
-	res := estudiante.hacer(http.MethodPost, "/recursos/"+recursoID+"/progreso",
+	res := estudiante.hacer(http.MethodPost, "/resources/"+recursoID+"/progress",
 		map[string]any{"type": "percent", "complete": true})
 	if res.Estado != http.StatusUnprocessableEntity {
 		t.Errorf("un tipo de evento inventado debería rechazarse, se obtuvo %d %s", res.Estado, res.Crudo)
@@ -378,7 +378,7 @@ func responderTodoBien(t *testing.T, c *cliente, attemptID string, preguntas []m
 		}
 		filas.Close()
 
-		res := c.hacer(http.MethodPut, "/quiz/intentos/"+attemptID+"/respuestas", map[string]any{
+		res := c.hacer(http.MethodPut, "/quiz/attempts/"+attemptID+"/answers", map[string]any{
 			"question_stable_id":         stableID,
 			"selected_option_stable_ids": correctas,
 		})

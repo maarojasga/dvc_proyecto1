@@ -6,6 +6,8 @@ import { useParams } from "next/navigation";
 import { api, ApiError, type ResourceContent } from "@/lib/api";
 import { ReproductorHLS } from "@/components/ReproductorHLS";
 import { VisorPDF } from "@/components/VisorPDF";
+import { QuizPlayer } from "@/components/QuizPlayer";
+import { useProgressReporting } from "@/lib/useProgressReporting";
 
 /**
  * Consumo de un recurso por parte del estudiante.
@@ -43,6 +45,11 @@ export default function RecursoPage() {
       cancelado = true;
     };
   }, [resourceId]);
+
+  // Solo se reporta progreso una vez confirmado el acceso: reportarlo antes
+  // filtraría, por temporización, que el recurso existe aunque el estudiante
+  // no tenga derecho a verlo.
+  useProgressReporting(contenido ? resourceId : undefined);
 
   // Reportar la posición no debe interrumpir la reproducción si falla: es una
   // comodidad, no parte del contenido.
@@ -152,6 +159,8 @@ export default function RecursoPage() {
           </a>
         </p>
       )}
+
+      {contenido.type === "quiz" && <QuizPlayer resourceId={resourceId} />}
     </div>
   );
 }

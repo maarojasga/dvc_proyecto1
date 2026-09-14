@@ -10,26 +10,26 @@ import (
 )
 
 func (h *handlers) registerQuizzes(mux *http.ServeMux) {
-	estudiante := RequireRole(user.RoleStudent)
-	profesor := RequireRole(user.RoleTeacher, user.RoleAdmin)
+	student := RequireRole(user.RoleStudent)
+	teacher := RequireRole(user.RoleTeacher, user.RoleAdmin)
 
 	mux.Handle("PUT /api/v1/courses/versions/{versionId}/resources/{resourceId}/quiz",
-		h.auth()(profesor(http.HandlerFunc(h.definirQuiz))))
+		h.auth()(teacher(http.HandlerFunc(h.defineQuiz))))
 
-	mux.Handle("POST /api/v1/recursos/{resourceId}/quiz/intentos",
-		h.auth()(estudiante(http.HandlerFunc(h.iniciarIntento))))
-	mux.Handle("GET /api/v1/quiz/intentos/{attemptId}",
-		h.auth()(estudiante(http.HandlerFunc(h.verIntento))))
-	mux.Handle("PUT /api/v1/quiz/intentos/{attemptId}/respuestas",
-		h.auth()(estudiante(http.HandlerFunc(h.guardarRespuesta))))
-	mux.Handle("POST /api/v1/quiz/intentos/{attemptId}/enviar",
-		h.auth()(estudiante(http.HandlerFunc(h.enviarIntento))))
+	mux.Handle("POST /api/v1/resources/{resourceId}/quiz/attempts",
+		h.auth()(student(http.HandlerFunc(h.startQuizAttempt))))
+	mux.Handle("GET /api/v1/quiz/attempts/{attemptId}",
+		h.auth()(student(http.HandlerFunc(h.getQuizAttempt))))
+	mux.Handle("PUT /api/v1/quiz/attempts/{attemptId}/answers",
+		h.auth()(student(http.HandlerFunc(h.saveQuizAnswer))))
+	mux.Handle("POST /api/v1/quiz/attempts/{attemptId}/submit",
+		h.auth()(student(http.HandlerFunc(h.submitQuizAttempt))))
 }
 
-type definirQuizRequest struct {
-	Title            string `json:"title"`
-	TimeLimitSeconds *int   `json:"time_limit_seconds"`
-	MaxAttempts      *int   `json:"max_attempts"`
+type defineQuizRequest struct {
+	Title            string  `json:"title"`
+	TimeLimitSeconds *int    `json:"time_limit_seconds"`
+	MaxAttempts      *int    `json:"max_attempts"`
 	PassScore        float64 `json:"pass_score"`
 	FeedbackPolicy   string  `json:"feedback_policy"`
 	ShuffleQuestions bool    `json:"shuffle_questions"`
@@ -44,7 +44,7 @@ type definirQuizRequest struct {
 	} `json:"questions"`
 }
 
-func (h *handlers) definirQuiz(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) defineQuiz(w http.ResponseWriter, r *http.Request) {
 	versionID, err := uuid.Parse(r.PathValue("versionId"))
 	if err != nil {
 		writeError(w, ErrBadRequest)
@@ -55,7 +55,7 @@ func (h *handlers) definirQuiz(w http.ResponseWriter, r *http.Request) {
 		writeError(w, ErrBadRequest)
 		return
 	}
-	var req definirQuizRequest
+	var req defineQuizRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
@@ -66,13 +66,13 @@ func (h *handlers) definirQuiz(w http.ResponseWriter, r *http.Request) {
 		FeedbackPolicy: req.FeedbackPolicy, ShuffleQuestions: req.ShuffleQuestions,
 	}
 	for _, p := range req.Questions {
-		pregunta := quizzes.DefinicionPregunta{PromptMD: p.PromptMD, Type: p.Type, Points: p.Points}
+		question := quizzes.DefinicionPregunta{PromptMD: p.PromptMD, Type: p.Type, Points: p.Points}
 		for _, o := range p.Options {
-			pregunta.Options = append(pregunta.Options, quizzes.DefinicionOpcion{
+			question.Options = append(question.Options, quizzes.DefinicionOpcion{
 				TextMD: o.TextMD, IsCorrect: o.IsCorrect,
 			})
 		}
-		def.Questions = append(def.Questions, pregunta)
+		def.Questions = append(def.Questions, question)
 	}
 
 	actor, _ := UserFromContext(r.Context())
@@ -88,7 +88,7 @@ func (h *handlers) definirQuiz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *handlers) iniciarIntento(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) startQuizAttempt(w http.ResponseWriter, r *http.Request) {
 	resourceID, err := uuid.Parse(r.PathValue("resourceId"))
 	if err != nil {
 		writeError(w, ErrBadRequest)
@@ -103,7 +103,7 @@ func (h *handlers) iniciarIntento(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, v)
 }
 
-func (h *handlers) verIntento(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) getQuizAttempt(w http.ResponseWriter, r *http.Request) {
 	attemptID, err := uuid.Parse(r.PathValue("attemptId"))
 	if err != nil {
 		writeError(w, ErrBadRequest)
@@ -118,45 +118,45 @@ func (h *handlers) verIntento(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-type guardarRespuestaRequest struct {
+type saveAnswerRequest struct {
 	QuestionStableID string   `json:"question_stable_id"`
 	SelectedOptions  []string `json:"selected_option_stable_ids"`
 }
 
-func (h *handlers) guardarRespuesta(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) saveQuizAnswer(w http.ResponseWriter, r *http.Request) {
 	attemptID, err := uuid.Parse(r.PathValue("attemptId"))
 	if err != nil {
 		writeError(w, ErrBadRequest)
 		return
 	}
-	var req guardarRespuestaRequest
+	var req saveAnswerRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	preguntaID, err := uuid.Parse(req.QuestionStableID)
+	questionID, err := uuid.Parse(req.QuestionStableID)
 	if err != nil {
 		writeError(w, ErrBadRequest)
 		return
 	}
-	seleccion := make([]uuid.UUID, 0, len(req.SelectedOptions))
+	selection := make([]uuid.UUID, 0, len(req.SelectedOptions))
 	for _, s := range req.SelectedOptions {
 		id, err := uuid.Parse(s)
 		if err != nil {
 			writeError(w, ErrBadRequest)
 			return
 		}
-		seleccion = append(seleccion, id)
+		selection = append(selection, id)
 	}
 
 	actor, _ := UserFromContext(r.Context())
-	if err := h.deps.Quizzes.Guardar(r.Context(), actor, attemptID, preguntaID, seleccion); err != nil {
+	if err := h.deps.Quizzes.Guardar(r.Context(), actor, attemptID, questionID, selection); err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
-func (h *handlers) enviarIntento(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) submitQuizAttempt(w http.ResponseWriter, r *http.Request) {
 	attemptID, err := uuid.Parse(r.PathValue("attemptId"))
 	if err != nil {
 		writeError(w, ErrBadRequest)
@@ -165,8 +165,8 @@ func (h *handlers) enviarIntento(w http.ResponseWriter, r *http.Request) {
 	actor, _ := UserFromContext(r.Context())
 	// La cabecera estandar del proyecto hace repetible el envio definitivo:
 	// reintentar tras un corte de red devuelve la misma nota.
-	clave := r.Header.Get("Idempotency-Key")
-	v, err := h.deps.Quizzes.Enviar(r.Context(), actor, attemptID, clave)
+	key := r.Header.Get("Idempotency-Key")
+	v, err := h.deps.Quizzes.Enviar(r.Context(), actor, attemptID, key)
 	if err != nil {
 		writeError(w, err)
 		return

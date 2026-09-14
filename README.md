@@ -112,9 +112,10 @@ Cada subproyecto tiene su propio README con el detalle.
   sesiones, caché, rate limiting y la cola (asynq).
 - **Almacenamiento de objetos**: S3/MinIO para originales, derivados HLS, PDFs
   e imágenes de insignias; ningún binario vive en la base relacional.
-- **Frontend**: Next.js con TypeScript. El navegador llama a `/api/v1` del
-  mismo origen y Next reescribe hacia la API en Go, así no hay CORS y las
-  cookies de sesión permanecen `SameSite`.
+- **Frontend**: Next.js con TypeScript. El navegador llama directamente a la
+  API en Go (`NEXT_PUBLIC_API_URL`), sin proxy de por medio; el backend tiene
+  CORS habilitado para el origen del frontend y las cookies de sesión viajan
+  con `credentials: "include"`.
 - **Despliegue**: Docker y Docker Compose, con API y workers preparados para
   escalar a múltiples instancias.
 

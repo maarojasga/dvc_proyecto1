@@ -49,7 +49,7 @@ func NewRouter(d Deps) http.Handler {
 	h.registerCourses(mux)
 	h.registerEnrollments(mux)
 	h.registerQuizzes(mux)
-	h.registerProgreso(mux)
+	h.registerProgress(mux)
 	h.registerMedia(mux)
 	h.registerOperacion(mux)
 
