@@ -53,18 +53,27 @@ export default function MyBadgesPage() {
 
       <ul className="lista-filas">
         {items?.map((b) => (
-          <li key={b.ID} className="card fila">
+          <li key={b.code} className="card fila">
+            {b.image_url && (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={b.image_url}
+                alt={`Insignia emitida el ${new Date(b.issued_at).toLocaleDateString()}`}
+                width={96}
+                height={96}
+                style={{ borderRadius: "8px" }}
+              />
+            )}
             <div className="fila__datos">
               <p>
-                {b.RevokedAt ? (
-                  <span className="badge">revocada</span>
-                ) : (
-                  <span className="badge">vigente</span>
-                )}{" "}
-                Emitida el {new Date(b.IssuedAt).toLocaleDateString()}
+                {b.valid ? <span className="badge">vigente</span> : <span className="badge">revocada</span>}{" "}
+                Emitida el {new Date(b.issued_at).toLocaleDateString()}
+              </p>
+              <p className="muted">
+                Código de verificación: <code>{b.code}</code>
               </p>
             </div>
-            <Link href={`/insignias/${b.VerificationCode}`}>Ver verificación pública</Link>
+            <Link href={`/insignias/${b.code}`}>Ver verificación pública</Link>
           </li>
         ))}
       </ul>

@@ -32,6 +32,12 @@ type Config struct {
 	S3PublicEndpoint string
 	S3PublicUseSSL   bool
 
+	// ClamAVAddr es la dirección de clamd (host:puerto). Vacía deja operando
+	// el escáner antimalware integrado, que reconoce el vector de prueba
+	// estándar y los formatos ejecutables pero no sustituye a un antivirus
+	// con firmas actualizadas.
+	ClamAVAddr string
+
 	SMTPHost string
 	SMTPPort string
 	SMTPFrom string
@@ -60,6 +66,8 @@ func Load() Config {
 
 		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
 		S3PublicUseSSL:   getBool("S3_PUBLIC_USE_SSL", getBool("S3_USE_SSL", false)),
+
+		ClamAVAddr: getEnv("CLAMAV_ADDR", ""),
 
 		SMTPHost: getEnv("SMTP_HOST", "localhost"),
 		SMTPPort: getEnv("SMTP_PORT", "1025"),

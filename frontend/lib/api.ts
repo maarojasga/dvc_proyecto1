@@ -153,16 +153,16 @@ export interface CourseProgress {
 
 // Vista propia de una insignia (autenticado): el struct de dominio no declara
 // tags JSON, asi que Go serializa los nombres de campo tal cual.
+// La insignia tal como la ve su dueno. La API resuelve la URL de la imagen,
+// porque es ella la que sabe si los objetos salen del CDN o van firmados.
 export interface Badge {
-  ID: string;
-  EnrollmentID: string;
-  CourseID: string;
-  StudentID: string;
-  VerificationCode: string;
-  ImageObjectKey: string;
-  IssuedAt: string;
-  RevokedAt?: string | null;
-  RevokedReason?: string;
+  code: string;
+  course_id: string;
+  valid: boolean;
+  issued_at: string;
+  revoked_at?: string | null;
+  image_url?: string;
+  verify_path: string;
 }
 
 // Verificacion publica de una insignia: no exige sesion ni expone datos
@@ -173,6 +173,25 @@ export interface BadgeVerification {
   valid: boolean;
   issued_at: string;
   revoked_at?: string | null;
+  image_url?: string;
+}
+
+// Una parte ya recibida por el almacen. El ETag es lo que el cliente reenvia
+// al completar, y lo que delata una parte que no llego intacta.
+export interface ParteCargada {
+  part_number: number;
+  etag: string;
+  size_bytes?: number;
+}
+
+// Lo que la API responde tras verificar un objeto cargado: el tipo real
+// deducido de los bytes, el tamano y el checksum que calculo el servidor.
+export interface CargaVerificada {
+  status: "ready" | "queued";
+  mime_type?: string;
+  size_bytes?: number;
+  checksum_sha256?: string;
+  media_asset_id?: string;
 }
 
 export const api = {
@@ -288,10 +307,11 @@ export const api = {
       `/api/v1/courses/versions/${versionId}/resources/${resourceId}/upload-url`,
       { method: "POST", body: JSON.stringify({ mime_type: mimeType }) },
     ),
-  confirmUpload: (versionId: string, resourceId: string) =>
-    request<{ status: string }>(`/api/v1/courses/versions/${versionId}/resources/${resourceId}/confirm-upload`, {
-      method: "POST",
-    }),
+  confirmUpload: (versionId: string, resourceId: string, checksumSha256?: string) =>
+    request<CargaVerificada>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/confirm-upload`,
+      { method: "POST", body: JSON.stringify(checksumSha256 ? { checksum_sha256: checksumSha256 } : {}) },
+    ),
 
   initiateMultipart: (versionId: string, resourceId: string, contentType: string) =>
     request<{ upload_id: string; object_key: string }>(
@@ -303,15 +323,29 @@ export const api = {
       `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/part-url`,
       { method: "POST", body: JSON.stringify({ upload_id: uploadId, part_number: partNumber }) },
     ),
+  // Devuelve las partes que el almacen ya recibio. Es lo que permite reanudar
+  // una subida interrumpida sin reenviar lo que llego.
+  listMultipartParts: (versionId: string, resourceId: string, uploadId: string) =>
+    request<{ upload_id: string; parts: ParteCargada[] }>(
+      `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/parts?upload_id=${encodeURIComponent(uploadId)}`,
+    ),
   completeMultipart: (
     versionId: string,
     resourceId: string,
     uploadId: string,
-    parts: { part_number: number; etag: string }[],
+    parts: ParteCargada[],
+    checksumSha256?: string,
   ) =>
-    request<{ status: string; media_asset_id?: string; size_bytes?: number }>(
+    request<CargaVerificada>(
       `/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart/complete`,
-      { method: "POST", body: JSON.stringify({ upload_id: uploadId, parts }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          upload_id: uploadId,
+          parts: parts.map((p) => ({ part_number: p.part_number, etag: p.etag })),
+          ...(checksumSha256 ? { checksum_sha256: checksumSha256 } : {}),
+        }),
+      },
     ),
 
   listCatalog: (params: Record<string, string> = {}) =>

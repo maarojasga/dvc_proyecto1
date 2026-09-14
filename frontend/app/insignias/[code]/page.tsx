@@ -69,7 +69,17 @@ export default function VerificacionInsigniaPage() {
       {!error && !insignia && <p role="status">Verificando…</p>}
 
       {insignia && (
-        <div className={`card ${insignia.valid ? "" : ""}`}>
+        <div className="card">
+          {insignia.image_url && (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img
+              src={insignia.image_url}
+              alt={`Insignia del curso ${courseTitle ?? "verificada"}`}
+              width={200}
+              height={200}
+              style={{ display: "block", margin: "0 auto 1rem" }}
+            />
+          )}
           {insignia.valid ? (
             <p className="success-banner" role="status">
               Esta insignia es válida.

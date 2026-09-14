@@ -1,6 +1,7 @@
 package httpserver_test
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"testing"
@@ -282,6 +283,28 @@ func TestAprobarElQuizEmiteUnaInsigniaUnicaYVerificable(t *testing.T) {
 	}
 	if contiene(publico.Crudo, "ana@example.com") || contiene(publico.Crudo, "student_id") {
 		t.Errorf("la verificación pública expone datos personales: %s", publico.Crudo)
+	}
+
+	// El alcance mínimo pide insignia "con imagen": tiene que existir el
+	// objeto, ser un SVG y llegar su URL en la verificación.
+	if url, _ := publico.campo(t, "image_url").(string); url == "" {
+		t.Errorf("la verificación no trae la URL de la imagen: %s", publico.Crudo)
+	}
+	imagen := env.almacen.contenido("badges/" + codigo + ".svg")
+	if len(imagen) == 0 {
+		t.Fatal("no se guardó la imagen de la insignia en el almacén de objetos")
+	}
+	if !bytes.HasPrefix(imagen, []byte("<svg")) {
+		t.Errorf("la imagen no es un SVG: %.40s", imagen)
+	}
+	if bytes.Contains(imagen, []byte("ana@example.com")) {
+		t.Error("la imagen de la insignia expone el correo del estudiante")
+	}
+
+	// Y la imagen también aparece en la lista del propio estudiante.
+	mias := estudiante.hacer(http.MethodGet, "/badges/mine", nil)
+	if !contiene(mias.Crudo, codigo) || !contiene(mias.Crudo, "image_url") {
+		t.Errorf("la lista de insignias del estudiante no trae código e imagen: %s", mias.Crudo)
 	}
 }
 

@@ -663,7 +663,12 @@ paths:
 
   /courses/versions/{versionId}/resources/{resourceId}/upload-url:
     post:
+      tags: [Multimedia]
       summary: Emite una URL prefirmada de subida directa al almacenamiento de objetos
+      description: >
+        La API nunca recibe el binario: el navegador sube contra esta URL, que
+        vale 24 horas. Para archivos grandes se usa la carga multipart, que
+        además permite reanudar.
       operationId: requestResourceUploadURL
       parameters:
         - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -676,18 +681,185 @@ paths:
               type: object
               properties: { mime_type: { type: string } }
       responses:
-        "200": { description: URL prefirmada (PUT) y clave de objeto. }
+        "200":
+          description: URL prefirmada (PUT), válida 24 horas, y clave de objeto.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_url: { type: string, format: uri }
+                  object_key: { type: string }
+                  method: { type: string, enum: [PUT] }
 
   /courses/versions/{versionId}/resources/{resourceId}/confirm-upload:
     post:
-      summary: Confirma una subida y encola el procesamiento asíncrono si aplica (video/audio)
+      tags: [Multimedia]
+      summary: Verifica una subida simple y encola el procesamiento asíncrono si aplica
+      description: >
+        Aplica los mismos controles que el cierre de una carga multipart:
+        integridad (checksum SHA-256 sobre el objeto almacenado), tipo MIME
+        real deducido de los bytes y escaneo antimalware. Un objeto rechazado
+        se borra del almacén.
       operationId: confirmResourceUpload
       parameters:
         - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checksum_sha256:
+                  type: string
+                  description: >
+                    Hash calculado por el cliente antes de subir. Si viene y no
+                    coincide con el objeto almacenado, la carga se rechaza.
       responses:
-        "200": { description: Recurso listo de inmediato (no requiere procesamiento). }
-        "202": { description: Trabajo de transcodificación encolado (video/audio). }
+        "200":
+          description: Recurso listo de inmediato (no requiere procesamiento).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "202":
+          description: Trabajo de transcodificación encolado (video/audio).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "422": { $ref: "#/components/responses/CargaRechazada" }
+        "503": { $ref: "#/components/responses/Problema" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/initiate:
+    post:
+      tags: [Multimedia]
+      summary: Inicia una carga multipart directa al almacenamiento
+      operationId: initiateMultipartUpload
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { content_type: { type: string } }
+      responses:
+        "200":
+          description: Identificador de la carga y clave del objeto.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id: { type: string }
+                  object_key: { type: string }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/part-url:
+    post:
+      tags: [Multimedia]
+      summary: Firma la subida de una parte
+      description: La URL vale 24 horas, que es el plazo de reanudación del alcance mínimo.
+      operationId: requestMultipartPartURL
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id, part_number]
+              properties:
+                upload_id: { type: string }
+                part_number: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: URL prefirmada de la parte.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_url: { type: string, format: uri }
+                  part_number: { type: integer }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/parts:
+    get:
+      tags: [Multimedia]
+      summary: Partes ya recibidas de una carga en curso
+      description: >
+        Es lo que permite reanudar: un cliente interrumpido pregunta qué llegó
+        y sube solo lo que falta.
+      operationId: listMultipartParts
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: upload_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Partes recibidas, ordenadas por número.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id: { type: string }
+                  parts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        part_number: { type: integer }
+                        etag: { type: string }
+                        size_bytes: { type: integer, format: int64 }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/complete:
+    post:
+      tags: [Multimedia]
+      summary: Ensambla la carga multipart y la verifica
+      description: >
+        Tras ensamblar comprueba integridad, MIME real y antimalware. Si algo
+        falla, el objeto se borra y la carga se aborta.
+      operationId: completeMultipartUpload
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id, parts]
+              properties:
+                upload_id: { type: string }
+                checksum_sha256: { type: string }
+                parts:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [part_number, etag]
+                    properties:
+                      part_number: { type: integer, minimum: 1 }
+                      etag: { type: string }
+      responses:
+        "200":
+          description: Recurso listo de inmediato (no requiere procesamiento).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "202":
+          description: Trabajo de transcodificación encolado (video/audio).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "422": { $ref: "#/components/responses/CargaRechazada" }
+        "503": { $ref: "#/components/responses/Problema" }
 
   /catalog:
     get:
@@ -903,7 +1075,7 @@ paths:
           description: Se agoto el numero maximo de intentos.
           content:
             application/problem+json:
-              schema: { $ref: "#/components/schemas/ProblemDetails" }
+              schema: { $ref: "#/components/schemas/Error" }
 
   /quiz/attempts/{attemptId}:
     get:
@@ -1005,7 +1177,16 @@ paths:
       summary: Lista las insignias del estudiante autenticado
       operationId: listMyBadges
       responses:
-        "200": { description: Lista de insignias. }
+        "200":
+          description: Lista de insignias, con la URL de su imagen.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Insignia" }
 
   /badges/{code}:
     get:
@@ -1019,7 +1200,11 @@ paths:
       parameters:
         - { name: code, in: path, required: true, schema: { type: string } }
       responses:
-        "200": { description: Estado de la insignia. }
+        "200":
+          description: Estado de la insignia y URL de su imagen.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Insignia" }
         "404": { $ref: "#/components/responses/Problema" }
 
   /badges/{code}/revoke:
@@ -1071,6 +1256,26 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
 
+    Problema:
+      description: >
+        Error uniforme. El campo `error.code` identifica el motivo de forma
+        estable; `error.details` enumera los motivos cuando hay varios, como en
+        la validación de publicación.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    CargaRechazada:
+      description: >
+        El objeto llegó pero no se acepta. `error.code` distingue el motivo:
+        `checksum_mismatch` (integridad), `mime_mismatch` (el contenido real no
+        corresponde al tipo del recurso), `malware_detected` (lo rechazó el
+        escaneo) o `upload_missing` (no hay objeto). En los tres primeros casos
+        el objeto ya fue borrado del almacén.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
   securitySchemes:
     sessionCookie:
       type: apiKey
@@ -1080,6 +1285,48 @@ components:
       type: http
       scheme: bearer
   schemas:
+    CargaVerificada:
+      type: object
+      description: Resultado de verificar un objeto recién cargado.
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ready, queued]
+          description: >
+            `ready` cuando el recurso queda disponible de inmediato; `queued`
+            cuando se encoló la transcodificación a HLS.
+        mime_type:
+          type: string
+          description: Tipo real deducido de los primeros bytes, no el declarado por el cliente.
+        size_bytes: { type: integer, format: int64 }
+        checksum_sha256:
+          type: string
+          description: SHA-256 calculado por el servidor sobre el objeto almacenado.
+        media_asset_id:
+          type: string
+          format: uuid
+          description: Solo en `queued`; identifica el trabajo de transcodificación.
+
+    Insignia:
+      type: object
+      description: >
+        Insignia verificable. Nunca lleva el correo ni el identificador del
+        estudiante: la vista pública se comparte junto con la imagen.
+      required: [code, course_id, valid, issued_at]
+      properties:
+        code: { type: string }
+        course_id: { type: string, format: uuid }
+        valid: { type: boolean }
+        issued_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        image_url:
+          type: string
+          format: uri
+          description: >
+            Imagen SVG de la insignia. Sale del CDN cuando está configurado y
+            firmada en caso contrario.
+
     User:
       type: object
       required: [id, email, full_name, role, status]

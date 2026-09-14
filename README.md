@@ -23,17 +23,63 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 | 1 | Registro, verificación de correo, sesiones revocables y recuperación | Completo, con pruebas de integración |
 | 2 | Gestión administrativa de usuarios | Completo: usuarios, roles, estados, sesiones (ver y cerrar), consulta de la bitácora inmutable y protección del último administrador activo |
 | 3 | Autoría, jerarquía y versiones | Completo: jerarquía de cuatro niveles con `stable_id`, ordenamiento, previsualización, validación exhaustiva de publicación y versiones publicadas inmutables |
-| 4 | Editor de bloques con autosave y Markdown canónico | No: hoy son campos de texto Markdown sin autosave |
-| 5 | Carga multimedia | Parcial: PUT prefirmado de 24 h. Falta multipart reanudable, checksum, MIME real y antimalware |
+| 4 | Editor de bloques con autosave y Markdown canónico | Completo en lo que el MVP delimita: bloques de encabezado, párrafo, lista, código y aviso, con autoguardado y recuperación del borrador local. La ida y vuelta AST ↔ Markdown cubre ese subconjunto, no el Markdown extendido entero |
+| 5 | Carga multimedia | Completo: multipart directa reanudable durante 24 h, checksum SHA-256 extremo a extremo, MIME real deducido de los bytes y escaneo antimalware. Los mismos controles se aplican a la subida simple |
 | 6 | Procesamiento asíncrono a HLS | Completo: worker asynq con FFmpeg sin upscaling, original conservado, toma exclusiva del trabajo, reintentos con backoff, dead-letter queue con alerta y entrega autorizada por CDN |
 | 7 | Visor PDF y reproducción adaptativa | Completo: reproductor HLS adaptativo que reanuda desde la última posición reportada, visor PDF y entrega autorizada de cada tipo de recurso |
-| 8 | Quizzes | No: el dominio existe con pruebas, pero sin repositorio, API ni interfaz |
-| 9 | Progreso e insignias | No: igual que quizzes |
-| 10 | Catálogo, inscripción, retiro y reinscripción | Casi completo. Falta ampliar filtros más allá de la búsqueda por texto |
+| 8 | Quizzes | Completo: autoría, snapshot congelado al iniciar, guardado parcial, calificación en servidor, envío idempotente, expiración y retroalimentación según la política. La clave correcta nunca sale del servidor |
+| 9 | Progreso e insignias | Completo: avance calculado en servidor a partir de heartbeats y permanencia, rechazo auditado de porcentajes enviados por el cliente, aprobación por criterios e insignia única con imagen SVG y URL pública de verificación |
+| 10 | Catálogo, inscripción, retiro y reinscripción | Completo: búsqueda por texto y filtros por categoría y nivel, inscripción, retiro y reinscripción conservando progreso |
 
 De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
 3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
 protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
+
+### Verificación de las cargas
+
+Todo binario entra por el mismo sitio, se haya subido de una vez o por partes:
+al confirmar, la API recorre el objeto **una sola vez** y con esa lectura
+calcula el SHA-256, olfatea el tipo real por los primeros bytes y lo pasa por
+el escáner. Si algo no cuadra, el objeto se borra del almacén y la respuesta es
+`422` con el motivo en `error.code`:
+
+| `error.code` | Qué ocurrió |
+|---|---|
+| `checksum_mismatch` | El hash que calculó el navegador no coincide con el objeto almacenado |
+| `mime_mismatch` | El contenido real no corresponde al tipo del recurso (un HTML subido como PDF) |
+| `malware_detected` | El escaneo reconoció el archivo |
+| `upload_missing` | No hay objeto en la clave, o está vacío |
+| `scanner_unavailable` (503) | No se pudo escanear. La carga se rechaza: dar por limpio lo que no se escaneó convertiría apagar el antivirus en una vía de entrada |
+
+El escáner tiene dos motores. El **integrado** siempre opera: reconoce el
+vector de prueba estándar (EICAR) y bloquea ejecutables nativos, scripts con
+shebang y documentos OLE con macros. No lleva firmas, así que no sustituye a un
+antivirus. Con `CLAMAV_ADDR` apuntando a un clamd se usan los dos, y ese es el
+camino de producción:
+
+```bash
+docker compose --profile antivirus up -d clamav   # tarda: descarga las firmas
+CLAMAV_ADDR=clamav:3310 docker compose up -d api
+```
+
+### Reanudar una subida
+
+La reanudación no la da el endpoint por sí sola. Si el navegador se cierra a
+media subida, el identificador de la carga se pierde y las partes que ya
+llegaron quedan huérfanas, así que el cliente guarda ese identificador en
+`localStorage` y al volver pregunta a
+`GET …/multipart/parts` qué partes tiene el almacén antes de enviar nada.
+
+Lo que no sobrevive es el archivo: ningún navegador permite releer un `File`
+de una sesión anterior. Por eso la interfaz ofrece «Reanudar subida» y pide
+elegir de nuevo el mismo archivo; si el nombre o el tamaño no coinciden, la
+carga previa se descarta en vez de producir un objeto mezclado.
+
+Una condición del despliegue que conviene no descubrir en la demostración: el
+navegador solo ve la cabecera `ETag` de cada parte si el almacén la publica en
+`Access-Control-Expose-Headers`. Sin ella la subida falla al cerrar, porque el
+`ETag` es lo que permite ensamblar; el cliente lo detecta y lo dice con ese
+mismo mensaje en vez de fallar más adelante con un error opaco.
 
 ### El host del almacén: interno frente al del navegador
 
@@ -97,7 +143,7 @@ publicación de una versión nueva.
 |   |-- internal/domain/    Entidades y reglas de negocio (sin framework ni cloud)
 |   |-- internal/platform/  Adaptadores: HTTP, PostgreSQL, Redis, S3/MinIO, cola
 |   `-- migrations/         Migraciones SQL de PostgreSQL
-|-- frontend/           Next.js 16 (App Router), React 19, TypeScript, Tailwind 4
+|-- frontend/           Next.js 14 (App Router), React 18, TypeScript y CSS propio
 |-- docs/               Especificación OpenAPI y notas de arquitectura
 `-- docker-compose.yml  Postgres, Redis, MinIO, Mailpit, API, workers y frontend
 ```
@@ -158,7 +204,7 @@ npm ci && npm run lint && npm run typecheck && npm run build
 Sin `TEST_DATABASE_URL` y `TEST_REDIS_ADDR`, las pruebas de integración se
 omiten en lugar de fallar y solo corren las unitarias.
 
-El backend trae 108 pruebas: las de dominio corren siempre y las de integración
+El backend trae 149 pruebas: las de dominio corren siempre y las de integración
 ejercen la API contra PostgreSQL y Redis reales, porque lo que verifican
 —unicidad, consumo atómico de tokens, revocación inmediata, inmutabilidad de
 una versión publicada, alcance de cada mutación a su propia versión, toma
@@ -166,10 +212,24 @@ exclusiva de un trabajo de transcodificación, límites de tasa e inmutabilidad
 de la auditoría— vive en esos adaptadores y un doble de prueba no lo
 demostraría.
 
-La transcodificación en sí no se ejercita en las pruebas: exige FFmpeg y
-almacenamiento de objetos. Lo que sí se prueba es todo lo que la rodea, que es
-donde estaban los fallos: la exclusión mutua entre entregas, la conservación
-del original, la lista maestra HLS y la alerta al agotar los reintentos.
+Dos paquetes de prueba comparten esa base y empiezan vaciando las mismas
+tablas, y `go test ./...` ejecuta los paquetes en paralelo. Se serializan con
+un cerrojo consultivo de PostgreSQL (`internal/platform/postgres/pgtest`);
+sin él la suite fallaba de forma intermitente, con pruebas que pasaban al
+ejecutarlas aisladas —justo lo que el enunciado no admite, porque un requisito
+solo se acredita con pruebas reproducibles—.
+
+Dos cosas no se ejercitan contra su infraestructura real:
+
+- **La transcodificación**, que exige FFmpeg y almacenamiento de objetos. Sí se
+  prueba todo lo que la rodea, que es donde estaban los fallos: la exclusión
+  mutua entre entregas, la conservación del original, la lista maestra HLS y la
+  alerta al agotar los reintentos.
+- **La firma de objetos contra MinIO**, que tiene sus propias pruebas sobre el
+  cliente real (`internal/platform/storage/firma_test.go`). Las de carga usan
+  un almacén en memoria, porque lo que verifican —integridad, MIME real,
+  antimalware y reanudación— es lógica de la API, y exigir MinIO levantado
+  dejaría ese control sin pruebas en la práctica.
 
 ### Recorrido manual del flujo de identidad
 
@@ -189,23 +249,32 @@ siembra con `ADMIN_EMAIL` y `ADMIN_PASSWORD` en el `.env`.
 
 ## Pendientes para las siguientes iteraciones
 
-Ordenados por lo que más falta para la demostración de aceptación:
+El alcance mínimo (sección 5.1) está cubierto. Lo que falta pertenece a las
+restricciones técnicas (sección 7) y a la demostración de aceptación
+(sección 10), ordenado por lo que más pesa para esa demostración:
 
-- **Quizzes, progreso e insignias** (puntos 8 y 9). El dominio ya está escrito
-  y probado; falta el repositorio, la API y la interfaz que lo usen.
-- **Editor de bloques** (punto 4): hoy la autoría usa campos de texto Markdown
-  sin autosave ni AST canónico.
-- **Carga multimedia** (punto 5): multipart reanudable, verificación de
-  checksum, MIME real y escaneo antimalware. Los ayudantes multipart ya están
-  en `internal/platform/storage`, pero ningún endpoint los usa todavía.
-- **Cursores y ETag** en las colecciones, que exige la sección 7.
-- **OpenTelemetry**: hoy hay logs estructurados y correlación por
-  `X-Request-Id`; faltan métricas y trazas.
+- **Pruebas E2E** de los nueve flujos críticos y auditoría automática de
+  accesibilidad. Es condición de aceptación explícita y hoy no hay ninguna: la
+  cobertura llega hasta la API, no hasta el navegador.
+- **Pipeline de CI**: build, lint, análisis de seguridad, migraciones y
+  pruebas, que la sección 10.1 exige completar antes de la demostración.
+- **Prueba de carga de Etapa 1** y el p95 documentado que pide el segmento 9.
 - **Reverse proxy** (nginx/traefik) para escalar la API a varias instancias:
   hoy publica el puerto 8080 fijo en el host, lo que impide `--scale api=N`.
   Los workers sí escalan.
-- **Pipeline de CI**: build, lint, análisis de seguridad, migraciones y pruebas.
-- **Pruebas E2E** de los nueve flujos críticos y auditoría de accesibilidad.
+- **OpenTelemetry**: hoy hay logs estructurados y correlación por
+  `X-Request-Id`; faltan métricas y trazas.
+- **Cursores y ETag** en las colecciones, que exige la sección 7.
+- **Backup y restauración** con RPO ≤ 15 min y RTO ≤ 4 h, y la prueba de
+  recuperación que los acredita.
+
+Del alcance mínimo quedan dos bordes conscientes, ninguno bloqueante:
+
+- El editor de bloques cubre el subconjunto del MVP (encabezado, párrafo,
+  lista, código y aviso). Tablas, fórmulas e historial visible de revisiones
+  son alcance opcional (sección 5.2).
+- El escáner antimalware integrado no lleva firmas. Para la demostración
+  conviene levantar el perfil `antivirus` y apuntar `CLAMAV_ADDR` a clamd.
 
 ## Versionado de datos
 

@@ -99,6 +99,7 @@ type entorno struct {
 	pool    *pgxpool.Pool
 	rdb     *redis.Client
 	correos *buzon
+	almacen *almacenFalso
 }
 
 func nuevoEntorno(t *testing.T) *entorno {
@@ -147,7 +148,8 @@ func nuevoEntorno(t *testing.T) *entorno {
 	evaluaciones := postgres.NewQuizRepo(pool)
 	insignias := postgres.NewBadgeRepo(pool)
 
-	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, users)
+	almacen := nuevoAlmacenFalso()
+	progresoSvc := progreso.NewService(avance, inscripciones, cursos, evaluaciones, insignias, almacen, users)
 	handler := httpserver.NewRouter(httpserver.Deps{
 		Auth:         authSvc,
 		Admin:        admin.NewService(users),
@@ -155,12 +157,13 @@ func nuevoEntorno(t *testing.T) *entorno {
 		Enrollments:  enrollments.NewService(inscripciones, cursos, avance),
 		Quizzes:      quizzes.NewService(evaluaciones, cursos, cursosSvc, inscripciones, progresoSvc),
 		Progreso:     progresoSvc,
+		Storage:      almacen,
 		Entrega:      entregaPorCDN{base: "https://cdn.pruebas.local"},
 		Redis:        rdb,
 		CORSOrigin:   "http://localhost:3000",
 		CookieSecure: false,
 	})
-	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos}
+	return &entorno{t: t, handler: handler, pool: pool, rdb: rdb, correos: correos, almacen: almacen}
 }
 
 // cliente conserva cookies entre peticiones, como un navegador, y reenvía el

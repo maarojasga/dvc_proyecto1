@@ -17,10 +17,13 @@ migrations/              migraciones SQL, incrustadas en el binario
 
 ## Estado
 
-Ver la tabla de cobertura del README de la raíz. En resumen: identidad
-completa, autoría y catálogo casi completos, multimedia con transcodificación
-real a HLS, y quizzes, progreso e insignias solo como dominio (con pruebas)
-todavía sin repositorio ni API.
+Ver la tabla de cobertura del README de la raíz. En resumen: el alcance mínimo
+de la sección 5.1 está cubierto de extremo a extremo —identidad y
+administración, autoría versionada, carga verificada, transcodificación a HLS,
+consumo, evaluación, progreso e insignias, y catálogo con filtros—. Lo que
+queda pertenece a las restricciones técnicas y a la demostración de
+aceptación: pruebas E2E, CI, observabilidad con OpenTelemetry, cursores y
+ETag.
 
 Las migraciones se aplican solas al arrancar la API, dentro de un
 `pg_advisory_lock` para que levantar varias instancias a la vez no las aplique
@@ -42,6 +45,11 @@ por duplicado.
 | Límite de tasa en Redis, no en memoria | El cupo es del servicio, así que escalar a N réplicas no multiplica por N el margen del atacante. |
 | Tomar un trabajo de transcodificación es un `UPDATE` condicional | Dos entregas del mismo trabajo se resuelven en la base: solo una transcodifica, así que una entrega duplicada no produce salidas repetidas. |
 | El arrendamiento del trabajo vence | Si el worker que lo tomó muere, otro lo recoge en vez de dejar el recurso atascado en `processing` para siempre. |
+| Toda carga se verifica al confirmarla, sea simple o multipart | El control no depende del camino que elija el cliente: antes bastaba con subir un archivo pequeño, que no pasaba por la multipart, para saltarse checksum, MIME y antimalware. |
+| El tipo del contenido se deduce de los bytes, no de lo declarado | `Content-Type` lo escribe quien sube. Lo que decide si un PDF es un PDF son sus primeros bytes. |
+| Un escáner que no responde rechaza la carga | Dar por limpio lo que no se pudo escanear convierte apagar el antivirus en una vía de entrada. |
+| El objeto rechazado se borra del almacén | Dejarlo conserva un archivo que no superó el control bajo una clave que el recurso ya conoce. |
+| El título del curso se escapa al dibujar la insignia | La imagen es un SVG que sirve el almacén y abre el navegador: sin escapar, un título con etiquetas sería un XSS servido por la plataforma. |
 
 ## Puesta en marcha
 
@@ -76,6 +84,18 @@ de tokens, revocación inmediata, límites de tasa, inmutabilidad de la
 auditoría— vive precisamente en esos adaptadores. Sin las dos variables se
 omiten en lugar de fallar.
 
+El almacenamiento de objetos sí se sustituye por un doble en memoria
+(`almacen_falso_test.go`): lo que verifican las pruebas de carga —integridad,
+MIME real, antimalware y reanudación— es lógica de la API, y atarlas a MinIO
+las dejaría sin ejecutar en la práctica. La firma SigV4, que sí es del
+proveedor, se prueba aparte sobre el cliente real en
+`internal/platform/storage/firma_test.go`.
+
+Este paquete y el de `postgres` comparten la base de integración y empiezan
+vaciando las mismas tablas, así que se serializan entre sí con un cerrojo
+consultivo (`internal/platform/postgres/pgtest`). Sin él, `go test ./...` los
+ejecuta en paralelo y la suite falla de forma intermitente.
+
 ## Variables de entorno
 
 | Variable | Por defecto | Para qué |
@@ -89,5 +109,6 @@ omiten en lugar de fallar.
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_USE_SSL` | — | Credenciales del almacenamiento. |
 | `PUBLIC_BASE_URL` | `http://localhost:3000` | Base de los enlaces de los correos y origen permitido por CORS. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | `localhost`, `1025`, `no-reply@mooc.local` | Servidor de correo saliente. |
+| `CLAMAV_ADDR` | — | Dirección de clamd (`host:puerto`). Vacío: escáner integrado, sin firmas. Configurado y sin respuesta: la carga se rechaza. |
 | `SESSION_TTL` | `720h` | Vigencia de la sesión. |
 | `COOKIE_SECURE` | `false` | Marca `Secure` en las cookies; actívalo con TLS delante. |

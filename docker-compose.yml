@@ -49,6 +49,27 @@ services:
       - "8025:8025"
       - "1025:1025"
 
+  # Antivirus con firmas reales. Va tras un perfil porque descarga la base de
+  # firmas en el primer arranque (varios cientos de MB) y tarda minutos en
+  # quedar listo, lo que haría insufrible un `docker compose up` cotidiano.
+  #
+  #   docker compose --profile antivirus up -d clamav
+  #   CLAMAV_ADDR=clamav:3310 docker compose up -d api
+  #
+  # Sin esto opera el escáner integrado de la API, que reconoce el vector de
+  # prueba estándar y los ejecutables, pero no lleva firmas.
+  clamav:
+    image: clamav/clamav:stable
+    profiles: ["antivirus"]
+    ports:
+      - "3310:3310"
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+
   api:
     build:
       context: ./backend
@@ -73,6 +94,9 @@ services:
       # Base publica desde la que el reproductor lee el HLS. En produccion es
       # el CDN; vacia en local, donde los objetos se firman uno a uno.
       S3_PUBLIC_URL: ${S3_PUBLIC_URL:-}
+      # Vacío: escáner antimalware integrado. Con el perfil "antivirus"
+      # levantado, "clamav:3310" añade ClamAV por delante.
+      CLAMAV_ADDR: ${CLAMAV_ADDR:-}
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_FROM: no-reply@mooc.local
