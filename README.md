@@ -33,7 +33,8 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 
 De las restricciones técnicas (sección 7) están resueltas `/api/v1`, OpenAPI
 3.1 al día con la implementación, errores uniformes, `Idempotency-Key` y
-protección CSRF. Siguen pendientes cursores, ETag y OpenTelemetry.
+protección CSRF. Siguen pendientes cursores, ETag, OpenTelemetry, el cifrado
+en reposo y la gestión externa de secretos.
 
 ### Alcance opcional (sección 5.2)
 
@@ -196,7 +197,16 @@ Cada subproyecto tiene su propio README con el detalle.
 - **Backend**: Go, monolito modular con el dominio desacoplado del framework
   HTTP y del proveedor cloud; workers independientes sin estado local.
 - **Persistencia**: PostgreSQL como fuente de verdad transaccional; Redis para
-  sesiones, caché, rate limiting y la cola (asynq).
+  el límite de tasa y la cola (asynq).
+
+  El enunciado (sección 4) pide además que Redis lleve las sesiones y la
+  caché, y aquí no las lleva. Las sesiones viven en PostgreSQL, en una tabla
+  con su hash de token, su vencimiento y su propietario: es lo que hace que
+  revocarlas sea transaccional y que sobrevivan a un reinicio de Redis, que
+  para «revocación inmediata» pesa más que el ahorro de latencia. Caché no hay
+  ninguna, sin más: con los p95 medidos —de 2 a 7 ms— no habría añadido nada
+  que no fuera una fuente de datos rancios. Las dos son desviaciones
+  conscientes de la regla, no olvidos, pero desviaciones al fin.
 - **Almacenamiento de objetos**: S3/MinIO para originales, derivados HLS, PDFs
   e imágenes de insignias; ningún binario vive en la base relacional.
 - **Frontend**: Next.js con TypeScript. El navegador llama directamente a la
