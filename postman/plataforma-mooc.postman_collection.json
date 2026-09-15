@@ -69,6 +69,15 @@
                   "pm.test(\"el login devuelve la cookie de sesión\", () => pm.expect(cookie).to.be.a(\"string\"));",
                   "if (cookie) pm.collectionVariables.set(\"tokenAdmin\", cookie.split(\";\")[0].split(\"=\")[1]);",
                   "",
+                  "// Y el token anti-CSRF, que viaja en su propia cookie y NO es httpOnly a",
+                  "// propósito: el cliente tiene que poder leerlo para repetirlo en la cabecera.",
+                  "// Lo usa el script de pre-petición de la colección; ver allí por qué.",
+                  "const csrf = pm.response.headers.all()",
+                  "  .filter(h => h.key.toLowerCase() === \"set-cookie\")",
+                  "  .map(h => h.value)",
+                  "  .find(v => v.startsWith(\"mooc_csrf=\"));",
+                  "if (csrf) pm.collectionVariables.set(\"tokenCsrf\", csrf.split(\";\")[0].split(\"=\")[1]);",
+                  "",
                   "// Y acto seguido se vacía el tarro de cookies. No es un apaño: es lo que hace",
                   "// falta para que esta colección pueda ir cambiando de papel.",
                   "//",
@@ -290,6 +299,15 @@
                   "  .find(v => v.startsWith(\"mooc_session=\"));",
                   "pm.test(\"el login devuelve la cookie de sesión\", () => pm.expect(cookie).to.be.a(\"string\"));",
                   "if (cookie) pm.collectionVariables.set(\"tokenEstudiante\", cookie.split(\";\")[0].split(\"=\")[1]);",
+                  "",
+                  "// Y el token anti-CSRF, que viaja en su propia cookie y NO es httpOnly a",
+                  "// propósito: el cliente tiene que poder leerlo para repetirlo en la cabecera.",
+                  "// Lo usa el script de pre-petición de la colección; ver allí por qué.",
+                  "const csrf = pm.response.headers.all()",
+                  "  .filter(h => h.key.toLowerCase() === \"set-cookie\")",
+                  "  .map(h => h.value)",
+                  "  .find(v => v.startsWith(\"mooc_csrf=\"));",
+                  "if (csrf) pm.collectionVariables.set(\"tokenCsrf\", csrf.split(\";\")[0].split(\"=\")[1]);",
                   "",
                   "// Y acto seguido se vacía el tarro de cookies. No es un apaño: es lo que hace",
                   "// falta para que esta colección pueda ir cambiando de papel.",
@@ -513,6 +531,15 @@
                   "  .find(v => v.startsWith(\"mooc_session=\"));",
                   "pm.test(\"el login devuelve la cookie de sesión\", () => pm.expect(cookie).to.be.a(\"string\"));",
                   "if (cookie) pm.collectionVariables.set(\"tokenProfesor\", cookie.split(\";\")[0].split(\"=\")[1]);",
+                  "",
+                  "// Y el token anti-CSRF, que viaja en su propia cookie y NO es httpOnly a",
+                  "// propósito: el cliente tiene que poder leerlo para repetirlo en la cabecera.",
+                  "// Lo usa el script de pre-petición de la colección; ver allí por qué.",
+                  "const csrf = pm.response.headers.all()",
+                  "  .filter(h => h.key.toLowerCase() === \"set-cookie\")",
+                  "  .map(h => h.value)",
+                  "  .find(v => v.startsWith(\"mooc_csrf=\"));",
+                  "if (csrf) pm.collectionVariables.set(\"tokenCsrf\", csrf.split(\";\")[0].split(\"=\")[1]);",
                   "",
                   "// Y acto seguido se vacía el tarro de cookies. No es un apaño: es lo que hace",
                   "// falta para que esta colección pueda ir cambiando de papel.",
@@ -2121,6 +2148,38 @@
           ]
         }
       ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Acompañar toda petición que cambie estado con la cabecera anti-CSRF.",
+          "//",
+          "// Postman guarda en un tarro por dominio las cookies de cada respuesta, y el",
+          "// login deja ahí mooc_session. A partir de ese momento cualquier POST, PUT o",
+          "// PATCH sale con sesión en cookie, y el middleware exige que repita en la",
+          "// cabecera X-CSRF-Token el valor de la cookie mooc_csrf. Sin ella responde",
+          "// 403 csrf_token_mismatch, y hace bien: eso es exactamente lo que la defensa",
+          "// de doble envío tiene que rechazar. El síntoma es desconcertante porque",
+          "// afecta incluso al registro, que no necesita sesión ninguna.",
+          "//",
+          "// Las peticiones de la colección se autentican con Authorization: Bearer, que",
+          "// gana a la cookie al decidir la identidad, así que la cabecera no cambia de",
+          "// papel: solo acredita que quien manda la petición puede leer la cookie, que",
+          "// es justo lo que un sitio atacante no puede hacer.",
+          "//",
+          "// Cada login refresca tokenCsrf, así que la cabecera y la cookie que el tarro",
+          "// reenvía salen siempre del mismo login.",
+          "const seguro = [\"GET\", \"HEAD\", \"OPTIONS\"].includes(pm.request.method.toUpperCase());",
+          "const csrf = pm.collectionVariables.get(\"tokenCsrf\");",
+          "if (!seguro && csrf) {",
+          "  pm.request.headers.upsert({ key: \"X-CSRF-Token\", value: csrf });",
+          "}"
+        ]
+      }
     }
   ],
   "variable": [

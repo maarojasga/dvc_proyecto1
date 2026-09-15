@@ -87,12 +87,38 @@ llegar al tope y **falla diciendo exactamente eso**, en vez de aprobar en falso.
 
 ## Dos detalles de implementación que no son manías
 
-**Se vacía el tarro de cookies después de cada login.** La colección cambia de
-papel —administrador, profesora, estudiante— y una cookie de sesión guardada se
-colaría en la petición siguiente. Pasarían dos cosas: el `Authorization: Bearer`
-dejaría de mandar, y una petición con sesión en cookie y sin `X-CSRF-Token` es
-justo lo que el middleware anti-CSRF debe rechazar. Daría `403 csrf_token_mismatch`
-y parecería un fallo del producto cuando es el producto defendiéndose bien.
+**Cada petición que cambia estado lleva la cabecera `X-CSRF-Token`, y tras cada
+login se vacía el tarro de cookies.** Son dos defensas para el mismo problema, y
+conviene entenderlo porque el síntoma desconcierta.
+
+Postman guarda en un tarro por dominio las cookies de cada respuesta, así que en
+cuanto haces un login queda ahí `mooc_session`. A partir de ese momento
+**cualquier** POST, PUT o PATCH sale con sesión en cookie, y la defensa de doble
+envío exige que repita en la cabecera el valor de la cookie `mooc_csrf`. Si no,
+responde `403 csrf_token_mismatch` — y hace bien, porque eso es exactamente lo
+que tiene que rechazar. Lo desconcertante es que afecta hasta al **registro**,
+que no necesita sesión ninguna: el middleware solo mira si llega una cookie de
+sesión, no si el endpoint la usa. En el navegador no pasa porque el frontend sí
+repite la cabecera.
+
+Vaciar el tarro sería suficiente… si funcionara siempre. En newman funciona,
+pero en la **aplicación de Postman** `pm.cookies.jar()` exige que el dominio
+esté en la lista de permitidos del gestor de cookies; si no lo está, el borrado
+no ocurre y la colección empieza a dar 403. Por eso la cabecera va además por su
+cuenta, desde el script de pre-petición de la colección: se captura `mooc_csrf`
+de la respuesta del login —que se lee sin permiso especial, igual que
+`mooc_session`— y se repite en cada petición insegura.
+
+Verificado en las dos situaciones: con el tarro vaciándose (55 peticiones, 113
+aserciones, 0 fallos) y **con el tarro intacto**, que es lo que hace la
+aplicación sin la lista de permitidos: los mismos 113 en verde. Sin la cabecera,
+ese segundo caso falla en la primera petición que cambia estado.
+
+Si aun así ves un `403 csrf_token_mismatch`, casi siempre es una petición
+repetida a mano fuera del orden de la colección, con una cookie vieja en el
+tarro. Se arregla en un clic: **Cookies** (bajo el botón Send) → dominio
+`localhost` → borra `mooc_session` y `mooc_csrf`, y vuelve a correr la carpeta 0
+para que el login los emita de nuevo.
 
 **Las consultas a Mailpit reintentan.** Mailpit indexa con un retardo pequeño
 tras aceptar el SMTP, así que la primera búsqueda puede volver vacía. Reintentar
