@@ -46,6 +46,11 @@
 #     X-Request-Id, pero no métricas ni trazas. Sin ellas no se puede ver
 #     DÓNDE se va el p95 cuando se rompe un umbral.
 #   - Cursores y ETag en las colecciones.
+#   - El escaneo de secretos usa el BINARIO de gitleaks, no gitleaks-action:
+#     la herramienta es MIT, pero el envoltorio de Action exige licencia de
+#     pago para organizaciones. Los falsos positivos ya revisados van por
+#     huella en .gitleaksignore, con su motivo; no se desactiva ninguna regla.
+#
 #   - cmd/seed se niega a correr si APP_ENV no es un entorno de pruebas. Es el
 #     control que impide crear cuentas con contraseña pública donde no debe;
 #     se puede saltar a conciencia con SEED_PERMITIR_ENTORNO=1.
