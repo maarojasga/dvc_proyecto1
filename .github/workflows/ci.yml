@@ -298,6 +298,38 @@ jobs:
           E2E_AUTH_RATE_LIMIT: 300
         run: npx playwright test
 
+      - name: Recorrido de la API por los nueve segmentos (Postman)
+        env:
+          ADMIN_EMAIL: admin@ci.local
+          ADMIN_PASSWORD: admin-clave-ci-2026
+        run: |
+          # Una colección de Postman sin ejecutar se pudre: basta con que un
+          # campo de la API cambie de nombre para que el día de la
+          # demostración devuelva 400 delante de la cámara. Aquí corre contra
+          # la misma plataforma que las E2E, así que si se desincroniza, se
+          # entera CI y no el evaluador.
+          #
+          # La carpeta 99 se queda fuera a propósito: agota el presupuesto del
+          # limitador de autenticación y dejaría sin servicio a cualquier paso
+          # posterior durante un minuto. Su comportamiento ya lo cubre
+          # frontend/e2e/99-limite-de-tasa.spec.ts.
+          npm install --no-save --prefix /tmp/newman newman
+          /tmp/newman/node_modules/.bin/newman run \
+            postman/plataforma-mooc.postman_collection.json \
+            -e postman/local.postman_environment.json \
+            --env-var adminEmail="$ADMIN_EMAIL" \
+            --env-var adminPassword="$ADMIN_PASSWORD" \
+            --folder "0 · Preparación" \
+            --folder "1 · Identidad y administración" \
+            --folder "2 · Autoría y publicación" \
+            --folder "3 · Carga multimedia" \
+            --folder "4 · Procesamiento y fallos" \
+            --folder "5 · Consumo de contenido" \
+            --folder "6 · Evaluación" \
+            --folder "7 · Progreso y aprobación" \
+            --folder "8 · Insignia" \
+            --folder "9 · Operación"
+
       - name: Sembrar los datos sintéticos de la prueba de carga
         env:
           SEED_STUDENTS: 250

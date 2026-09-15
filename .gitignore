@@ -9,8 +9,12 @@
 # LO QUE ESTÁ ACREDITADO (condición de aceptación, sección 10)
 # ---------------------------------------------------------------------
 #   - Los nueve flujos críticos, con 34 pruebas E2E en frontend/e2e/.
-#   - Prueba de carga de Etapa 1 ejecutada: 42.175 peticiones a 200 VU,
-#     0 % de error, p95 de 3 a 7 ms.
+#   - Prueba de carga de Etapa 1 ejecutada: 42.075 peticiones a 200 VU en
+#     4 min, 0 % de error, p95 de 2 ms (catalogo), 5 ms (consumo), 5 ms
+#     (quiz) y 277 ms (login).
+#   - Recorrido de la API por los nueve segmentos con la coleccion de
+#     postman/: 55 peticiones, 113 aserciones, y corre en CI para que no
+#     se desincronice de la API.
 #   - Auditoría de accesibilidad con axe-core (WCAG 2.2 A y AA) sobre 13
 #     pantallas, en español y en inglés: cero violaciones.
 #   - Pipeline de CI con build, lint, análisis de seguridad, migraciones,
@@ -36,7 +40,7 @@
 #
 #   - NO presentar la prueba de carga como caracterización del sistema. Con
 #     los márgenes actuales, sus umbrales detectan una regresión grosera y
-#     poco más. El único número informativo es el p95 del login (272 ms), y
+#     poco más. El único número informativo es el p95 del login (277 ms), y
 #     lo que mide es Argon2id, que cuesta a propósito.
 #
 # ---------------------------------------------------------------------
