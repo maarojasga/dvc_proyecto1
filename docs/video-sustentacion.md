@@ -206,7 +206,13 @@ solo, sin tocar configuración: eso es lo que hace que la API sea escalable
 horizontalmente de verdad.
 
 **No corras k6 en directo**: son cuatro minutos de barra de progreso. Enseña el
-informe que ya tienes y la tabla de `load/README.md`: 42.075 peticiones en cuatro
+resumen de la corrida que hiciste antes de grabar, que cabe en pantalla:
+
+```bash
+python3 load/leer-resumen.py load/salida/resumen-etapa1.json
+```
+
+y la tabla de `load/README.md`: 42.075 peticiones en cuatro
 minutos, 0 % de error, p95 de 2 ms en catálogo, 5 ms en consumo, 5 ms en quiz y
 277 ms en login. Explica el 277 ms del login antes de que te lo pregunten:
 **Argon2id está calibrado para costar**; medirlo con el rasero de una lectura

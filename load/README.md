@@ -78,6 +78,40 @@ VUS_OBJETIVO=600 MESETA=5m docker compose --profile carga run --rm k6
 Sembrar es idempotente: repetir `seed` reutiliza el curso y las cuentas que ya
 existan, así que repetir la prueba no multiplica datos.
 
+La regla que no conviene saltarse al subir el escalón: **`SEED_STUDENTS` nunca
+por debajo de `VUS_OBJETIVO`**. Con menos cuentas que usuarios virtuales, dos VU
+comparten estudiante y se pisan el intento; `setup()` corta antes de empezar y
+dice cuánto sembrar, pero es más rápido no provocarlo.
+
+## Cómo leer el resultado
+
+k6 sale con código 99 si rompe un umbral, así que lo primero es el código de
+salida. Para lo demás, el resumen tiene cientos de líneas:
+
+```bash
+python3 load/leer-resumen.py load/salida/resumen-etapa1.json
+```
+
+```
+escenario     p95 (ms)
+catalogo           2.0
+consumo            4.9
+quiz               5.1
+login            276.6
+
+peticiones:     42075
+errores:        0.000 %
+comprobaciones: 44818 pasadas, 0 fallidas
+umbrales rotos: ninguno
+
+La corrida vale: los cuatro escenarios hicieron tráfico y ningún umbral se rompió.
+```
+
+Además de los umbrales comprueba **que los cuatro escenarios hicieron tráfico**,
+que es justamente lo que aquel informe verde de más abajo no comprobaba: un
+escenario que no llega a hacer una sola petición no aparece en el resumen, y su
+ausencia es lo que hay que detectar. Sale con código 1 si algo falla.
+
 ## Dos decisiones que conviene entender antes de leer los números
 
 **Las sesiones se siembran, no se obtienen por el endpoint de login.** El
