@@ -139,9 +139,19 @@ jobs:
           npm audit --audit-level=high --omit=dev
 
       - name: gitleaks (secretos en el historial)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # El binario, no gitleaks/gitleaks-action. La herramienta es MIT y
+          # gratuita; lo que exige licencia de pago para organizaciones es el
+          # envoltorio de Action, que aquí no aporta nada: escanea lo mismo.
+          #
+          # Los hallazgos ya revisados y descartados van por huella en
+          # .gitleaksignore, con su motivo escrito. No se desactiva ninguna
+          # regla: una huella deja de coincidir en cuanto el archivo cambia, y
+          # entonces el hallazgo vuelve a aparecer.
+          go install github.com/zricethezav/gitleaks/v8@latest
+          # `git` y no `dir`: recorre el historial, porque un secreto borrado
+          # en el último commit sigue estando en los anteriores.
+          gitleaks git --no-banner --redact --verbose .
 
   # ---------------------------------------------------------------------
   # Migraciones y pruebas con Postgres real. Los dobles no acreditan que una
