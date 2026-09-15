@@ -5,6 +5,10 @@ segmentos, qué evidencia aporta cada uno y contra qué criterio se evalúa. Lo 
 sigue es esa tabla convertida en pasos ejecutables sobre este repositorio, con
 una nota honesta en cada segmento sobre qué se puede demostrar hoy y qué no.
 
+Este documento dice **qué** demostrar. Cómo grabarlo —en qué orden, en qué
+pantalla, qué decir mientras se ve y qué no conviene afirmar— está en
+[`video-sustentacion.md`](video-sustentacion.md).
+
 ## Requisitos formales (sección 10.1)
 
 - La demostración se ejecuta **con datos sintéticos sobre el sistema desplegado
@@ -85,10 +89,14 @@ inglés, fechas incluidas.
 ### 6. Quiz
 **Criterio:** evaluación académica.
 
-Abrir un intento → enseñar en el devtools que **la respuesta correcta no llega
-al cliente** → guardados parciales → recargar la página sin perder nada →
-envío con `Idempotency-Key`, repetido, que devuelve la misma nota. Intento
-expirado por límite de tiempo.
+Abrir un intento → enseñar que **la respuesta correcta no llega al cliente** →
+guardados parciales → recargar la página sin perder nada → envío con
+`Idempotency-Key`, repetido, que devuelve la misma nota. Intento expirado por
+límite de tiempo.
+
+Este es el segmento donde conviene salir del navegador: en el panel de red el
+cuerpo del intento se lee mal, y en Postman se ve entero y con la aserción «el
+cuerpo no contiene is_correct» en verde al lado. Ver `postman/README.md`.
 
 ### 7. Progreso y aprobación
 **Criterio:** progreso e insignias.
@@ -128,7 +136,7 @@ La sección 10 exige cuatro cosas para aceptar. Las cuatro están:
 | Condición | Estado |
 |---|---|
 | Los nueve flujos críticos superan pruebas **E2E** | 34 pruebas en `frontend/e2e/`, una por segmento, contra la plataforma levantada |
-| La **prueba de carga** de Etapa 1 sin incumplimientos críticos | Ejecutada: 42.175 peticiones, 0 % de error, p95 de 3 a 7 ms |
+| La **prueba de carga** de Etapa 1 sin incumplimientos críticos | Ejecutada: 42.075 peticiones en 4 min, 0 % de error, p95 de 2 ms (catálogo), 5 ms (consumo), 5 ms (quiz) y 277 ms (login) |
 | La **auditoría de accesibilidad** sin incumplimientos críticos | axe-core sobre WCAG 2.2 A y AA en 13 pantallas, español e inglés: cero violaciones |
 | **CI** completo antes de la demostración | `.github/workflows/ci.yml` corre los cinco pasos que pide 10.1 |
 

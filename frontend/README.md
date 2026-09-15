@@ -20,7 +20,7 @@ entorno con Docker Compose.
 | | |
 |---|---|
 | Backend | Go, monolito modular + workers asíncronos (`../backend`) |
-| Frontend | Next.js 14 (App Router), React 18, TypeScript |
+| Frontend | Next.js 16 (App Router), React 18, TypeScript |
 | Integración | REST JSON contra `/api/v1`, llamado directamente por el navegador |
 | Despliegue | Docker y Docker Compose, escalable a múltiples instancias |
 

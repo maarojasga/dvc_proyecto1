@@ -1,0 +1,2161 @@
+{
+  "info": {
+    "_postman_id": "b7f0c1d2-6a9e-4f31-8c55-0e2d9a4f1b30",
+    "name": "Plataforma MOOC · Sustentación",
+    "description": "Recorrido por la API que sigue los nueve segmentos de la demostración de aceptación (sección 10.2 del enunciado), uno por carpeta.\n\nNo es un listado de endpoints: cada petición encadena la siguiente y cada una comprueba lo que su segmento tiene que acreditar. Si algo se rompe, la pestaña de pruebas lo dice con nombre y apellidos.\n\n**Lo que esta colección NO es:** la prueba de carga. Esa vive en `load/etapa1.js` y se corre con k6, que sostiene 200 usuarios concurrentes y falla la ejecución si se incumple un umbral. Postman manda peticiones de una en una y no tiene umbrales: usarlo para la carga daría un número bonito que no acredita nada.\n\n**Antes de correrla:**\n```\ndocker compose up -d --build\n```\ny define `ADMIN_EMAIL` / `ADMIN_PASSWORD` en el `.env` (siembran el administrador en el primer arranque).\n\n**Desde la terminal:**\n```\nnewman run postman/plataforma-mooc.postman_collection.json \\\n  -e postman/local.postman_environment.json\n```\n\nLa carpeta 99 se deja fuera a propósito: agota el límite de autenticación y deja al resto sin servicio un minuto.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 · Preparación",
+      "description": "Comprueba que la plataforma responde y abre la sesión del administrador sembrado con ADMIN_EMAIL / ADMIN_PASSWORD. Todo lo demás cuelga de aquí.",
+      "item": [
+        {
+          "name": "Salud de la API",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"se declara sana\", () => pm.expect(pm.response.json().status).to.eql(\"ok\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Entrar como administrador",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "// El login devuelve la sesión en una cookie httpOnly. Postman no puede leer",
+                  "// document.cookie, pero sí la cabecera Set-Cookie de la respuesta, que es de",
+                  "// donde sale el portador que usan las peticiones siguientes.",
+                  "const cookie = pm.response.headers.all()",
+                  "  .filter(h => h.key.toLowerCase() === \"set-cookie\")",
+                  "  .map(h => h.value)",
+                  "  .find(v => v.startsWith(\"mooc_session=\"));",
+                  "pm.test(\"el login devuelve la cookie de sesión\", () => pm.expect(cookie).to.be.a(\"string\"));",
+                  "if (cookie) pm.collectionVariables.set(\"tokenAdmin\", cookie.split(\";\")[0].split(\"=\")[1]);",
+                  "",
+                  "// Y acto seguido se vacía el tarro de cookies. No es un apaño: es lo que hace",
+                  "// falta para que esta colección pueda ir cambiando de papel.",
+                  "//",
+                  "// Si la cookie se queda guardada, la siguiente petición sale con la sesión de",
+                  "// quien entró antes, y pasan dos cosas. Una, que el portador del encabezado",
+                  "// Authorization deja de mandar y todo se hace con el papel equivocado. Dos,",
+                  "// que una petición que llega con sesión en cookie y sin X-CSRF-Token es",
+                  "// exactamente lo que el middleware anti-CSRF tiene que rechazar, así que",
+                  "// responde 403 csrf_token_mismatch y el fallo se lee como un error del",
+                  "// producto cuando es el producto defendiéndose bien.",
+                  "//",
+                  "// Las peticiones de aquí en adelante se autentican con Authorization: Bearer,",
+                  "// que el navegador no añade solo y por eso no está expuesto a CSRF.",
+                  "pm.cookies.jar().clear(pm.request.url, () => {});",
+                  "",
+                  "// La cookie de sesión no debe ser legible desde JavaScript de la página: si",
+                  "// lo fuera, un XSS se llevaría la sesión entera.",
+                  "const cookieCruda = pm.response.headers.all()",
+                  "  .filter(h => h.key.toLowerCase() === \"set-cookie\")",
+                  "  .map(h => h.value).find(v => v.startsWith(\"mooc_session=\"));",
+                  "pm.test(\"la cookie de sesión es httpOnly\", () => pm.expect(cookieCruda.toLowerCase()).to.include(\"httponly\"));",
+                  "pm.test(\"la cookie de sesión es SameSite\", () => pm.expect(cookieCruda.toLowerCase()).to.include(\"samesite\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 · Identidad y administración",
+      "description": "Segmento 1 del guion: alta de estudiante con su correo de verificación, invitación de profesor (no hay autorregistro), y el rechazo auditado de una operación no autorizada.",
+      "item": [
+        {
+          "name": "Registrar un estudiante",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailEstudiante}}\",\n  \"password\": \"{{claveEstudiante}}\",\n  \"full_name\": \"Estudiante de la demostración\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Una marca por ejecución evita que dos pasadas seguidas choquen con el mismo",
+                  "// correo o el mismo slug: ese choque se leería como un fallo del producto.",
+                  "const marca = Date.now().toString(36);",
+                  "pm.collectionVariables.set(\"marca\", marca);",
+                  "pm.collectionVariables.set(\"emailEstudiante\", `estudiante-${marca}@demo.local`);",
+                  "pm.collectionVariables.set(\"emailProfesor\", `profesor-${marca}@demo.local`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"el alta se acepta con 202\", () => pm.response.to.have.status(202));",
+                  "pm.test(\"la cuenta NO queda utilizable todavía\", () => {",
+                  "  // 202 y no 201: la cuenta existe pero no está verificada. Si respondiera",
+                  "  // 200 con una sesión, el correo de verificación no serviría de nada.",
+                  "  pm.expect(pm.response.headers.get(\"set-cookie\") || \"\").to.not.include(\"mooc_session=\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buscar el correo de verificación",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{mailpitUrl}}/api/v1/search?query=to:{{emailEstudiante}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = pm.response.json();",
+                  "const mensajes = cuerpo.messages || [];",
+                  "",
+                  "// Mailpit indexa con un pequeño retardo tras aceptar el SMTP, así que la",
+                  "// primera consulta puede llegar en vacío. Se reintenta la misma petición en",
+                  "// vez de dar por hecho que el correo no se envió: ese falso negativo costaría",
+                  "// media hora de depuración en mitad de una grabación.",
+                  "const intentos = Number(pm.collectionVariables.get(\"reintentosCorreo\") || 0);",
+                  "if (mensajes.length === 0 && intentos < 20) {",
+                  "  pm.collectionVariables.set(\"reintentosCorreo\", intentos + 1);",
+                  "  // setNextRequest cambió de sitio: en Postman moderno vive en pm.execution y el",
+                  "  // nombre suelto avisa de deprecación en cada vuelta del bucle. Se usa el nuevo",
+                  "  // cuando existe y el viejo cuando no, para que la colección corra igual en una",
+                  "  // instalación de hace un par de años.",
+                  "  const irA = (n) => (pm.execution && pm.execution.setNextRequest)",
+                  "    ? pm.execution.setNextRequest(n)",
+                  "    : postman.setNextRequest(n);",
+                  "  irA(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.set(\"reintentosCorreo\", 0);",
+                  "  pm.test(\"la plataforma envió el correo\", () =>",
+                  "    pm.expect(mensajes.length, \"Mailpit no tiene ningún mensaje para esa dirección tras 20 intentos\").to.be.above(0));",
+                  "  pm.collectionVariables.set(\"mensajeEstudiante\", mensajes[0].ID);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Abrir el correo y sacar el token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{mailpitUrl}}/api/v1/message/{{mensajeEstudiante}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = pm.response.json();",
+                  "const texto = (cuerpo.Text || \"\") + (cuerpo.HTML || \"\");",
+                  "const encontrado = texto.match(/token=([A-Za-z0-9._-]+)/);",
+                  "pm.test(\"el correo trae un enlace con token\", () => pm.expect(encontrado, \"no hay token en el cuerpo del correo\").to.not.be.null);",
+                  "pm.collectionVariables.set(\"tokenVerificacion\", encontrado[1]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verificar la cuenta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/verify-email",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{tokenVerificacion}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"el enlace del correo verifica la cuenta\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Entrar como estudiante",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailEstudiante}}\",\n  \"password\": \"{{claveEstudiante}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "// El login devuelve la sesión en una cookie httpOnly. Postman no puede leer",
+                  "// document.cookie, pero sí la cabecera Set-Cookie de la respuesta, que es de",
+                  "// donde sale el portador que usan las peticiones siguientes.",
+                  "const cookie = pm.response.headers.all()",
+                  "  .filter(h => h.key.toLowerCase() === \"set-cookie\")",
+                  "  .map(h => h.value)",
+                  "  .find(v => v.startsWith(\"mooc_session=\"));",
+                  "pm.test(\"el login devuelve la cookie de sesión\", () => pm.expect(cookie).to.be.a(\"string\"));",
+                  "if (cookie) pm.collectionVariables.set(\"tokenEstudiante\", cookie.split(\";\")[0].split(\"=\")[1]);",
+                  "",
+                  "// Y acto seguido se vacía el tarro de cookies. No es un apaño: es lo que hace",
+                  "// falta para que esta colección pueda ir cambiando de papel.",
+                  "//",
+                  "// Si la cookie se queda guardada, la siguiente petición sale con la sesión de",
+                  "// quien entró antes, y pasan dos cosas. Una, que el portador del encabezado",
+                  "// Authorization deja de mandar y todo se hace con el papel equivocado. Dos,",
+                  "// que una petición que llega con sesión en cookie y sin X-CSRF-Token es",
+                  "// exactamente lo que el middleware anti-CSRF tiene que rechazar, así que",
+                  "// responde 403 csrf_token_mismatch y el fallo se lee como un error del",
+                  "// producto cuando es el producto defendiéndose bien.",
+                  "//",
+                  "// Las peticiones de aquí en adelante se autentican con Authorization: Bearer,",
+                  "// que el navegador no añade solo y por eso no está expuesto a CSRF.",
+                  "pm.cookies.jar().clear(pm.request.url, () => {});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Quién soy",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const yo = pm.response.json();",
+                  "pm.test(\"el rol es estudiante\", () => pm.expect(yo.role).to.eql(\"student\"));",
+                  "pm.test(\"la cuenta quedó activa tras verificar\", () => pm.expect(yo.status).to.eql(\"active\"));",
+                  "pm.collectionVariables.set(\"idEstudiante\", yo.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invitar a un profesor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/teachers",
+            "description": "No existe autorregistro de profesores: el rol solo lo concede un administrador.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailProfesor}}\",\n  \"full_name\": \"Profesora de la demostración\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 201\", () => pm.response.to.have.status(201));",
+                  "const u = pm.response.json();",
+                  "pm.test(\"nace con rol de profesor\", () => pm.expect(u.role).to.eql(\"teacher\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Buscar la invitación",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{mailpitUrl}}/api/v1/search?query=to:{{emailProfesor}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = pm.response.json();",
+                  "const mensajes = cuerpo.messages || [];",
+                  "",
+                  "// Mailpit indexa con un pequeño retardo tras aceptar el SMTP, así que la",
+                  "// primera consulta puede llegar en vacío. Se reintenta la misma petición en",
+                  "// vez de dar por hecho que el correo no se envió: ese falso negativo costaría",
+                  "// media hora de depuración en mitad de una grabación.",
+                  "const intentos = Number(pm.collectionVariables.get(\"reintentosCorreo\") || 0);",
+                  "if (mensajes.length === 0 && intentos < 20) {",
+                  "  pm.collectionVariables.set(\"reintentosCorreo\", intentos + 1);",
+                  "  // setNextRequest cambió de sitio: en Postman moderno vive en pm.execution y el",
+                  "  // nombre suelto avisa de deprecación en cada vuelta del bucle. Se usa el nuevo",
+                  "  // cuando existe y el viejo cuando no, para que la colección corra igual en una",
+                  "  // instalación de hace un par de años.",
+                  "  const irA = (n) => (pm.execution && pm.execution.setNextRequest)",
+                  "    ? pm.execution.setNextRequest(n)",
+                  "    : postman.setNextRequest(n);",
+                  "  irA(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.set(\"reintentosCorreo\", 0);",
+                  "  pm.test(\"la plataforma envió el correo\", () =>",
+                  "    pm.expect(mensajes.length, \"Mailpit no tiene ningún mensaje para esa dirección tras 20 intentos\").to.be.above(0));",
+                  "  pm.collectionVariables.set(\"mensajeProfesor\", mensajes[0].ID);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Abrir la invitación y sacar el token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{mailpitUrl}}/api/v1/message/{{mensajeProfesor}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const cuerpo = pm.response.json();",
+                  "const texto = (cuerpo.Text || \"\") + (cuerpo.HTML || \"\");",
+                  "const encontrado = texto.match(/token=([A-Za-z0-9._-]+)/);",
+                  "pm.test(\"el correo trae un enlace con token\", () => pm.expect(encontrado, \"no hay token en el cuerpo del correo\").to.not.be.null);",
+                  "pm.collectionVariables.set(\"tokenInvitacion\", encontrado[1]);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Establecer la contraseña del profesor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/password/reset-confirm",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{tokenInvitacion}}\",\n  \"new_password\": \"{{claveProfesor}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"la contraseña queda establecida\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Entrar como profesor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{emailProfesor}}\",\n  \"password\": \"{{claveProfesor}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "",
+                  "// El login devuelve la sesión en una cookie httpOnly. Postman no puede leer",
+                  "// document.cookie, pero sí la cabecera Set-Cookie de la respuesta, que es de",
+                  "// donde sale el portador que usan las peticiones siguientes.",
+                  "const cookie = pm.response.headers.all()",
+                  "  .filter(h => h.key.toLowerCase() === \"set-cookie\")",
+                  "  .map(h => h.value)",
+                  "  .find(v => v.startsWith(\"mooc_session=\"));",
+                  "pm.test(\"el login devuelve la cookie de sesión\", () => pm.expect(cookie).to.be.a(\"string\"));",
+                  "if (cookie) pm.collectionVariables.set(\"tokenProfesor\", cookie.split(\";\")[0].split(\"=\")[1]);",
+                  "",
+                  "// Y acto seguido se vacía el tarro de cookies. No es un apaño: es lo que hace",
+                  "// falta para que esta colección pueda ir cambiando de papel.",
+                  "//",
+                  "// Si la cookie se queda guardada, la siguiente petición sale con la sesión de",
+                  "// quien entró antes, y pasan dos cosas. Una, que el portador del encabezado",
+                  "// Authorization deja de mandar y todo se hace con el papel equivocado. Dos,",
+                  "// que una petición que llega con sesión en cookie y sin X-CSRF-Token es",
+                  "// exactamente lo que el middleware anti-CSRF tiene que rechazar, así que",
+                  "// responde 403 csrf_token_mismatch y el fallo se lee como un error del",
+                  "// producto cuando es el producto defendiéndose bien.",
+                  "//",
+                  "// Las peticiones de aquí en adelante se autentican con Authorization: Bearer,",
+                  "// que el navegador no añade solo y por eso no está expuesto a CSRF.",
+                  "pm.cookies.jar().clear(pm.request.url, () => {});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Un estudiante NO puede crear cursos",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses",
+            "description": "La autorización se comprueba en el servidor, no escondiendo el botón.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slug\": \"intento-no-autorizado-{{marca}}\",\n  \"title\": \"No debería existir\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 403\", () => pm.response.to.have.status(403));",
+                  "pm.test(\"con un código de error legible\", () => pm.expect(pm.response.json().error.code).to.eql(\"forbidden\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sesiones activas del estudiante",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/sessions"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const s = pm.response.json();",
+                  "const lista = s.items || s;",
+                  "pm.test(\"hay al menos una sesión\", () => pm.expect(lista.length).to.be.above(0));",
+                  "pm.test(\"la sesión actual viene marcada\", () => pm.expect(lista.some(x => x.current)).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "La bitácora registra lo ocurrido",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/audit?limit=20"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const items = pm.response.json().items;",
+                  "pm.test(\"la bitácora no está vacía\", () => pm.expect(items.length).to.be.above(0));",
+                  "pm.test(\"cada entrada dice quién, qué y cuándo\", () => {",
+                  "  const e = items[0];",
+                  "  pm.expect(e).to.have.property(\"action\");",
+                  "  pm.expect(e).to.have.property(\"entity_type\");",
+                  "  pm.expect(e).to.have.property(\"created_at\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 · Autoría y publicación",
+      "description": "Segmento 2: borrador, estructura, el rechazo de publicación con la lista EXHAUSTIVA de motivos, la publicación y la inmutabilidad de lo publicado.",
+      "item": [
+        {
+          "name": "Crear el borrador",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slug\": \"demo-{{marca}}\",\n  \"title\": \"Curso de la demostración\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 201\", () => pm.response.to.have.status(201));",
+                  "const c = pm.response.json();",
+                  "pm.collectionVariables.set(\"cursoId\", c.course_id);",
+                  "pm.collectionVariables.set(\"versionId\", c.version_id);",
+                  "pm.test(\"nace como versión 1\", () => pm.expect(c.version_number).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publicar incompleto: se rechaza con TODOS los motivos",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}/publish",
+            "description": "La condición de aceptación pide la lista completa de motivos, no el primero que falle: si no, publicar es un juego de adivinanzas."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 422\", () => pm.response.to.have.status(422));",
+                  "const err = pm.response.json().error;",
+                  "pm.test(\"enumera más de un motivo\", () => pm.expect(err.details.length, JSON.stringify(err.details)).to.be.above(1));",
+                  "pm.test(\"los motivos son legibles\", () => err.details.forEach(d => pm.expect(d).to.be.a(\"string\").and.not.empty));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Completar los metadatos",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Curso de la demostración\",\n  \"summary\": \"Curso sintético para la sustentación.\",\n  \"description_md\": \"Creado por la colección de Postman.\",\n  \"category\": \"Demostración\",\n  \"level\": \"Introductorio\",\n  \"language\": \"es\",\n  \"approval_min_score\": 60,\n  \"approval_required_resources_pct\": 100\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"acepta los metadatos\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Añadir un módulo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}/modules",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Módulo 1\",\n  \"position\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 201\", () => pm.response.to.have.status(201));",
+                  "const m = pm.response.json();",
+                  "pm.collectionVariables.set(\"moduloId\", m.ID || m.id);",
+                  "pm.test(\"recibe un stable_id propio\", () => pm.expect(m.StableID || m.stable_id).to.be.a(\"string\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Añadir una unidad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}/modules/{{moduloId}}/units",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Unidad 1\",\n  \"position\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 201\", () => pm.response.to.have.status(201));",
+                  "const u = pm.response.json();",
+                  "pm.collectionVariables.set(\"unidadId\", u.ID || u.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Añadir una lección de texto",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}/units/{{unidadId}}/resources",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"text\",\n  \"title\": \"Lección de apertura\",\n  \"position\": 1,\n  \"visible\": true,\n  \"required\": true,\n  \"downloadable\": false,\n  \"text_content_md\": \"## Lección de apertura\\n\\nContenido de la lección.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.collectionVariables.set(\"recursoTexto\", r.ID || r.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Añadir un quiz",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}/units/{{unidadId}}/resources",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"quiz\",\n  \"title\": \"Evaluación final\",\n  \"position\": 2,\n  \"visible\": true,\n  \"required\": true,\n  \"downloadable\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 201\", () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.collectionVariables.set(\"recursoQuiz\", r.ID || r.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Definir las preguntas del quiz",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}/resources/{{recursoQuiz}}/quiz",
+            "description": "Aquí sí viaja is_correct: lo envía la profesora. Lo que no puede viajar es de vuelta al estudiante, y eso se comprueba en el segmento 6.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Evaluación final\",\n  \"pass_score\": 60,\n  \"feedback_policy\": \"after_submit\",\n  \"shuffle_questions\": false,\n  \"questions\": [\n    {\n      \"prompt_md\": \"¿Cuál es la opción correcta?\",\n      \"type\": \"single\",\n      \"points\": 1,\n      \"options\": [\n        {\n          \"text_md\": \"La correcta\",\n          \"is_correct\": true\n        },\n        {\n          \"text_md\": \"Un distractor\",\n          \"is_correct\": false\n        }\n      ]\n    },\n    {\n      \"prompt_md\": \"¿Y aquí?\",\n      \"type\": \"single\",\n      \"points\": 1,\n      \"options\": [\n        {\n          \"text_md\": \"También la correcta\",\n          \"is_correct\": true\n        },\n        {\n          \"text_md\": \"Otro distractor\",\n          \"is_correct\": false\n        }\n      ]\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"acepta la definición\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Publicar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}/publish"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"ahora sí publica\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"queda publicada\", () => pm.expect(pm.response.json().status).to.eql(\"published\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lo publicado es inmutable",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionId}}",
+            "description": "Editar una versión publicada cambiaría bajo los pies de quien ya está matriculado. Los cambios van por un borrador de actualización.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Intento de cambiar lo ya publicado\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 409\", () => pm.response.to.have.status(409));",
+                  "pm.test(\"dice por qué\", () => pm.expect(pm.response.json().error.code).to.eql(\"version_not_draft\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 · Carga multimedia",
+      "description": "Segmento 3, la parte que se puede acreditar sin un navegador: la API no recibe el binario, emite una URL prefirmada contra el almacén. La reanudación tras cortar la red y el rechazo del vector EICAR se enseñan en la interfaz.",
+      "item": [
+        {
+          "name": "Crear un borrador aparte para la multimedia",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slug\": \"media-{{marca}}\",\n  \"title\": \"Curso multimedia\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const c = pm.response.json();",
+                  "pm.collectionVariables.set(\"versionMedia\", c.version_id);",
+                  "pm.collectionVariables.set(\"cursoMedia\", c.course_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Módulo y unidad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionMedia}}/modules",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Módulo 1\",\n  \"position\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const m = pm.response.json();",
+                  "pm.collectionVariables.set(\"moduloMedia\", m.ID || m.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unidad",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionMedia}}/modules/{{moduloMedia}}/units",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Unidad 1\",\n  \"position\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const u = pm.response.json();",
+                  "pm.collectionVariables.set(\"unidadMedia\", u.ID || u.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Declarar un recurso de vídeo",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionMedia}}/units/{{unidadMedia}}/resources",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"video\",\n  \"title\": \"Clase grabada\",\n  \"position\": 1,\n  \"visible\": true,\n  \"required\": true,\n  \"downloadable\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.collectionVariables.set(\"recursoVideo\", r.ID || r.id);",
+                  "pm.test(\"nace sin procesar\", () => pm.expect(r.ProcessingStatus || r.processing_status).to.be.oneOf([\"none\", \"pending\"]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pedir la URL de subida",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenProfesor}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/courses/versions/{{versionMedia}}/resources/{{recursoVideo}}/upload-url",
+            "description": "El binario nunca pasa por la API: sube directo al almacén con una firma de vigencia corta.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mime_type\": \"video/mp4\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const cuerpo = pm.response.json();",
+                  "const url = cuerpo.upload_url || cuerpo.url || cuerpo.URL;",
+                  "pm.test(\"devuelve una URL de subida\", () => pm.expect(url).to.be.a(\"string\"));",
+                  "pm.test(\"va firmada (SigV4), no lleva la clave secreta\", () => {",
+                  "  pm.expect(url).to.include(\"X-Amz-Signature\");",
+                  "  pm.expect(url).to.not.include(pm.collectionVariables.get(\"claveProfesor\"));",
+                  "});",
+                  "pm.test(\"caduca: la firma tiene vigencia\", () => pm.expect(url).to.include(\"X-Amz-Expires\"));",
+                  "pm.test(\"apunta al almacén, no a la API\", () => {",
+                  "  const api = pm.collectionVariables.get(\"baseUrl\").replace(/^https?:\\/\\//, \"\");",
+                  "  const destino = url.replace(/^https?:\\/\\//, \"\");",
+                  "  pm.expect(destino.startsWith(api + \"/\"), `la URL de subida sale de la propia API: ${destino}`).to.be.false;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4 · Procesamiento y fallos",
+      "description": "Segmento 4: el estado de las colas y la cola de fallidos, que es lo que se enseña en el panel cuando un trabajo agota sus reintentos.",
+      "item": [
+        {
+          "name": "Estado de las colas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/queues"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const c = pm.response.json();",
+                  "pm.test(\"informa de las colas\", () => pm.expect(c).to.have.property(\"queues\"));",
+                  "pm.test(\"informa de la cola de fallidos\", () => pm.expect(c).to.have.property(\"dead_letter\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5 · Consumo de contenido",
+      "description": "Segmento 5: el curso aparece en el catálogo público, el estudiante se inscribe y recibe el contenido.",
+      "item": [
+        {
+          "name": "Catálogo público (sin sesión)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/catalog"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const items = pm.response.json().items;",
+                  "const mio = items.find(c => (c.CourseID || c.course_id) === pm.collectionVariables.get(\"cursoId\"));",
+                  "pm.test(\"el curso recién publicado está en el catálogo\", () => pm.expect(mio, \"no aparece el curso\").to.not.be.undefined);",
+                  "pm.test(\"el borrador de multimedia NO está\", () => {",
+                  "  const media = items.find(c => (c.CourseID || c.course_id) === pm.collectionVariables.get(\"cursoMedia\"));",
+                  "  pm.expect(media, \"un borrador no puede salir en el catálogo\").to.be.undefined;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inscribirse",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/enrollments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"course_id\": \"{{cursoId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 201\", () => pm.response.to.have.status(201));",
+                  "const e = pm.response.json();",
+                  "pm.collectionVariables.set(\"inscripcionId\", e.ID || e.id);",
+                  "pm.test(\"queda activa\", () => pm.expect((e.Status || e.status)).to.eql(\"active\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Leer la lección",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/resources/{{recursoTexto}}/content"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const r = pm.response.json();",
+                  "pm.test(\"llega el contenido\", () => pm.expect(r.markdown).to.be.a(\"string\").and.not.empty);",
+                  "pm.test(\"no filtra la ruta interna del almacén\", () => pm.expect(pm.response.text()).to.not.include(\"object_key\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6 · Evaluación",
+      "description": "Segmento 6, y el sitio donde esta colección aporta lo que un vídeo del navegador no enseña bien: el cuerpo crudo del intento, sin la respuesta correcta, y el envío repetido que devuelve la misma nota.",
+      "item": [
+        {
+          "name": "Abrir un intento",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/resources/{{recursoQuiz}}/quiz/attempts",
+            "description": "LA comprobación del segmento: la respuesta correcta no sale del servidor.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 201\", () => pm.response.to.have.status(201));",
+                  "const a = pm.response.json();",
+                  "pm.collectionVariables.set(\"intentoId\", a.attempt_id);",
+                  "pm.collectionVariables.set(\"preguntaId\", a.questions[0].stable_id);",
+                  "pm.collectionVariables.set(\"opcionId\", a.questions[0].options[0].stable_id);",
+                  "pm.collectionVariables.set(\"pregunta2Id\", a.questions[1].stable_id);",
+                  "pm.collectionVariables.set(\"opcion2Id\", a.questions[1].options[0].stable_id);",
+                  "",
+                  "// El cuerpo CRUDO, no el objeto: así no hay forma de que un campo anidado se",
+                  "// escape de la comprobación.",
+                  "const crudo = pm.response.text();",
+                  "pm.test(\"el cuerpo no contiene is_correct\", () => pm.expect(crudo).to.not.include(\"is_correct\"));",
+                  "pm.test(\"el cuerpo no contiene correct\", () => pm.expect(crudo.toLowerCase()).to.not.include(\"\\\"correct\"));",
+                  "pm.test(\"cada opción solo trae su id y su texto\", () => {",
+                  "  a.questions.forEach(q => q.options.forEach(o => {",
+                  "    pm.expect(Object.keys(o).sort()).to.eql([\"stable_id\", \"text_md\"]);",
+                  "  }));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Guardar una respuesta (parcial)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/quiz/attempts/{{intentoId}}/answers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question_stable_id\": \"{{preguntaId}}\",\n  \"selected_option_stable_ids\": [\n    \"{{opcionId}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"se guarda\", () => pm.expect(pm.response.json().status).to.eql(\"saved\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Guardar la segunda",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/quiz/attempts/{{intentoId}}/answers",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"question_stable_id\": \"{{pregunta2Id}}\",\n  \"selected_option_stable_ids\": [\n    \"{{opcion2Id}}\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"se guarda\", () => pm.expect(pm.response.json().status).to.eql(\"saved\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recargar el intento: no se pierde nada",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/quiz/attempts/{{intentoId}}",
+            "description": "Equivale a recargar la página a mitad del examen."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const a = pm.response.json();",
+                  "pm.test(\"sigue en curso\", () => pm.expect(a.status).to.eql(\"in_progress\"));",
+                  "pm.test(\"las dos respuestas siguen ahí\", () => pm.expect(Object.keys(a.answers).length).to.eql(2));",
+                  "pm.test(\"al recargar tampoco llega is_correct\", () => pm.expect(pm.response.text()).to.not.include(\"is_correct\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Enviar con Idempotency-Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveIdempotencia}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/quiz/attempts/{{intentoId}}/submit",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set(\"claveIdempotencia\", `envio-${pm.collectionVariables.get(\"marca\")}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const a = pm.response.json();",
+                  "pm.test(\"queda enviado\", () => pm.expect(a.status).to.eql(\"submitted\"));",
+                  "pm.collectionVariables.set(\"notaPrimera\", JSON.stringify(a.score ?? a.grade ?? a.nota ?? null));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reenviar con la MISMA clave: misma nota",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{claveIdempotencia}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/quiz/attempts/{{intentoId}}/submit",
+            "description": "Un corte de red al pulsar «enviar» no puede costar un intento.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const a = pm.response.json();",
+                  "const nota = JSON.stringify(a.score ?? a.grade ?? a.nota ?? null);",
+                  "pm.test(\"la nota es exactamente la misma\", () => pm.expect(nota).to.eql(pm.collectionVariables.get(\"notaPrimera\")));",
+                  "pm.test(\"no abrió un intento nuevo\", () => pm.expect(a.attempt_id).to.eql(pm.collectionVariables.get(\"intentoId\")));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7 · Progreso y aprobación",
+      "description": "Segmento 7: el porcentaje lo calcula el servidor. El cliente solo puede decir «abrí», «sigo aquí» y «cerré», y una señal implausible se descarta y se audita.",
+      "item": [
+        {
+          "name": "Abrir la lección",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/resources/{{recursoTexto}}/progress",
+            "description": "Fíjate en lo que NO admite el cuerpo: no hay ningún campo de porcentaje que el cliente pueda inflar.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"open\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const p = pm.response.json();",
+                  "pm.test(\"el servidor devuelve SU porcentaje\", () => pm.expect(p.required_percent).to.be.a(\"number\"));",
+                  "pm.collectionVariables.set(\"porcentajeInicial\", p.required_percent);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Latido inmediato: implausible, no acredita",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/resources/{{recursoTexto}}/progress",
+            "description": "Llega antes del intervalo mínimo, así que no suma tiempo — y deja huella en la bitácora.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"heartbeat\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"el porcentaje no se movió\", () =>",
+                  "  pm.expect(pm.response.json().required_percent).to.eql(pm.collectionVariables.get(\"porcentajeInicial\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "El descarte quedó auditado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/audit?action=progress.rejected&limit=5"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const items = pm.response.json().items;",
+                  "pm.test(\"hay una entrada progress.rejected\", () => pm.expect(items.length).to.be.above(0));",
+                  "pm.test(\"dice de quién y por qué\", () => {",
+                  "  pm.expect(items[0].actor_id).to.be.a(\"string\");",
+                  "  pm.expect(JSON.stringify(items[0].metadata)).to.include(\"heartbeat\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cerrar la lección como completada",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/resources/{{recursoTexto}}/progress",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"close\",\n  \"complete\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const p = pm.response.json();",
+                  "pm.test(\"ahora sí sube el porcentaje\", () =>",
+                  "  pm.expect(p.required_percent).to.be.above(pm.collectionVariables.get(\"porcentajeInicial\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resumen de progreso del curso",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/enrollments/{{cursoId}}/progress"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const p = pm.response.json();",
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"con el quiz aprobado y el texto completado, la inscripción queda aprobada\", () =>",
+                  "  pm.expect(p.status).to.eql(\"approved\"));",
+                  "pm.test(\"no quedan quices pendientes\", () => pm.expect(p.quizzes_pending).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8 · Insignia",
+      "description": "Segmento 8: emisión única, verificación pública SIN datos personales, credencial Open Badges 3.0 firmada y revocación auditada.",
+      "item": [
+        {
+          "name": "Mis insignias",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/badges/mine"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const items = pm.response.json().items;",
+                  "pm.test(\"se emitió exactamente una insignia\", () => pm.expect(items.length).to.eql(1));",
+                  "pm.collectionVariables.set(\"codigoInsignia\", items[0].code);",
+                  "pm.test(\"está vigente\", () => pm.expect(items[0].valid).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verificación pública (SIN sesión)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/badges/{{codigoInsignia}}",
+            "description": "Cualquiera puede verificarla. Nadie puede sacar de ahí quién es el estudiante: esa es la condición de aceptación del segmento."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200 sin autenticación\", () => pm.response.to.have.status(200));",
+                  "const crudo = pm.response.text();",
+                  "pm.test(\"NO aparece el correo del estudiante\", () =>",
+                  "  pm.expect(crudo).to.not.include(pm.collectionVariables.get(\"emailEstudiante\")));",
+                  "pm.test(\"NO aparece el id del estudiante\", () =>",
+                  "  pm.expect(crudo).to.not.include(pm.collectionVariables.get(\"idEstudiante\")));",
+                  "pm.test(\"NO aparece la palabra email\", () => pm.expect(crudo.toLowerCase()).to.not.include(\"email\"));",
+                  "pm.test(\"sí dice si es válida y cuándo se emitió\", () => {",
+                  "  const v = pm.response.json();",
+                  "  pm.expect(v.valid).to.be.true;",
+                  "  pm.expect(v.issued_at).to.be.a(\"string\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Credencial Open Badges 3.0",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/badges/{{codigoInsignia}}/openbadge"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const c = pm.response.json();",
+                  "pm.test(\"declara el contexto de Open Badges 3.0\", () =>",
+                  "  pm.expect(JSON.stringify(c[\"@context\"])).to.include(\"ob/v3p0\"));",
+                  "pm.test(\"es una VerifiableCredential\", () => pm.expect(c.type).to.include(\"VerifiableCredential\"));",
+                  "pm.test(\"tiene emisor\", () => pm.expect(c.issuer.name).to.be.a(\"string\").and.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "La credencial firmada (VC-JWT)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/badges/{{codigoInsignia}}/openbadge.jwt"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const jwt = pm.response.text().trim();",
+                  "const partes = jwt.split(\".\");",
+                  "pm.test(\"es un JWT de tres partes\", () => pm.expect(partes.length).to.eql(3));",
+                  "const cab = JSON.parse(Buffer.from(partes[0], \"base64\").toString(\"utf8\"));",
+                  "pm.test(\"va firmada con Ed25519\", () => pm.expect(cab.alg).to.eql(\"EdDSA\"));",
+                  "pm.test(\"dice con qué clave, para poder rotarla\", () => pm.expect(cab.kid).to.be.a(\"string\").and.not.empty);",
+                  "pm.collectionVariables.set(\"kidInsignia\", cab.kid);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "La clave pública está publicada (JWKS)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/.well-known/jwks.json",
+            "description": "Sin esto la firma no la puede comprobar nadie de fuera."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const k = pm.response.json().keys;",
+                  "pm.test(\"publica al menos una clave\", () => pm.expect(k.length).to.be.above(0));",
+                  "pm.test(\"la clave que firmó está ahí\", () =>",
+                  "  pm.expect(k.some(x => x.kid === pm.collectionVariables.get(\"kidInsignia\"))).to.be.true);",
+                  "pm.test(\"es pública: no lleva la parte privada\", () =>",
+                  "  k.forEach(x => pm.expect(x).to.not.have.property(\"d\")));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Revocar la insignia",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/badges/{{codigoInsignia}}/revoke",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Demostración de la revocación\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "La verificación ya dice que no vale",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/badges/{{codigoInsignia}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const v = pm.response.json();",
+                  "pm.test(\"deja de ser válida\", () => pm.expect(v.valid).to.be.false);",
+                  "pm.test(\"y consta cuándo se revocó\", () => pm.expect(v.revoked_at).to.be.a(\"string\"));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "9 · Operación",
+      "description": "Segmento 9. El grueso de este segmento (escalado horizontal y prueba de carga) NO va aquí: va en k6, que es lo que tiene umbrales y falla la ejecución al incumplirlos. Postman aporta las métricas agregadas.",
+      "item": [
+        {
+          "name": "Métricas agregadas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenAdmin}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/metrics"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 200\", () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json();",
+                  "[\"usuarios\", \"cursos\", \"inscripciones\", \"insignias\", \"evaluaciones\"].forEach(k =>",
+                  "  pm.test(`informa de ${k}`, () => pm.expect(m).to.have.property(k)));",
+                  "pm.test(\"cuenta el curso publicado en esta pasada\", () => pm.expect(m.cursos.total).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Un estudiante no ve las métricas",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{tokenEstudiante}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/metrics"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"responde 403\", () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "99 · Límite de tasa (opcional, va el último)",
+      "description": "Agota a propósito el presupuesto de intentos de autenticación, así que deja sin servicio al resto de la colección durante un minuto. Por eso va al final y por eso está fuera de la ejecución normal: córrelo con\n  newman run ... --folder \"99 · Límite de tasa (opcional, va el último)\"\ncontra una API con AUTH_RATE_LIMIT_PER_MINUTE en su valor de producción (10).",
+      "item": [
+        {
+          "name": "Fuerza bruta: el limitador corta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"contraseña-equivocada\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const n = Number(pm.collectionVariables.get(\"intentosHechos\") || 0);",
+                  "pm.collectionVariables.set(\"intentosHechos\", n + 1);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const n = Number(pm.collectionVariables.get(\"intentosHechos\"));",
+                  "const tope = Number(pm.collectionVariables.get(\"intentosLimite\") || 40);",
+                  "",
+                  "if (pm.response.code === 429) {",
+                  "  pm.test(`el limitador corta en el intento ${n}`, () => pm.expect(true).to.be.true);",
+                  "  pm.test(\"dice que es por límite de tasa\", () =>",
+                  "    pm.expect(pm.response.json().error.code).to.eql(\"rate_limited\"));",
+                  "  pm.collectionVariables.set(\"intentosHechos\", 0);",
+                  "} else {",
+                  "  pm.test(\"mientras no corta, rechaza la credencial (401), no la acepta\", () =>",
+                  "    pm.expect(pm.response.code).to.eql(401));",
+                  "  if (n < tope) {",
+                  "    // setNextRequest cambió de sitio: en Postman moderno vive en pm.execution y el",
+                  "    // nombre suelto avisa de deprecación en cada vuelta del bucle. Se usa el nuevo",
+                  "    // cuando existe y el viejo cuando no, para que la colección corra igual en una",
+                  "    // instalación de hace un par de años.",
+                  "    const irA = (n) => (pm.execution && pm.execution.setNextRequest)",
+                  "      ? pm.execution.setNextRequest(n)",
+                  "      : postman.setNextRequest(n);",
+                  "    irA(\"Fuerza bruta: el limitador corta\");",
+                  "  } else {",
+                  "    pm.collectionVariables.set(\"intentosHechos\", 0);",
+                  "    pm.test(",
+                  "      `se alcanzó el tope de ${tope} intentos sin recibir 429: ` +",
+                  "      \"AUTH_RATE_LIMIT_PER_MINUTE está por encima de ese tope \" +",
+                  "      \"(la suite E2E lo sube a 300). Bájalo al valor de producción o sube intentosLimite.\",",
+                  "      () => pm.expect.fail(\"no se alcanzó el 429\"));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "description": "La API, a través del proxy que publica el compose."
+    },
+    {
+      "key": "mailpitUrl",
+      "value": "http://localhost:8025",
+      "description": "Buzón de pruebas. De aquí salen los enlaces de verificación e invitación."
+    },
+    {
+      "key": "adminEmail",
+      "value": "admin@mooc.local",
+      "description": "El ADMIN_EMAIL del .env."
+    },
+    {
+      "key": "adminPassword",
+      "value": "cambiar-esta-clave",
+      "description": "El ADMIN_PASSWORD del .env."
+    },
+    {
+      "key": "claveEstudiante",
+      "value": "demo-clave-larga-2026"
+    },
+    {
+      "key": "claveProfesor",
+      "value": "demo-clave-larga-2026"
+    },
+    {
+      "key": "intentosLimite",
+      "value": "40",
+      "description": "Tope de intentos de la carpeta 99 antes de darse por vencida."
+    }
+  ]
+}
