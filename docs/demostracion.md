@@ -80,7 +80,7 @@ teclado. Aprovechar para enseñar el cambio de idioma: la interfaz entera pasa a
 inglés, fechas incluidas.
 
 > La auditoría automática de accesibilidad cubre esta pantalla:
-> `frontend/e2e/accesibilidad.spec.ts` la audita con axe en los dos idiomas.
+> `frontend/e2e/10-accesibilidad.spec.ts` la audita con axe en los dos idiomas.
 
 ### 6. Quiz
 **Criterio:** evaluación académica.

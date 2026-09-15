@@ -2,10 +2,10 @@ import { test, expect } from "@playwright/test";
 import {
   API,
   conToken,
-  credencialesDeAdmin,
-  entrarPorLaInterfaz,
+    entrarPorLaInterfaz,
   registrarEstudiante,
   sufijo,
+  tokenDeAdmin,
   tokenDeSesion,
 } from "./ayudas";
 import { publicarCursoDePrueba } from "./preparar-curso";
@@ -18,8 +18,7 @@ import { publicarCursoDePrueba } from "./preparar-curso";
  */
 test.describe("5. Consumo de contenido", () => {
   test("el contenido solo se entrega a quien está inscrito", async ({ request }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
 
     const estudiante = await registrarEstudiante(request, sufijo());
@@ -51,8 +50,7 @@ test.describe("5. Consumo de contenido", () => {
     page,
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
     const estudiante = await registrarEstudiante(request, sufijo());
 

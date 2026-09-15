@@ -225,12 +225,37 @@ jobs:
             echo "ADMIN_EMAIL=$ADMIN_EMAIL"
             echo "ADMIN_PASSWORD=$ADMIN_PASSWORD"
             echo "PUBLIC_BASE_URL=http://localhost:3000"
-            # Los inicios de sesión por el navegador de la suite salen todos
-            # de la misma IP; con el valor de producción se ahogarían entre
-            # ellos. Las llamadas de API usan una IP propia por prueba, así
-            # que sí corren contra el límite real.
-            echo "AUTH_RATE_LIMIT_PER_MINUTE=100"
+            # Toda la suite sale de una misma IP y el límite se cuenta por
+            # IP, así que con el valor de producción las pruebas se ahogan
+            # entre ellas. No se puede esquivar inyectando X-Forwarded-For:
+            # el proxy lo sobrescribe con la dirección real, que es
+            # justamente el control que impide saltarse el límite rotando
+            # una cabecera.
+            #
+            # Cien inicios de sesión por minuto desde una máquina es un
+            # artefacto de las pruebas, no un patrón de uso. El limitador se
+            # ejercita aparte, en 99-limite-de-tasa.spec.ts, que corre el
+            # último porque agota el presupuesto a propósito.
+            echo "AUTH_RATE_LIMIT_PER_MINUTE=300"
           } >> .env
+
+          # Comprobar que la configuración del .env LLEGA a los contenedores
+          # antes de construir nada. Compose usa el .env para interpolar este
+          # archivo, no para inyectar variables en los procesos: lo que no
+          # está declarado en el `environment:` del servicio no llega, y el
+          # servicio arranca con su valor por defecto sin decir nada. Pasó con
+          # AUTH_RATE_LIMIT_PER_MINUTE, y el síntoma fueron veintitantas
+          # pruebas en 429 que parecían un fallo del limitador.
+          #
+          # Va antes del `up` a propósito: falla en segundos en vez de después
+          # de construir las imágenes y correr la suite entera.
+          pip install --quiet pyyaml
+          docker compose config > /tmp/compose-resuelto.yml
+          python3 .github/scripts/verificar-entorno.py /tmp/compose-resuelto.yml \
+            api:AUTH_RATE_LIMIT_PER_MINUTE=300 \
+            api:ADMIN_EMAIL="$ADMIN_EMAIL" \
+            api:PUBLIC_BASE_URL=http://localhost:3000
+
           docker compose up -d --build
           # Compose da el contenedor por arrancado en cuanto el proceso vive;
           # que la API responda es otra cosa.
@@ -260,7 +285,7 @@ jobs:
           E2E_MAILPIT_URL: http://localhost:8025
           E2E_ADMIN_EMAIL: admin@ci.local
           E2E_ADMIN_PASSWORD: admin-clave-ci-2026
-          E2E_AUTH_RATE_LIMIT: 100
+          E2E_AUTH_RATE_LIMIT: 300
         run: npx playwright test
 
       - name: Sembrar los datos sintéticos de la prueba de carga

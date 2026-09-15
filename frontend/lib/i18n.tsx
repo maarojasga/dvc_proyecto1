@@ -1204,6 +1204,11 @@ export function useI18n(): Contexto {
 export function useTraductorEstable(): Traducir {
   const { t } = useI18n();
   const actual = useRef(t);
-  actual.current = t;
+  // La ref se actualiza en un efecto, no durante el render: con el render
+  // concurrente React puede descartar un render a medias, y una escritura
+  // hecha ahí se habría aplicado igual.
+  useEffect(() => {
+    actual.current = t;
+  }, [t]);
   return useCallback<Traducir>((clave, valores) => actual.current(clave, valores), []);
 }

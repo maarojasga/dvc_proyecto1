@@ -313,6 +313,18 @@ docker compose --profile carga run --rm seed   # 500 cuentas, un curso, sesiones
 docker compose --profile carga run --rm k6     # prueba de carga de Etapa 1
 ```
 
+**MinIO se descarga de quay.io, no de Docker Hub.** MinIO dejó de publicar su
+imagen de forma pública allí: `docker pull minio/minio` responde ahora «pull
+access denied … may require 'docker login'». No es un límite de descargas ni un
+fallo pasajero, y tumbó una corrida del CI. El compose apunta al registro propio
+de MinIO a través de `MINIO_IMAGE`, para que otra mudanza sea un cambio en el
+`.env` y no una edición del compose.
+
+Las demás imágenes llevan versión fija —`mailpit:v1.22`, `clamav:1.4.3`,
+`k6:1.8.1`, `nginx:1.27-alpine`— porque una etiqueta móvil hace que dos
+ejecuciones del mismo commit puedan no ser la misma cosa. La de MinIO es la
+única que sigue en `:latest`, y está anotada como deuda.
+
 La API dejó de publicar el puerto 8080 en el host: ahora lo hace un proxy nginx
 y las instancias quedan detrás, así que `docker compose up -d --scale api=3`
 funciona y el escalamiento a múltiples instancias que pide el criterio de
@@ -342,6 +354,46 @@ cd frontend && npm run e2e          # los nueve flujos y la accesibilidad
 Las E2E necesitan la plataforma en marcha y el administrador sembrado
 (`E2E_ADMIN_EMAIL` y `E2E_ADMIN_PASSWORD`). Levantan un navegador de verdad:
 no simulan la API.
+
+### Por qué Next va en 16 y no en 14
+
+El paso de análisis de seguridad del CI tumbó la rama: `next@14.2.35` arrastra
+más de veinte advisories, varios críticos —ejecución remota en el optimizador
+de imágenes con AVIF, SSRF en rewrites, envenenamiento de caché en respuestas
+de React Server Components, XSS en App Router— y `postcss`, que entra como
+dependencia suya, otros cuatro de severidad alta.
+
+No había forma de arreglarlo sin subir de versión mayor: se comprobó que
+`15.5.25` todavía deja uno crítico y que solo `16.3.5` los cierra todos. Next
+16 acepta React 18, así que el salto no obligó a migrar React. Lo que sí
+arrastró fue ESLint 9 con configuración plana, porque `eslint-config-next@16`
+lo exige, y la desaparición de `next lint`, que ahora es `eslint .`.
+
+El salto se validó con la suite completa —34 pruebas E2E, la auditoría de
+accesibilidad, las 29 unitarias y la compilación—, que es exactamente para lo
+que estaba. Ninguna falló.
+
+Dos cosas se corrigieron de paso, porque el episodio las puso a la vista:
+
+- **El Dockerfile del frontend ignoraba el lockfile** (`COPY package.json` y
+  `npm install`), así que la imagen desplegada resolvía versiones frescas y
+  podía no ser la que validaron las pruebas. Ahora copia `package-lock.json` y
+  usa `npm ci`.
+- **`next` pasa a `^16.3.5` en vez de un pin exacto.** Un pin exacto es
+  justamente cómo `14.2.35` se quedó quieto mientras acumulaba advisories; con
+  el lockfile y `npm ci`, la reproducibilidad no depende de congelar el rango.
+
+Para que no vuelva a pasar, `.github/dependabot.yml` vigila npm, Go, las
+imágenes base de los contenedores y las propias acciones del pipeline. Los
+parches y las versiones menores llegan agrupados en un PR semanal; las mayores
+van sueltas y **no se ignoran**, precisamente porque la corrección de estos
+advisories era una mayor.
+
+Falta un paso que no se puede dar desde el repositorio: encender
+**Dependabot alerts** y **Dependabot security updates** en
+Settings → Code security. El archivo configura las actualizaciones de versión;
+las de seguridad son las que avisan en cuanto aparece un advisory, sin esperar
+al lunes.
 
 ### Lo que encontraron estas pruebas
 

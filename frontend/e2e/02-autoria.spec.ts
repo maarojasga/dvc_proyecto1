@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { API, conToken, credencialesDeAdmin, sufijo, tokenDeSesion } from "./ayudas";
+import {
+  API,
+  conToken,
+  credencialesDeAdmin,
+  entrarPorLaInterfaz,
+  sufijo,
+  tokenDeAdmin,
+} from "./ayudas";
 
 /**
  * Segmento 2 — Autoría y publicación.
@@ -16,8 +23,7 @@ test.describe("2. Autoría y publicación", () => {
   test("un borrador incompleto no se publica y devuelve todos los motivos a la vez", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const marca = sufijo();
 
     const creacion = await request.post(`${API}/api/v1/courses`, {
@@ -43,8 +49,7 @@ test.describe("2. Autoría y publicación", () => {
     page,
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const marca = sufijo();
 
     const creacion = await request.post(`${API}/api/v1/courses`, {
@@ -96,12 +101,10 @@ test.describe("2. Autoría y publicación", () => {
     );
 
     // La previsualización es parte del segmento: el autor comprueba antes de
-    // publicar qué se va a encontrar quien se inscriba.
-    await page.goto("/login");
-    await page.getByLabel(/correo electrónico|email address/i).fill(admin.email);
-    await page.getByLabel(/contraseña|password/i).fill(admin.password);
-    await page.getByRole("button", { name: /ingresar|sign in/i }).click();
-    await expect(page.getByRole("button", { name: /salir|sign out/i })).toBeVisible();
+    // publicar qué se va a encontrar quien se inscriba. Aquí sí se entra por
+    // la interfaz, con su propio inicio de sesión: el token cacheado sirve
+    // para preparar el escenario por API, no para poblar el navegador.
+    await entrarPorLaInterfaz(page, credencialesDeAdmin());
 
     await page.goto(`/profesor/versiones/${versionId}/previsualizacion`);
     await expect(page.getByRole("heading", { name: /previsualización|preview/i })).toBeVisible();

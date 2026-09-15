@@ -151,7 +151,40 @@ export const options = {
  * carga, así que se corta antes de empezar.
  */
 export function setup() {
-  const cuentas = escenario.estudiantes?.length ?? 0;
+  // Cada escenario declara qué necesita del archivo sembrado. Se comprueba
+  // ENTERO antes de empezar, y no dentro de cada iteración, por una razón
+  // aprendida a golpes: cuando `recursos_texto` llegó a null, los escenarios
+  // de consumo y de quiz lanzaban una excepción por iteración y k6 las
+  // contaba como iteraciones completas. Ninguno llegó a hacer una sola
+  // petición HTTP, así que la prueba terminó informando "0 % de error" y
+  // "100 % de comprobaciones" con la mitad del tráfico sin ejecutar. Un
+  // informe verde que no ejerció lo que dice ejercer es peor que uno rojo.
+  const faltan = [];
+  const exigir = (campo, minimo, para) => {
+    const n = escenario[campo]?.length ?? 0;
+    if (n < minimo) faltan.push(`${campo}: ${n} (hacen falta ${minimo} para ${para})`);
+  };
+
+  exigir("recursos_texto", 1, "el escenario de consumo");
+  exigir("recursos_quiz", 1, "el escenario de quiz");
+  exigir("estudiantes", 1, "cualquier escenario con sesión");
+  if (!escenario.course_id) faltan.push("course_id: ausente");
+  if (!escenario.cuenta_de_prueba?.email) faltan.push("cuenta_de_prueba: ausente (escenario de login)");
+
+  if (faltan.length > 0) {
+    throw new Error(
+      `el escenario de ${ESCENARIO} está incompleto:\n  - ${faltan.join("\n  - ")}\n` +
+        `Vuelve a sembrarlo: docker compose --profile carga run --rm seed`,
+    );
+  }
+
+  // Una cuenta por usuario virtual. Con menos, dos VU comparten estudiante y
+  // mientras uno guarda respuestas el otro envía el intento: el servidor
+  // responde 409 —correctamente, porque un intento cerrado no admite más
+  // respuestas— y la prueba lo cuenta como error de la plataforma. En una
+  // corrida a 1.000 VU con 200 cuentas eso produjo un 0,6 % de "errores" sin
+  // un solo 5xx detrás.
+  const cuentas = escenario.estudiantes.length;
   if (cuentas < VUS) {
     throw new Error(
       `el escenario tiene ${cuentas} cuentas y la prueba pide ${VUS} VU: ` +

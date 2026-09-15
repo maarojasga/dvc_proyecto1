@@ -25,7 +25,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -92,8 +94,47 @@ func main() {
 	}
 }
 
+// entornosPermitidos son aquellos donde tiene sentido sembrar datos
+// sintéticos. Fuera de ellos el comando se niega a arrancar.
+var entornosPermitidos = map[string]bool{"development": true, "test": true, "ci": true}
+
+// comprobarEntorno impide que esto se ejecute donde no debe.
+//
+// Este comando crea cuentas con una contraseña pública y abre sesiones para
+// todas ellas. Contra una base de datos real sería un incidente de seguridad,
+// no un error de manejo. Durante un tiempo la única defensa fue escribir el
+// archivo de salida con permisos 0600, que no defendía de nada: el peligro no
+// es que alguien lea el archivo, es que las cuentas existan. Esto sí lo
+// detiene, y se puede saltar a conciencia con SEED_PERMITIR_ENTORNO=1 para
+// quien tenga un caso legítimo.
+func comprobarEntorno(env string) error {
+	if entornosPermitidos[strings.ToLower(strings.TrimSpace(env))] {
+		return nil
+	}
+	if os.Getenv("SEED_PERMITIR_ENTORNO") == "1" {
+		log.Printf("seed: APP_ENV=%q no es un entorno de pruebas; se continúa porque SEED_PERMITIR_ENTORNO=1", env)
+		return nil
+	}
+	return fmt.Errorf(
+		"APP_ENV=%q: este comando crea cuentas con una contraseña pública y abre sus sesiones, "+
+			"así que solo corre en %v. Si de verdad hace falta aquí, SEED_PERMITIR_ENTORNO=1",
+		env, clavesOrdenadas(entornosPermitidos))
+}
+
+func clavesOrdenadas(m map[string]bool) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
 func ejecutar() error {
 	cfg := config.Load()
+	if err := comprobarEntorno(cfg.Env); err != nil {
+		return err
+	}
 	ctx := context.Background()
 
 	estudiantes := enteroDelEntorno("SEED_STUDENTS", 500)
@@ -190,10 +231,25 @@ func construirCurso(
 		if err != nil {
 			return fmt.Errorf("versión publicada: %w", err)
 		}
+		// GetVersion trae la fila de la versión, no su árbol. Sin esta línea
+		// la reutilización producía un escenario con recursos_texto y
+		// recursos_quiz a null, y la prueba de carga se quedaba con dos de sus
+		// cuatro escenarios muertos sin decirlo.
+		v.Modules, err = courseRepo.LoadTree(ctx, v.ID)
+		if err != nil {
+			return fmt.Errorf("árbol de la versión publicada: %w", err)
+		}
 		salida.CourseID = c.ID.String()
 		salida.VersionID = v.ID.String()
 		clasificarRecursos(v, salida)
-		log.Printf("seed: reutilizando el curso %s ya publicado", slugDelCurso)
+		if len(salida.RecursosTexto) == 0 || len(salida.RecursosQuiz) == 0 {
+			return fmt.Errorf(
+				"el curso %s ya publicado no tiene recursos utilizables (texto: %d, quiz: %d); "+
+					"despublícalo o cambia el slug para volver a construirlo",
+				slugDelCurso, len(salida.RecursosTexto), len(salida.RecursosQuiz))
+		}
+		log.Printf("seed: reutilizando el curso %s ya publicado (%d recursos de texto, %d quiz)",
+			slugDelCurso, len(salida.RecursosTexto), len(salida.RecursosQuiz))
 		return nil
 	}
 
@@ -372,12 +428,24 @@ func escribir(destino string, s Salida) error {
 	if err != nil {
 		return err
 	}
-	// 0600 y no 0644: este archivo lleva tokens de sesión en claro, uno por
-	// estudiante. Son de cuentas sintéticas de un entorno de pruebas, pero un
-	// token de sesión legible por cualquier usuario de la máquina es un hábito
-	// que no conviene tener, y el día que alguien apunte esto a un entorno que
-	// no debía, la diferencia importa.
-	return os.WriteFile(destino, b, 0o600)
+	// 0644 y no 0600, a sabiendas de que gosec prefiere lo segundo.
+	//
+	// Este archivo es una pieza compartida: lo escribe este contenedor y lo
+	// leen el contenedor de k6 (que corre con otro usuario), el runner que
+	// recoge la evidencia de la corrida, y quien quiera lanzar k6 de forma
+	// nativa. Estuvo en 0600 y el resultado no fue un sistema más seguro, fue
+	// una prueba de carga que no arrancaba: "permission denied" al abrir el
+	// escenario. Un permiso que impide leer a quien tiene que leer no protege,
+	// rompe.
+	//
+	// Lo que de verdad protegía era otra cosa, y ahora existe: comprobarEntorno
+	// se niega a sembrar fuera de un entorno de pruebas. El riesgo no era que
+	// alguien leyera estos tokens, era que las cuentas se crearan donde no
+	// debían.
+	//
+	// #nosec G306 -- fixture compartido entre contenedores y usuarios; el
+	// control efectivo es comprobarEntorno, no el modo del archivo.
+	return os.WriteFile(destino, b, 0o644)
 }
 
 func enteroDelEntorno(clave string, porDefecto int) int {

@@ -13,28 +13,23 @@ export function sufijo(): string {
 }
 
 /**
- * ipDePrueba inventa una dirección distinta para cada llamada.
+ * Nota sobre el límite de tasa y por qué esta suite lo sube.
  *
- * El límite de tasa de autenticación cuenta por IP, y toda la suite sale de
- * una sola. Sin esto, las pruebas se agotan el presupuesto entre ellas y las
- * últimas fallan con un 429 que no tiene nada que ver con lo que probaban.
+ * El limitador de autenticación cuenta por IP, y toda la suite sale de una
+ * sola. Hubo una versión de estos ayudantes que inyectaba un X-Forwarded-For
+ * distinto en cada llamada para no compartir presupuesto; funcionaba contra la
+ * API directamente y dejó de funcionar en cuanto las pruebas pasaron por el
+ * proxy, porque nginx sobrescribe esa cabecera con la dirección real del
+ * cliente. Eso no es un estorbo: es el control que impide que cualquiera se
+ * salte el límite rotando una cabecera, y quitarlo para que la suite quepa
+ * sería desactivar lo que se quiere probar.
  *
- * La alternativa era subir el límite durante las pruebas, pero entonces la
- * suite mediría un límite inventado y no el que va a producción. Así se corre
- * contra el valor real —diez por minuto—, que es lo que interesa comprobar.
- *
- * Funciona porque la API lee X-Forwarded-For, como debe hacer detrás de un
- * proxy. En el despliegue eso no es un agujero: nginx sobrescribe la cabecera
- * con la dirección real del cliente, así que un valor inventado por el
- * navegador no llega nunca a la API. Y tampoco podría inventarlo: la cabecera
- * no está en Access-Control-Allow-Headers, así que el preflight la rechaza.
- * Solo un cliente que hable directo con la API —como estos ayudantes— puede
- * ponerla.
+ * Así que la suite corre con AUTH_RATE_LIMIT_PER_MINUTE elevado y lo dice.
+ * Cien inicios de sesión por minuto desde una misma máquina es un artefacto
+ * de las pruebas, no un patrón de uso real. El limitador se ejercita aparte,
+ * en 99-limite-de-tasa.spec.ts, que corre el último porque agota el
+ * presupuesto a propósito.
  */
-export function ipDePrueba(): string {
-  const b = () => Math.floor(Math.random() * 254) + 1;
-  return `198.51.${b()}.${b()}`;
-}
 
 export interface Cuenta {
   email: string;
@@ -87,7 +82,6 @@ export async function registrarEstudiante(
     fullName: `Estudiante ${marca}`,
   };
   const alta = await request.post(`${API}/api/v1/auth/register`, {
-    headers: { "X-Forwarded-For": ipDePrueba() },
     data: { email: cuenta.email, password: cuenta.password, full_name: cuenta.fullName },
   });
   expect(alta.status(), "el registro público debe aceptarse").toBe(202);
@@ -124,8 +118,7 @@ export async function tokenDeSesion(
   const ctx = await clienteHTTP.newContext();
   try {
     const res = await ctx.post(`${API}/api/v1/auth/login`, {
-      headers: { "X-Forwarded-For": ipDePrueba() },
-      data: { email, password },
+        data: { email, password },
     });
     expect(res.ok(), `login de ${email}: ${res.status()} ${await res.text()}`).toBeTruthy();
     const sesion = res
@@ -159,6 +152,32 @@ export async function entrarPorLaInterfaz(page: Page, cuenta: Cuenta) {
   await page.getByLabel(/contraseña|password/i).fill(cuenta.password);
   await page.getByRole("button", { name: /ingresar|sign in/i }).click();
   await expect(page.getByRole("button", { name: /salir|sign out/i })).toBeVisible();
+}
+
+/**
+ * tokenDeAdmin devuelve la sesión del administrador, abriéndola una sola vez.
+ *
+ * Casi todas las pruebas necesitan al administrador para preparar su
+ * escenario. Autenticarlo en cada una gastaba veintitantos inicios de sesión
+ * del presupuesto del limitador sin probar nada: el inicio de sesión ya tiene
+ * sus propias pruebas en el segmento 1. Una sesión vale para toda la suite
+ * porque es revocable, no de un solo uso.
+ */
+let sesionDeAdmin: Promise<string> | null = null;
+
+export function tokenDeAdmin(request: APIRequestContext): Promise<string> {
+  if (!sesionDeAdmin) {
+    const admin = credencialesDeAdmin();
+    sesionDeAdmin = tokenDeSesion(request, admin.email, admin.password).catch((e) => {
+      // Una promesa rechazada en la caché envenenaría el resto de la suite:
+      // toda prueba posterior heredaría este fallo sin volver a intentarlo, y
+      // el reintento de Playwright tampoco serviría de nada. Se limpia para
+      // que el siguiente uso vuelva a autenticar.
+      sesionDeAdmin = null;
+      throw e;
+    });
+  }
+  return sesionDeAdmin;
 }
 
 /**

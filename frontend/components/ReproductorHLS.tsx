@@ -46,8 +46,15 @@ export function ReproductorHLS({
   const ref = useRef<HTMLMediaElement | null>(null);
   // El callback se guarda en una referencia para que cambiarlo no reinicie la
   // reproducción: el efecto solo debe rehacerse si cambia la fuente.
+  //
+  // La asignación va en un efecto y no en el cuerpo del componente: escribir
+  // una ref durante el render rompe con el render concurrente, donde React
+  // puede empezar un render, descartarlo y volver a empezar. El efecto corre
+  // una sola vez por commit, que es cuando el valor nuevo ya es el bueno.
   const alReportar = useRef(onPosicion);
-  alReportar.current = onPosicion;
+  useEffect(() => {
+    alReportar.current = onPosicion;
+  }, [onPosicion]);
 
   useEffect(() => {
     const media = ref.current;

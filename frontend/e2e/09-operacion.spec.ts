@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { API, conToken, ipDePrueba, registrarEstudiante, sufijo, tokenDeSesion } from "./ayudas";
+import { API, conToken, registrarEstudiante, sufijo, tokenDeSesion } from "./ayudas";
 
 /**
  * Segmento 9 — Operación.
@@ -49,36 +49,5 @@ test.describe("9. Operación", () => {
       otra.headers()["x-request-id"],
       "y es distinto en cada petición, que es lo que lo hace útil",
     ).not.toBe(id);
-  });
-
-  test("el límite de tasa protege la autenticación por IP", async ({ request }) => {
-    // Se ataca el restablecimiento de contraseña y no el login, aunque cuenten
-    // en el mismo cubo ("auth"): verificar una contraseña cuesta un Argon2id
-    // deliberadamente lento, y agotar el presupuesto a golpe de login mediría
-    // el coste del hash en vez del limitador.
-    //
-    // Con una IP propia, esta prueba corre contra el límite real de producción
-    // y no contra uno inflado para que la suite quepa.
-    const email = `inexistente-${sufijo()}@e2e.local`;
-    const ip = ipDePrueba();
-    const limite = Number(process.env.E2E_AUTH_RATE_LIMIT ?? 10);
-
-    let limitado = false;
-    for (let i = 0; i < limite + 5 && !limitado; i++) {
-      const res = await request.post(`${API}/api/v1/auth/password/reset-request`, {
-        headers: { "X-Forwarded-For": ip },
-        data: { email },
-      });
-      limitado = res.status() === 429;
-    }
-
-    expect(limitado, `insistir por encima de ${limite}/min desde la misma IP acaba en 429`).toBeTruthy();
-
-    // Y el límite es por IP, no global: otra dirección sigue pudiendo entrar.
-    const otra = await request.post(`${API}/api/v1/auth/password/reset-request`, {
-      headers: { "X-Forwarded-For": ipDePrueba() },
-      data: { email },
-    });
-    expect(otra.status(), "otra IP no arrastra el castigo de la primera").not.toBe(429);
   });
 });

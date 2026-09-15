@@ -7,6 +7,7 @@ import {
   entrarPorLaInterfaz,
   registrarEstudiante,
   sufijo,
+  tokenDeAdmin,
   tokenDeSesion,
 } from "./ayudas";
 import { publicarCursoDePrueba } from "./preparar-curso";
@@ -66,8 +67,7 @@ test.describe("Auditoría de accesibilidad (WCAG 2.2 AA)", () => {
   });
 
   test("las pantallas del estudiante", async ({ page, request }) => {
-    const admin = credencialesDeAdmin();
-    const tokenProfesor = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenProfesor = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, tokenProfesor);
 
     const estudiante = await registrarEstudiante(request, sufijo());
@@ -105,15 +105,10 @@ test.describe("Auditoría de accesibilidad (WCAG 2.2 AA)", () => {
   });
 
   test("las pantallas de autoría y administración", async ({ page, request }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const curso = await publicarCursoDePrueba(request, token);
 
-    await entrarPorLaInterfaz(page, {
-      email: admin.email,
-      password: admin.password,
-      fullName: "Administrador",
-    });
+    await entrarPorLaInterfaz(page, credencialesDeAdmin());
 
     await page.goto("/profesor");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();

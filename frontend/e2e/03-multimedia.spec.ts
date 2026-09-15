@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { API, conToken, credencialesDeAdmin, sufijo, tokenDeSesion } from "./ayudas";
+import { API, conToken, credencialesDeAdmin, sufijo, tokenDeAdmin,
+  tokenDeSesion } from "./ayudas";
 import { createHash } from "node:crypto";
 
 /**
@@ -67,8 +68,7 @@ test.describe("3. Carga multimedia", () => {
   test("el binario viaja directo al almacén con URL prefirmada y se verifica su checksum", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const { versionId, resourceId } = await recursoBinario(request, token, "pdf");
 
     const firma = await request.post(
@@ -99,8 +99,7 @@ test.describe("3. Carga multimedia", () => {
   });
 
   test("un checksum que no coincide se rechaza", async ({ request }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const { versionId, resourceId } = await recursoBinario(request, token, "pdf");
 
     const { upload_url: url } = await (
@@ -119,8 +118,7 @@ test.describe("3. Carga multimedia", () => {
   });
 
   test("el contenido real manda sobre el tipo declarado", async ({ request }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const { versionId, resourceId } = await recursoBinario(request, token, "pdf");
 
     const { upload_url: url } = await (
@@ -145,8 +143,7 @@ test.describe("3. Carga multimedia", () => {
   });
 
   test("el escaneo antimalware rechaza el vector de prueba estándar", async ({ request }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const { versionId, resourceId } = await recursoBinario(request, token, "file");
 
     const { upload_url: url } = await (
@@ -167,8 +164,7 @@ test.describe("3. Carga multimedia", () => {
   test("una carga multipart interrumpida se reanuda sin reenviar lo que ya llegó", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const token = await tokenDeSesion(request, admin.email, admin.password);
+    const token = await tokenDeAdmin(request);
     const { versionId, resourceId } = await recursoBinario(request, token, "file");
     const base = `${API}/api/v1/courses/versions/${versionId}/resources/${resourceId}/multipart`;
 

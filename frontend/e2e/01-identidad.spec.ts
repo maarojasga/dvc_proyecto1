@@ -2,10 +2,10 @@ import { test, expect } from "@playwright/test";
 import {
   API,
   conToken,
-  credencialesDeAdmin,
-  entrarPorLaInterfaz,
+    entrarPorLaInterfaz,
   registrarEstudiante,
   sufijo,
+  tokenDeAdmin,
   tokenDeSesion,
   CLAVE_VALIDA,
 } from "./ayudas";
@@ -103,8 +103,7 @@ test.describe("1. Identidad y administración", () => {
   test("la administración invita profesores, suspende cuentas y lo deja en la bitácora", async ({
     request,
   }) => {
-    const admin = credencialesDeAdmin();
-    const tokenAdmin = await tokenDeSesion(request, admin.email, admin.password);
+    const tokenAdmin = await tokenDeAdmin(request);
     const marca = sufijo();
 
     // Los profesores no se autorregistran: los da de alta la administración.

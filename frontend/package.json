@@ -2,11 +2,14 @@
   "name": "mooc-frontend",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -16,7 +19,7 @@
   },
   "dependencies": {
     "hls.js": "^1.7.2",
-    "next": "14.2.35",
+    "next": "^16.3.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -27,8 +30,8 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "axe-core": "^4.13.0",
-    "eslint": "^8.57.0",
-    "eslint-config-next": "14.2.35",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.5",
     "typescript": "^5.5.4",
     "vitest": "^2.1.9"
   }

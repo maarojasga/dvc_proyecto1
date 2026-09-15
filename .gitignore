@@ -46,6 +46,29 @@
 #     X-Request-Id, pero no métricas ni trazas. Sin ellas no se puede ver
 #     DÓNDE se va el p95 cuando se rompe un umbral.
 #   - Cursores y ETag en las colecciones.
+#   - cmd/seed se niega a correr si APP_ENV no es un entorno de pruebas. Es el
+#     control que impide crear cuentas con contraseña pública donde no debe;
+#     se puede saltar a conciencia con SEED_PERMITIR_ENTORNO=1.
+#
+#   - Al añadir una variable de entorno nueva, declararla en el
+#     `environment:` del servicio en docker-compose.yml. Ponerla solo en el
+#     .env NO la inyecta en el contenedor: Compose usa el .env para interpolar
+#     el archivo. El servicio arranca con su valor por defecto y no avisa. Hay
+#     un guardián en .github/scripts/verificar-entorno.py que lo comprueba en
+#     el CI antes de levantar nada.
+#
+#   - Fijar MINIO_IMAGE a una release concreta. MinIO dejó de publicar su
+#     imagen de forma publica en Docker Hub, asi que el compose apunta a
+#     quay.io con la etiqueta movil :latest. Las demas imagenes si llevan
+#     version; esta es la unica que no.
+#
+#   - ENCENDER las alertas de Dependabot en el repositorio. El archivo
+#     .github/dependabot.yml ya está, pero solo configura las actualizaciones
+#     de VERSIÓN (las programadas). Las de SEGURIDAD hay que activarlas en
+#     Settings -> Code security -> Dependabot, y son las que avisan en cuanto
+#     aparece un advisory. Sin ese paso, el hueco que dejó pudrirse a Next 14
+#     hasta veinte advisories sigue abierto: `npm audit` en el CI solo mira
+#     cuando alguien empuja.
 #   - Backup y restauración con su prueba de recuperación.
 #   - Fallos inyectados durante la carga (tirar una réplica a mitad de la
 #     meseta y demostrar que el p95 se recupera).
