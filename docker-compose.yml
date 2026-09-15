@@ -210,6 +210,10 @@ services:
       target: seed
     profiles: ["carga"]
     environment:
+      # Explícito y no por defecto: el sembrador se niega a correr fuera de un
+      # entorno de pruebas, y un control de seguridad que depende de un valor
+      # implícito es el que deja de cumplirse el día que algo cambia.
+      APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgres://${POSTGRES_USER:-mooc}:${POSTGRES_PASSWORD:-mooc}@postgres:5432/${POSTGRES_DB:-mooc}?sslmode=disable
       REDIS_ADDR: redis:6379
       SEED_STUDENTS: ${SEED_STUDENTS:-500}

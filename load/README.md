@@ -101,12 +101,12 @@ sembradas y un curso de 27 recursos.
 
 | Métrica | Umbral | Medido a 200 VU | Margen |
 |---|---|---|---|
-| Peticiones | — | 42.175 en 4 min | — |
+| Peticiones | — | 42.075 en 4 min | — |
 | Tasa de error | < 0,5 % | **0,000 %** | — |
-| p95 catálogo | < 400 ms | **3 ms** | 133× |
-| p95 consumo | < 600 ms | **7 ms** | 86× |
-| p95 quiz | < 900 ms | **7 ms** | 129× |
-| p95 login | < 2000 ms | **272 ms** | 7,4× |
+| p95 catálogo | < 400 ms | **2 ms** | 200× |
+| p95 consumo | < 600 ms | **5 ms** | 120× |
+| p95 quiz | < 900 ms | **5 ms** | 180× |
+| p95 login | < 2000 ms | **277 ms** | 7,2× |
 | Comprobaciones | > 99 % | **100 %** | — |
 
 Etapa 1 pasa sin acercarse a ningún umbral. Conviene leer eso con cuidado:
@@ -114,6 +114,28 @@ Etapa 1 pasa sin acercarse a ningún umbral. Conviene leer eso con cuidado:
 todavía**. Sirven para detectar una regresión grosera, no para caracterizar el
 sistema. El p95 del login es el único número informativo, y lo que mide es
 Argon2id, que cuesta a propósito.
+
+### Por qué setup() valida el escenario entero
+
+Durante un tiempo esta prueba informó **0 % de error y 100 % de comprobaciones
+con la mitad del tráfico sin ejecutar**, y eso es mucho peor que fallar.
+
+El sembrador reutiliza el curso si ya existe, pero en esa rama cargaba la fila
+de la versión sin su árbol de módulos, así que escribía `recursos_texto` y
+`recursos_quiz` a `null`. Los escenarios de consumo y de quiz lanzaban una
+excepción en la primera línea de cada iteración, k6 las contaba como
+iteraciones completas —2,8 millones en minuto y cuarto— y como ninguna llegó a
+hacer una sola petición HTTP, no había errores que contar ni comprobaciones que
+suspender. El resumen salía verde.
+
+Se corrigieron las dos cosas, porque son dos fallos distintos:
+
+- El sembrador carga el árbol también al reutilizar, y se niega a escribir un
+  escenario sin recursos utilizables.
+- `setup()` valida el archivo **entero** antes de empezar: cada escenario
+  declara qué campos necesita, y la prueba no arranca si falta alguno. Un
+  informe verde que no ejerció lo que dice ejercer no acredita nada, así que
+  ahora es imposible producir uno.
 
 ### Dónde empieza a doler
 

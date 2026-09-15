@@ -46,6 +46,10 @@
 #     X-Request-Id, pero no métricas ni trazas. Sin ellas no se puede ver
 #     DÓNDE se va el p95 cuando se rompe un umbral.
 #   - Cursores y ETag en las colecciones.
+#   - cmd/seed se niega a correr si APP_ENV no es un entorno de pruebas. Es el
+#     control que impide crear cuentas con contraseña pública donde no debe;
+#     se puede saltar a conciencia con SEED_PERMITIR_ENTORNO=1.
+#
 #   - Al añadir una variable de entorno nueva, declararla en el
 #     `environment:` del servicio en docker-compose.yml. Ponerla solo en el
 #     .env NO la inyecta en el contenedor: Compose usa el .env para interpolar
