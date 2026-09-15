@@ -4,15 +4,15 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/cambios"
 	domain "github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/course"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
 )
 
 func (h *handlers) registerCourses(mux *http.ServeMux) {
@@ -26,6 +26,7 @@ func (h *handlers) registerCourses(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/courses/versions/{versionId}", h.auth()(teacherOrAdmin(http.HandlerFunc(h.previewVersion))))
 	mux.Handle("PATCH /api/v1/courses/versions/{versionId}", h.auth()(teacherOrAdmin(http.HandlerFunc(h.updateVersionMetadata))))
 	mux.Handle("POST /api/v1/courses/versions/{versionId}/publish", h.auth()(teacherOrAdmin(http.HandlerFunc(h.publishVersion))))
+	mux.Handle("GET /api/v1/courses/versions/{versionId}/changes", h.auth()(teacherOrAdmin(http.HandlerFunc(h.versionChanges))))
 
 	mux.Handle("POST /api/v1/courses/versions/{versionId}/modules", h.auth()(teacherOrAdmin(http.HandlerFunc(h.addModule))))
 	mux.Handle("PATCH /api/v1/courses/versions/{versionId}/modules/{moduleId}", h.auth()(teacherOrAdmin(http.HandlerFunc(h.updateModule))))
@@ -40,6 +41,10 @@ func (h *handlers) registerCourses(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/v1/courses/versions/{versionId}/resources/{resourceId}", h.auth()(teacherOrAdmin(http.HandlerFunc(h.deleteResource))))
 	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/upload-url", h.auth()(teacherOrAdmin(http.HandlerFunc(h.requestResourceUploadURL))))
 	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/confirm-upload", h.auth()(teacherOrAdmin(http.HandlerFunc(h.confirmResourceUpload))))
+	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/multipart/initiate", h.auth()(teacherOrAdmin(http.HandlerFunc(h.initiateMultipartUpload))))
+	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/multipart/part-url", h.auth()(teacherOrAdmin(http.HandlerFunc(h.requestMultipartPartURL))))
+	mux.Handle("POST /api/v1/courses/versions/{versionId}/resources/{resourceId}/multipart/complete", h.auth()(teacherOrAdmin(http.HandlerFunc(h.completeMultipartUpload))))
+	mux.Handle("GET /api/v1/courses/versions/{versionId}/resources/{resourceId}/multipart/parts", h.auth()(teacherOrAdmin(http.HandlerFunc(h.listMultipartParts))))
 
 	mux.HandleFunc("GET /api/v1/catalog", h.listCatalog)
 	mux.HandleFunc("GET /api/v1/catalog/{courseId}", h.getPublishedCourse)
@@ -368,6 +373,13 @@ type uploadURLRequest struct {
 	MimeType string `json:"mime_type"`
 }
 
+type confirmUploadRequest struct {
+	// ChecksumSHA256 es el hash que calculó el navegador sobre el archivo
+	// antes de subirlo. Opcional, pero si viene tiene que cuadrar: es lo que
+	// detecta una subida truncada o alterada en tránsito.
+	ChecksumSHA256 string `json:"checksum_sha256,omitempty"`
+}
+
 // requestResourceUploadURL emite una URL prefirmada de subida directa al
 // almacenamiento de objetos para el recurso indicado. La API nunca recibe
 // el binario: el cliente sube directamente y luego confirma para encolar el
@@ -391,7 +403,7 @@ func (h *handlers) requestResourceUploadURL(w http.ResponseWriter, r *http.Reque
 	}
 
 	objectKey := "resources/" + res.ID.String() + "/original"
-	putURL, err := h.deps.Storage.PresignedPutURL(r.Context(), objectKey, 24*time.Hour)
+	putURL, err := h.deps.Storage.PresignedPutURL(r.Context(), objectKey, vigenciaDeCarga)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -415,6 +427,11 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 		writeError(w, ErrBadRequest)
 		return
 	}
+	// El cuerpo es opcional: un cliente que no calcula el hash manda {} o nada.
+	var req confirmUploadRequest
+	if r.ContentLength > 0 && !decodeJSON(w, r, &req) {
+		return
+	}
 	actor, _ := UserFromContext(r.Context())
 
 	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
@@ -427,43 +444,48 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	info, err := h.deps.Storage.StatObject(r.Context(), res.ObjectKey)
-	if err != nil || info.Size == 0 {
-		writeError(w, errors.New("el objeto cargado no existe o está vacío"))
+	verificado, err := h.verificarCarga(r.Context(), res.ObjectKey, req.ChecksumSHA256, res.Type)
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 
+	h.aceptarCargaVerificada(w, r, actor, versionID, resourceID, res, verificado)
+}
+
+// aceptarCargaVerificada cierra la ingesta una vez el objeto pasó los
+// controles: marca el recurso listo, o registra el activo multimedia y encola
+// la transcodificación cuando el tipo exige procesamiento asíncrono.
+//
+// Lo comparten la subida simple y la multipart para que las dos terminen
+// exactamente en el mismo estado persistido.
+func (h *handlers) aceptarCargaVerificada(
+	w http.ResponseWriter, r *http.Request, actor *user.User,
+	versionID, resourceID uuid.UUID, res *domain.Resource, obj objetoVerificado,
+) {
 	if !res.Type.RequiresAsyncProcessing() {
 		if err := h.deps.Courses.MarkResourceProcessingStatus(r.Context(), actor, versionID, resourceID, domain.ProcessingReady); err != nil {
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": "ready", "mime_type": obj.MIME,
+			"size_bytes": obj.Tamano, "checksum_sha256": obj.SHA256,
+		})
 		return
 	}
 
 	assetID := uuid.New()
 	if err := h.deps.Media.Create(r.Context(), &postgres.MediaAsset{
 		ID: assetID, ResourceID: resourceID, OriginalObjectKey: res.ObjectKey,
-		MimeType: info.ContentType, SizeBytes: info.Size, Status: "uploaded",
+		MimeType: obj.MIME, SizeBytes: obj.Tamano, ChecksumSHA256: obj.SHA256,
+		Status: "uploaded",
 	}); err != nil {
 		writeError(w, err)
 		return
 	}
 
-	kind := "video"
-	if res.Type == domain.ResourceAudio {
-		kind = "audio"
-	}
-	task, err := queueTask(queue.TaskProcessMedia, queue.MediaProcessPayload{
-		TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
-		SourceObjectKey: res.ObjectKey, Kind: kind,
-	})
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if _, err := h.deps.Queue.Enqueue(task, asynq.MaxRetry(queue.MaxRetry), asynq.TaskID(assetID.String())); err != nil {
+	if err := h.deps.Queue.Encolar(r.Context(), h.trabajoDeProcesamiento(assetID, resourceID, res, obj)); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -472,7 +494,70 @@ func (h *handlers) confirmResourceUpload(w http.ResponseWriter, r *http.Request)
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued", "media_asset_id": assetID.String()})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status": "queued", "media_asset_id": assetID.String(),
+		"mime_type": obj.MIME, "size_bytes": obj.Tamano, "checksum_sha256": obj.SHA256,
+	})
+}
+
+// trabajoDeProcesamiento elige qué encolar según el tipo de recurso: HLS para
+// video y audio, conversión a PDF para presentaciones.
+//
+// El identificador del activo hace de clave de idempotencia en los dos casos,
+// que es lo que permite que una doble entrega no produzca salidas repetidas.
+func (h *handlers) trabajoDeProcesamiento(
+	assetID, resourceID uuid.UUID, res *domain.Resource, obj objetoVerificado,
+) queue.Trabajo {
+	// El identificador del activo hace de clave: dos confirmaciones de la
+	// misma carga publican el mismo trabajo, no dos.
+	trabajo := queue.Trabajo{ClaveDeIdempotencia: assetID.String()}
+
+	if res.Type == domain.ResourcePresentation {
+		trabajo.Tipo = queue.TaskConvertDocument
+		trabajo.Payload = queue.DocumentConvertPayload{
+			TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
+			SourceObjectKey: res.ObjectKey, Formato: string(obj.Formato),
+		}
+		return trabajo
+	}
+
+	kind := "video"
+	if res.Type == domain.ResourceAudio {
+		kind = "audio"
+	}
+	trabajo.Tipo = queue.TaskProcessMedia
+	trabajo.Payload = queue.MediaProcessPayload{
+		TaskID: assetID, MediaAssetID: assetID, ResourceID: resourceID,
+		SourceObjectKey: res.ObjectKey, Kind: kind,
+	}
+	return trabajo
+}
+
+// versionChanges clasifica lo que un borrador cambia respecto a lo publicado.
+//
+// Es previo a publicar, no posterior: el profesor tiene que poder ver si su
+// actualización altera lo que los estudiantes deben completar antes de que la
+// alteración ocurra.
+func (h *handlers) versionChanges(w http.ResponseWriter, r *http.Request) {
+	versionID, err := uuid.Parse(r.PathValue("versionId"))
+	if err != nil {
+		writeError(w, ErrBadRequest)
+		return
+	}
+	actor, _ := UserFromContext(r.Context())
+
+	clasificacion, err := h.deps.Courses.CambiosDelBorrador(r.Context(), actor, versionID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	// Los cambios nunca viajan como null: una lista vacía es un resultado
+	// legítimo (un borrador idéntico) y el cliente no debería distinguirla de
+	// un fallo.
+	if clasificacion.Cambios == nil {
+		clasificacion.Cambios = []cambios.Cambio{}
+	}
+	writeJSON(w, http.StatusOK, clasificacion)
 }
 
 func (h *handlers) listCatalog(w http.ResponseWriter, r *http.Request) {
@@ -501,4 +586,176 @@ func (h *handlers) getPublishedCourse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+type initiateMultipartRequest struct {
+	ContentType string `json:"content_type"`
+}
+
+func (h *handlers) initiateMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
+	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
+	if err1 != nil || err2 != nil {
+		writeError(w, ErrBadRequest)
+		return
+	}
+	var req initiateMultipartRequest
+	_ = decodeJSON(w, r, &req)
+	if req.ContentType == "" {
+		req.ContentType = "application/octet-stream"
+	}
+
+	actor, _ := UserFromContext(r.Context())
+	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	objectKey := "resources/" + res.ID.String() + "/original"
+	uploadID, err := h.deps.Storage.InitiateMultipartUpload(r.Context(), objectKey, req.ContentType)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if err := h.deps.Courses.SetResourceObjectKey(r.Context(), actor, versionID, resourceID, objectKey, domain.ProcessingPending); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"upload_id":  uploadID,
+		"object_key": objectKey,
+	})
+}
+
+type multipartPartURLRequest struct {
+	UploadID   string `json:"upload_id"`
+	PartNumber int    `json:"part_number"`
+}
+
+func (h *handlers) requestMultipartPartURL(w http.ResponseWriter, r *http.Request) {
+	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
+	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
+	if err1 != nil || err2 != nil {
+		writeError(w, ErrBadRequest)
+		return
+	}
+	var req multipartPartURLRequest
+	if !decodeJSON(w, r, &req) || req.UploadID == "" || req.PartNumber < 1 {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	actor, _ := UserFromContext(r.Context())
+	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if res.ObjectKey == "" {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	partURL, err := h.deps.Storage.PresignedUploadPartURL(r.Context(), res.ObjectKey, req.UploadID, req.PartNumber, vigenciaDeCarga)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"upload_url":  partURL,
+		"part_number": req.PartNumber,
+	})
+}
+
+type completeMultipartPart struct {
+	PartNumber int    `json:"part_number"`
+	ETag       string `json:"etag"`
+}
+
+type completeMultipartRequest struct {
+	UploadID       string                  `json:"upload_id"`
+	Parts          []completeMultipartPart `json:"parts"`
+	ChecksumSHA256 string                  `json:"checksum_sha256,omitempty"`
+}
+
+func (h *handlers) completeMultipartUpload(w http.ResponseWriter, r *http.Request) {
+	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
+	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
+	if err1 != nil || err2 != nil {
+		writeError(w, ErrBadRequest)
+		return
+	}
+	var req completeMultipartRequest
+	if !decodeJSON(w, r, &req) || req.UploadID == "" || len(req.Parts) == 0 {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	actor, _ := UserFromContext(r.Context())
+	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if res.ObjectKey == "" {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	partes := make([]storage.ParteCargada, len(req.Parts))
+	for i, p := range req.Parts {
+		partes[i] = storage.ParteCargada{Numero: p.PartNumber, ETag: p.ETag}
+	}
+
+	if err := h.deps.Storage.CompleteMultipartUpload(r.Context(), res.ObjectKey, req.UploadID, partes); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	verificado, err := h.verificarCarga(r.Context(), res.ObjectKey, req.ChecksumSHA256, res.Type)
+	if err != nil {
+		// La carga ya está ensamblada, así que verificarCarga borró el objeto;
+		// abortar además libera cualquier parte que el almacén siga reteniendo.
+		_ = h.deps.Storage.AbortMultipartUpload(r.Context(), res.ObjectKey, req.UploadID)
+		writeError(w, err)
+		return
+	}
+
+	h.aceptarCargaVerificada(w, r, actor, versionID, resourceID, res, verificado)
+}
+
+func (h *handlers) listMultipartParts(w http.ResponseWriter, r *http.Request) {
+	versionID, err1 := uuid.Parse(r.PathValue("versionId"))
+	resourceID, err2 := uuid.Parse(r.PathValue("resourceId"))
+	uploadID := r.URL.Query().Get("upload_id")
+	if err1 != nil || err2 != nil || uploadID == "" {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	actor, _ := UserFromContext(r.Context())
+	res, err := h.deps.Courses.GetResource(r.Context(), actor, versionID, resourceID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if res.ObjectKey == "" {
+		writeError(w, ErrBadRequest)
+		return
+	}
+
+	partes, err := h.deps.Storage.ListObjectParts(r.Context(), res.ObjectKey, uploadID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"upload_id": uploadID,
+		"parts":     partes,
+	})
 }

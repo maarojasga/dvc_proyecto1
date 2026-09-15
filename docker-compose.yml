@@ -26,11 +26,29 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    # quay.io y no Docker Hub: MinIO dejó de publicar la imagen ahí de forma
+    # pública, y `docker pull minio/minio` responde "pull access denied ...
+    # repository does not exist or may require 'docker login'". No es un fallo
+    # transitorio ni un límite de descargas: el repositorio existe pero ya
+    # exige autenticación. quay.io es el registro propio de MinIO, el que usa
+    # su documentación.
+    #
+    # La referencia es una variable para que una mudanza de registro sea un
+    # cambio en el .env y no una edición de este archivo. Va sin fijar a una
+    # release concreta, que es deuda consciente: conviene fijar
+    # MINIO_IMAGE a una etiqueta RELEASE.* comprobada, por el mismo motivo por
+    # el que las demás imágenes de aquí llevan versión.
+    image: ${MINIO_IMAGE:-quay.io/minio/minio:latest}
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      # El navegador sube y descarga objetos directamente contra MinIO, asi
+      # que es un origen cruzado respecto al frontend. Sin esto, el PUT
+      # prefirmado y las peticiones de hls.js al manifiesto fallan en el
+      # preflight. Es el valor por defecto de MinIO; va explicito para que se
+      # vea que en produccion hay que restringirlo al origen real.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_CORS_ALLOW_ORIGIN:-*}
     ports:
       - "${MINIO_API_PORT:-9100}:9000"
       - "${MINIO_CONSOLE_PORT:-9101}:9001"
@@ -38,10 +56,33 @@ services:
       - minio_data:/data
 
   mailpit:
-    image: axllent/mailpit:latest
+    # Con versión, no :latest: una etiqueta móvil hace que dos ejecuciones
+    # del mismo commit puedan no ser la misma cosa.
+    image: axllent/mailpit:v1.22
     ports:
       - "8025:8025"
       - "1025:1025"
+
+  # Antivirus con firmas reales. Va tras un perfil porque descarga la base de
+  # firmas en el primer arranque (varios cientos de MB) y tarda minutos en
+  # quedar listo, lo que haría insufrible un `docker compose up` cotidiano.
+  #
+  #   docker compose --profile antivirus up -d clamav
+  #   CLAMAV_ADDR=clamav:3310 docker compose up -d api
+  #
+  # Sin esto opera el escáner integrado de la API, que reconoce el vector de
+  # prueba estándar y los ejecutables, pero no lleva firmas.
+  clamav:
+    image: clamav/clamav:1.4.3
+    profiles: ["antivirus"]
+    ports:
+      - "3310:3310"
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
 
   api:
     build:
@@ -57,20 +98,54 @@ services:
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       S3_USE_SSL: "false"
+      # Host por el que el NAVEGADOR alcanza MinIO. "minio:9000" solo resuelve
+      # dentro de la red del compose, y la firma SigV4 cubre el Host: si se
+      # firma contra el host interno, la URL llega al navegador y muere con
+      # ERR_NAME_NOT_RESOLVED. Tiene que coincidir con el puerto publicado
+      # arriba (MINIO_API_PORT).
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-localhost:${MINIO_API_PORT:-9100}}
+      S3_PUBLIC_USE_SSL: ${S3_PUBLIC_USE_SSL:-false}
+      # Base publica desde la que el reproductor lee el HLS. En produccion es
+      # el CDN; vacia en local, donde los objetos se firman uno a uno.
+      S3_PUBLIC_URL: ${S3_PUBLIC_URL:-}
+      # Vacío: escáner antimalware integrado. Con el perfil "antivirus"
+      # levantado, "clamav:3310" añade ClamAV por delante.
+      CLAMAV_ADDR: ${CLAMAV_ADDR:-}
+      # Firma de las credenciales Open Badges 3.0. Vacia: las insignias siguen
+      # siendo verificables por su URL publica, sin credencial portatil.
+      BADGE_SIGNING_KEY: ${BADGE_SIGNING_KEY:-}
+      BADGE_KEY_ID: ${BADGE_KEY_ID:-mooc-badges-1}
+      ISSUER_NAME: ${ISSUER_NAME:-Plataforma MOOC}
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
       SMTP_FROM: no-reply@mooc.local
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
       COOKIE_SECURE: "false"
+      # Intentos de registro, login y restablecimiento por IP y minuto. Vacío
+      # deja el valor de producción (10), que es el que debe regir en un
+      # despliegue real. Solo se sube para las pruebas de extremo a extremo,
+      # donde toda la suite sale de una misma IP.
+      #
+      # Tiene que estar declarado AQUÍ y no basta con ponerlo en el .env:
+      # Compose usa el .env para interpolar este archivo, no para inyectar
+      # variables en los contenedores. Una variable que solo viva en el .env
+      # nunca llega al proceso, y el servicio arranca con su valor por defecto
+      # sin decir nada.
+      AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-    ports:
-      - "8080:8080"
+    # No publica puerto en el host: lo hace el proxy. Publicarlo aquí ataría
+    # el servicio a un puerto fijo y `--scale api=N` fallaría por choque, que
+    # es justo el escalamiento que el criterio de arquitectura pide demostrar.
+    expose:
+      - "8080"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_started
 
   worker:
     build:
@@ -90,16 +165,84 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_started
+
+  # Punto de entrada de la API. Reparte entre las instancias que haya
+  # levantadas, así que `docker compose up -d --scale api=3` no exige tocar
+  # nada más.
+  proxy:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx/api.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz-proxy"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   frontend:
     build:
       context: ./frontend
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8080
+      NEXT_PUBLIC_API_URL: http://localhost:${API_PORT:-8080}
     ports:
       - "3000:3000"
     depends_on:
-      - api
+      - proxy
+
+  # ---------------------------------------------------------------------
+  # Prueba de carga de Etapa 1 (sección 10, segmento 9).
+  #
+  # Bajo perfil: `docker compose up` cotidiano no debe sembrar 500 cuentas ni
+  # arrancar un generador de carga.
+  #
+  #   docker compose --profile carga run --rm seed
+  #   docker compose --profile carga run --rm k6
+  # ---------------------------------------------------------------------
+  seed:
+    build:
+      context: ./backend
+      target: seed
+    profiles: ["carga"]
+    environment:
+      # Explícito y no por defecto: el sembrador se niega a correr fuera de un
+      # entorno de pruebas, y un control de seguridad que depende de un valor
+      # implícito es el que deja de cumplirse el día que algo cambia.
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgres://${POSTGRES_USER:-mooc}:${POSTGRES_PASSWORD:-mooc}@postgres:5432/${POSTGRES_DB:-mooc}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      SEED_STUDENTS: ${SEED_STUDENTS:-500}
+      SEED_OUT: /salida/escenario.json
+    volumes:
+      - ./load/salida:/salida
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  k6:
+    # La misma versión con la que se midió la Etapa 1 documentada en
+    # load/README.md: comparar cifras obtenidas con generadores distintos
+    # no dice gran cosa.
+    image: grafana/k6:1.8.1
+    profiles: ["carga"]
+    environment:
+      # Contra el proxy, no contra una instancia: la prueba tiene que medir
+      # el camino real, repartidor incluido.
+      BASE_URL: http://proxy:8080
+      ESCENARIO: /salida/escenario.json
+      VUS_OBJETIVO: ${VUS_OBJETIVO:-200}
+      MESETA: ${MESETA:-3m}
+    volumes:
+      - ./load:/scripts:ro
+      - ./load/salida:/salida
+    entrypoint: ["k6", "run", "/scripts/etapa1.js"]
+    depends_on:
+      - proxy
 
 volumes:
   postgres_data:

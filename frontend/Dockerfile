@@ -1,7 +1,11 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json ./
-RUN npm install
+# El lockfile se copia y se usa: con `npm install` y sin él, la imagen
+# resolvía versiones frescas en cada construcción y podía no coincidir con la
+# que validaron las pruebas. Importa especialmente desde que Next está fijado
+# por seguridad: una resolución libre puede traer otra cosa.
+COPY package.json package-lock.json ./
+RUN npm ci
 
 FROM node:20-alpine AS builder
 WORKDIR /app

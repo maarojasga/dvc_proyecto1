@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"log"
 	"net/http"
@@ -17,8 +19,11 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/config"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/httpserver"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/mailer"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
@@ -53,7 +58,8 @@ func main() {
 
 	storageClient, err := storage.New(ctx, storage.Config{
 		Endpoint: cfg.S3Endpoint, AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey,
-		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, PublicURL: cfg.S3PublicURL,
+		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, Region: cfg.S3Region, PublicURL: cfg.S3PublicURL,
+		PublicEndpoint: cfg.S3PublicEndpoint, PublicUseSSL: cfg.S3PublicUseSSL,
 	})
 	if err != nil {
 		log.Fatalf("api: storage: %v", err)
@@ -67,20 +73,50 @@ func main() {
 	courseRepo := postgres.NewCourseRepo(pool)
 	enrollmentRepo := postgres.NewEnrollmentRepo(pool)
 	mediaRepo := postgres.NewMediaRepo(pool)
+	progressRepo := postgres.NewProgressRepo(pool)
+	quizRepo := postgres.NewQuizRepo(pool)
+	badgeRepo := postgres.NewBadgeRepo(pool)
 
 	authSvc := auth.NewService(userRepo, m, cfg.PublicBaseURL, cfg.SessionTTL)
 	adminSvc := admin.NewService(userRepo)
-	coursesSvc := courses.NewService(courseRepo)
-	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo)
+	iframeRepo := postgres.NewIframeRepo(pool)
+	colaboradoresRepo := postgres.NewColaboradoresRepo(pool)
+	coursesSvc := courses.NewService(courseRepo, iframeRepo, colaboradoresRepo)
+	enrollmentsSvc := enrollments.NewService(enrollmentRepo, courseRepo, progressRepo, iframeRepo)
+	progresoSvc := progreso.NewService(progressRepo, enrollmentRepo, courseRepo, quizRepo, badgeRepo, storageClient, userRepo)
+	// El servicio de quizzes avisa al de progreso al cerrar un intento, porque
+	// aprobar una evaluacion puede ser lo ultimo que faltaba para el curso.
+	quizzesSvc := quizzes.NewService(quizRepo, courseRepo, coursesSvc, enrollmentRepo, progresoSvc)
 
 	if err := bootstrapAdmin(ctx, userRepo); err != nil {
 		log.Printf("api: no se pudo crear el administrador inicial: %v", err)
 	}
 
+	escaner := antimalware.Nuevo(cfg.ClamAVAddr)
+	if cfg.ClamAVAddr == "" {
+		log.Printf("api: antimalware integrado (sin CLAMAV_ADDR configurado)")
+	} else {
+		log.Printf("api: antimalware con clamd en %s", cfg.ClamAVAddr)
+	}
+
 	router := httpserver.NewRouter(httpserver.Deps{
 		Auth: authSvc, Admin: adminSvc, Courses: coursesSvc, Enrollments: enrollmentsSvc,
-		Media: mediaRepo, Storage: storageClient, Redis: rdb, Queue: queueClient,
+		Quizzes: quizzesSvc, Progreso: progresoSvc,
+		Media: mediaRepo, Storage: storageClient, Entrega: storageClient,
+		Antimalware:   escaner,
+		Iframes:       iframeRepo,
+		Metricas:      postgres.NewMetricasRepo(pool),
+		Revisiones:    postgres.NewRevisionesRepo(pool),
+		Colaboradores: colaboradoresRepo,
+		Subtitulos:    postgres.NewSubtitulosRepo(pool),
+		Foros:         postgres.NewForosRepo(pool),
+		Credenciales:  emisorDeCredenciales(cfg),
+		Exportacion:   postgres.NewExportacionRepo(pool),
+		Auditor:       userRepo,
+		Redis:         rdb, Queue: queue.NuevoEncolador(queueClient),
+		Inspector:  queue.NewInspector(cfg.RedisAddr),
 		CORSOrigin: cfg.PublicBaseURL, CookieSecure: cfg.CookieSecure,
+		AuthRateLimitPerMinute: cfg.AuthRateLimitPerMinute,
 	})
 
 	srv := &http.Server{
@@ -136,4 +172,35 @@ func bootstrapAdmin(ctx context.Context, users *postgres.UserRepo) error {
 	}
 	log.Printf("api: administrador inicial creado (%s)", email)
 	return nil
+}
+
+// emisorDeCredenciales prepara la firma de las credenciales Open Badges 3.0.
+//
+// Sin BADGE_SIGNING_KEY la plataforma arranca igual: las insignias siguen
+// siendo verificables por su URL pública y lo único que no se puede ofrecer es
+// la credencial portátil. Se avisa en el arranque porque, si alguien esperaba
+// esa función, el fallo se descubriría en la pantalla de un estudiante.
+func emisorDeCredenciales(cfg config.Config) httpserver.EmisorDeCredenciales {
+	emisor := httpserver.EmisorDeCredenciales{
+		KeyID:   cfg.BadgeKeyID,
+		Nombre:  cfg.IssuerName,
+		BaseURL: cfg.PublicBaseURL,
+	}
+	if cfg.BadgeSigningKey == "" {
+		log.Printf("api: sin BADGE_SIGNING_KEY; las insignias no se emitirán como credencial firmada")
+		return emisor
+	}
+
+	crudo, err := base64.StdEncoding.DecodeString(cfg.BadgeSigningKey)
+	if err != nil || len(crudo) != ed25519.PrivateKeySize {
+		// No se genera una clave al vuelo como sustituto: cada reinicio
+		// produciría otra y las credenciales firmadas antes dejarían de
+		// verificarse, que es peor que no firmarlas.
+		log.Printf("api: BADGE_SIGNING_KEY no es una clave Ed25519 válida en base64; no se firmarán credenciales")
+		return emisor
+	}
+	emisor.Privada = ed25519.PrivateKey(crudo)
+	emisor.Publica = emisor.Privada.Public().(ed25519.PublicKey)
+	log.Printf("api: credenciales Open Badges firmadas con la clave %q", emisor.KeyID)
+	return emisor
 }

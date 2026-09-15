@@ -19,15 +19,53 @@ type Config struct {
 	S3AccessKey string
 	S3SecretKey string
 	S3UseSSL    bool
+	S3Region    string
 	S3PublicURL string // base URL pública/CDN para servir objetos (opcional)
+
+	// S3PublicEndpoint es el host por el que el NAVEGADOR alcanza el
+	// almacén de objetos. Dentro de Docker, S3Endpoint es "minio:9000",
+	// un nombre que sólo resuelve en la red del compose; una URL
+	// prefirmada contra ese host llega al navegador y muere en
+	// ERR_NAME_NOT_RESOLVED. La firma SigV4 cubre el Host, así que no
+	// basta con reescribir la URL después: hay que firmar contra el host
+	// público desde el principio.
+	S3PublicEndpoint string
+	S3PublicUseSSL   bool
+
+	// ClamAVAddr es la dirección de clamd (host:puerto). Vacía deja operando
+	// el escáner antimalware integrado, que reconoce el vector de prueba
+	// estándar y los formatos ejecutables pero no sustituye a un antivirus
+	// con firmas actualizadas.
+	ClamAVAddr string
+
+	// BadgeSigningKey es la clave privada Ed25519 con que se firman las
+	// credenciales Open Badges 3.0, en base64. Vacía desactiva la credencial
+	// portátil; la insignia sigue siendo verificable por su URL pública.
+	//
+	// Es material criptográfico, así que viene de una variable de entorno y no
+	// del repositorio: la gestión externa de secretos es una restricción
+	// técnica del proyecto.
+	BadgeSigningKey string
+	// BadgeKeyID identifica la clave dentro del JWKS, para poder rotarla sin
+	// invalidar de golpe lo firmado antes.
+	BadgeKeyID string
+	// IssuerName es la organización que figura como emisora.
+	IssuerName string
 
 	SMTPHost string
 	SMTPPort string
 	SMTPFrom string
 
-	SessionTTL       time.Duration
-	PublicBaseURL    string // URL pública del frontend, para links de verificación/reseteo
-	CookieSecure     bool
+	SessionTTL    time.Duration
+	PublicBaseURL string // URL pública del frontend, para links de verificación/reseteo
+	CookieSecure  bool
+	// AuthRateLimitPerMinute acota los intentos de registro, login y
+	// restablecimiento por IP y minuto. Es configurable porque el valor bueno
+	// depende del despliegue: diez protege una instalación real, pero una
+	// suite E2E que crea decenas de cuentas desde una sola IP se ahoga con él y
+	// acabaría midiendo el limitador en vez del producto. El valor por defecto
+	// es el de producción; subirlo es una decisión explícita del entorno.
+	AuthRateLimitPerMinute int
 }
 
 // Load construye la configuración a partir de variables de entorno, con valores
@@ -44,15 +82,26 @@ func Load() Config {
 		S3AccessKey: getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey: getEnv("S3_SECRET_KEY", "minioadmin"),
 		S3UseSSL:    getBool("S3_USE_SSL", false),
+		S3Region:    getEnv("S3_REGION", "us-east-1"),
 		S3PublicURL: getEnv("S3_PUBLIC_URL", ""),
+
+		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
+		S3PublicUseSSL:   getBool("S3_PUBLIC_USE_SSL", getBool("S3_USE_SSL", false)),
+
+		ClamAVAddr: getEnv("CLAMAV_ADDR", ""),
+
+		BadgeSigningKey: getEnv("BADGE_SIGNING_KEY", ""),
+		BadgeKeyID:      getEnv("BADGE_KEY_ID", "mooc-badges-1"),
+		IssuerName:      getEnv("ISSUER_NAME", "Plataforma MOOC"),
 
 		SMTPHost: getEnv("SMTP_HOST", "localhost"),
 		SMTPPort: getEnv("SMTP_PORT", "1025"),
 		SMTPFrom: getEnv("SMTP_FROM", "no-reply@mooc.local"),
 
-		SessionTTL:    getDuration("SESSION_TTL", 30*24*time.Hour),
-		PublicBaseURL: getEnv("PUBLIC_BASE_URL", "http://localhost:3000"),
-		CookieSecure:  getBool("COOKIE_SECURE", false),
+		SessionTTL:             getDuration("SESSION_TTL", 30*24*time.Hour),
+		PublicBaseURL:          getEnv("PUBLIC_BASE_URL", "http://localhost:3000"),
+		CookieSecure:           getBool("COOKIE_SECURE", false),
+		AuthRateLimitPerMinute: getInt("AUTH_RATE_LIMIT_PER_MINUTE", 10),
 	}
 }
 
@@ -85,4 +134,19 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// getInt lee un entero positivo del entorno. Un valor ausente, no numérico o
+// no positivo cae al de por defecto: un límite de cero dejaría la plataforma
+// sin poder autenticar a nadie, que es peor que ignorar la configuración.
+func getInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
