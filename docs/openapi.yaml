@@ -1,0 +1,2242 @@
+openapi: 3.1.0
+info:
+  title: Plataforma MOOC API
+  version: 0.2.0
+  description: >
+    API REST de la plataforma web de cursos masivos abiertos en línea.
+    Prefijo de versión: /api/v1. Errores uniformes ({"error":{"code","message","details"}}),
+    sesiones por cookie httpOnly o cabecera Authorization: Bearer <token>.
+    Este documento cubre los endpoints implementados en la iteración actual
+    (identidad, administración, autoría de cursos, catálogo e inscripciones).
+    Pendientes: quizzes, progreso e insignias (ver README).
+servers:
+  - url: /api/v1
+security:
+  - sessionCookie: []
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      summary: Estado del servicio
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: El servicio responde correctamente.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /auth/register:
+    post:
+      tags: [Identidad]
+      summary: Registro público de estudiantes
+      description: >
+        Crea una cuenta de estudiante pendiente de verificación y envía el
+        enlace. Los profesores y administradores no se crean por aquí: solo
+        por administración.
+
+
+        Responde 202 aunque el correo ya esté registrado y no devuelve el
+        recurso creado: cualquiera de las dos cosas convertiría el formulario
+        en un oráculo de qué cuentas existen. Si la cuenta existente sigue
+        pendiente, se reenvía el enlace de verificación.
+      operationId: registerStudent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, full_name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 12 }
+                full_name: { type: string }
+      responses:
+        "202":
+          description: Solicitud aceptada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        "422": { $ref: '#/components/responses/Error' }
+        "429": { $ref: '#/components/responses/Error' }
+
+  /auth/resend-verification:
+    post:
+      tags: [Identidad]
+      summary: Reenviar el enlace de verificación
+      description: Responde 202 exista o no la cuenta.
+      operationId: resendVerification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202":
+          description: Solicitud aceptada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        "429": { $ref: '#/components/responses/Error' }
+
+  /auth/verify-email:
+    post:
+      summary: Confirma el correo mediante el token enviado por correo
+      operationId: verifyEmail
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties: { token: { type: string } }
+      responses:
+        "200": { description: Correo verificado; la cuenta queda activa. }
+        "400": { description: Token inválido o expirado. }
+
+  /auth/login:
+    post:
+      summary: Inicio de sesión
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: >
+            Sesión creada. Emite la cookie httpOnly `mooc_session` y la cookie
+            legible `mooc_csrf`. El token de sesión no viaja en el cuerpo:
+            devolverlo dejaría que cualquier script de la página lo leyera.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  expires_at: { type: string, format: date-time }
+        "401":
+          description: >
+            Credenciales inválidas. La respuesta es idéntica para un correo
+            inexistente y para una clave errada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "429": { $ref: '#/components/responses/Error' }
+
+  /auth/logout:
+    post:
+      summary: Revoca la sesión actual
+      operationId: logout
+      responses:
+        "200": { description: Sesión revocada. }
+
+  /auth/me:
+    get:
+      summary: Usuario autenticado actual
+      operationId: getMe
+      responses:
+        "200": { description: Datos del usuario. }
+        "401": { description: No autenticado. }
+
+  /auth/sessions:
+    get:
+      tags: [Identidad]
+      summary: Listar las sesiones activas
+      description: >
+        Cada dispositivo con la sesión abierta. Es la evidencia de que las
+        sesiones son revocables por el propio usuario.
+      operationId: listSessions
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Sesiones activas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+        "401": { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Identidad]
+      summary: Revocar todas las sesiones salvo la actual
+      operationId: revokeOtherSessions
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        "200":
+          description: Sesiones revocadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked: { type: integer }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+
+  /auth/sessions/{sessionId}:
+    delete:
+      tags: [Identidad]
+      summary: Revocar una sesión concreta
+      description: >
+        Solo sesiones propias, y la revocación surte efecto en la siguiente
+        petición del dispositivo afectado. Una sesión ajena responde 404, igual
+        que una inexistente, para no confirmar identificadores de otras
+        cuentas. Revocar la sesión en curso equivale a cerrarla.
+      operationId: revokeSession
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        "204": { description: Sesión revocada. }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+
+  /auth/password/reset-request:
+    post:
+      summary: Solicita un enlace de recuperación de contraseña
+      operationId: requestPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: { email: { type: string } }
+      responses:
+        "202": { description: Si el correo existe, se envía un enlace (respuesta uniforme para evitar enumeración). }
+
+  /auth/password/reset-confirm:
+    post:
+      summary: Confirma el restablecimiento de contraseña
+      operationId: confirmPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token: { type: string }
+                new_password: { type: string, minLength: 10 }
+      responses:
+        "200": { description: Contraseña actualizada; sesiones previas revocadas. }
+        "400": { description: Token inválido o expirado. }
+
+  /admin/users:
+    get:
+      summary: Lista usuarios con filtros administrativos
+      operationId: listUsers
+      parameters:
+        - { name: role, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: Lista de usuarios. }
+        "403": { description: Requiere rol admin. }
+
+  /admin/users/{id}/role:
+    patch:
+      summary: Cambia el rol de un usuario
+      operationId: updateUserRole
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties: { role: { type: string, enum: [admin, teacher, student] } }
+      responses:
+        "200": { description: Rol actualizado. }
+        "409": { description: Operación rechazada por proteger al último administrador activo. }
+
+  /admin/users/{id}/status:
+    patch:
+      summary: Cambia el estado de un usuario (activar/suspender)
+      operationId: updateUserStatus
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties: { status: { type: string, enum: [pending_verification, active, suspended] } }
+      responses:
+        "200": { description: Estado actualizado; si se suspende, se revocan todas sus sesiones. }
+        "409": { description: Operación rechazada por proteger al último administrador activo. }
+
+  /admin/teachers:
+    post:
+      summary: Crea una cuenta de profesor (los profesores no se autorregistran)
+      operationId: createTeacher
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, full_name]
+              properties:
+                email: { type: string }
+                full_name: { type: string }
+      responses:
+        "201": { description: Profesor creado; se envía enlace para establecer contraseña. }
+
+  /admin/audit:
+    get:
+      tags: [Administración]
+      summary: Consultar la bitácora
+      description: >
+        Registro inmutable de acciones, el más reciente primero. La base
+        rechaza modificarlo o borrarlo mediante un disparador, así que lo que
+        se lee aquí es lo que ocurrió.
+      operationId: listAudit
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: action
+          in: query
+          schema: { type: string }
+          description: Filtra por acción exacta, por ejemplo `user.status_updated`.
+        - name: actor_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Entradas de la bitácora.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEntry' }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+
+  /admin/users/{id}/sessions:
+    get:
+      tags: [Administración]
+      summary: Sesiones activas de una cuenta
+      operationId: listUserSessions
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Sesiones activas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Session' }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Administración]
+      summary: Cerrar todas las sesiones de una cuenta
+      description: >
+        Expulsa a la persona de todos sus dispositivos sin cambiar el estado de
+        la cuenta: es la respuesta a un acceso comprometido cuando la cuenta en
+        sí no está en falta. Suspenderla también las cierra.
+      operationId: revokeUserSessions
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        "204": { description: Sesiones cerradas. }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+
+  /admin/queues:
+    get:
+      tags: [Administración]
+      summary: Estado de las colas y de la dead-letter queue
+      description: >
+        Evidencia de que el backoff y la dead-letter queue operan: `archived`
+        cuenta los trabajos que agotaron sus reintentos, los mismos que
+        dispararon la alerta del worker.
+      operationId: listQueues
+      security: [{ sessionCookie: [] }]
+      responses:
+        "200":
+          description: Colas y tareas archivadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  queues:
+                    type: array
+                    items: { $ref: '#/components/schemas/QueueInfo' }
+                  dead_letter:
+                    type: array
+                    items: { $ref: '#/components/schemas/DeadTask' }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "503":
+          description: La instancia no tiene inspección de cola configurada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /admin/queues/{queue}/dead/{taskId}/retry:
+    post:
+      tags: [Administración]
+      summary: Reencolar una tarea archivada
+      description: >
+        Conserva el identificador de la tarea, que es su clave de
+        idempotencia: el reintento no puede producir una segunda salida de
+        algo que ya se completó.
+      operationId: retryDeadTask
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: queue
+          in: path
+          required: true
+          schema: { type: string }
+        - name: taskId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        "200":
+          description: Tarea reencolada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: requeued }
+                  task_id: { type: string }
+                  queue: { type: string }
+        "401": { $ref: '#/components/responses/Error' }
+        "403": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+        "503": { $ref: '#/components/responses/Error' }
+
+  /courses:
+    post:
+      summary: Crea un curso nuevo con su primera versión en borrador
+      operationId: createCourseDraft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, title]
+              properties:
+                slug: { type: string }
+                title: { type: string }
+      responses:
+        "201": { description: Curso y borrador creados. }
+
+  /courses/mine:
+    get:
+      summary: Lista los cursos del profesor autenticado
+      operationId: listMyCourses
+      responses:
+        "200": { description: Lista de cursos. }
+
+  /courses/{courseId}/update-draft:
+    post:
+      summary: Abre la siguiente versión en borrador copiando la última versión
+      description: >
+        Exige que el curso no esté publicado: editar una versión vigente pasa
+        por despublicarla antes. El borrador se copia de la última versión que
+        salió del borrador —normalmente la que se acaba de retirar— y conserva
+        sus identificadores estables, así que el progreso de los ya inscritos
+        sigue contando. Si ya hay un borrador abierto se devuelve ese mismo.
+      operationId: createUpdateDraft
+      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "201": { description: Borrador abierto, con los mismos identificadores estables. }
+        "409": { description: "El curso está publicado (code: course_published); hay que despublicarlo primero." }
+
+  /courses/{courseId}/unpublish:
+    post:
+      summary: Despublica la versión vigente para permitir su edición
+      operationId: unpublishCourse
+      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Versión despublicada. }
+
+  /courses/versions/{versionId}:
+    get:
+      summary: Obtiene una versión (propia) con su árbol completo, para previsualización
+      operationId: previewVersion
+      parameters: [{ name: versionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Versión con módulos, unidades y recursos. }
+        "403": { description: No eres el profesor dueño ni administrador. }
+    patch:
+      summary: Actualiza metadatos de una versión en borrador
+      operationId: updateVersionMetadata
+      parameters: [{ name: versionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VersionMetadataInput" }
+      responses:
+        "200": { description: Metadatos actualizados. }
+        "409": { description: La versión no es un borrador. }
+
+  /courses/versions/{versionId}/changes:
+    get:
+      tags: [Autoría]
+      summary: Clasifica lo que un borrador cambia respecto a lo publicado
+      description: >
+        Se compara por `stable_id`, que es lo que un borrador de actualización
+        conserva para que el progreso sobreviva a la publicación. El alcance
+        resume el impacto: "menor" no altera el conjunto de recursos
+        obligatorios visibles, así que lo que cada estudiante lleva hecho sigue
+        valiendo lo mismo; "mayor" sí lo altera, y al publicar el avance de
+        todos los inscritos se recalcula sobre esa nueva lista.
+      operationId: versionChanges
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Clasificación de los cambios.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClasificacionDeCambios" }
+        "403": { $ref: "#/components/responses/Problema" }
+
+  /courses/versions/{versionId}/publish:
+    post:
+      summary: Valida y publica una versión en borrador
+      operationId: publishVersion
+      parameters: [{ name: versionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Versión publicada; la anterior queda unpublished. }
+        "422":
+          description: Lista exhaustiva de motivos de rechazo (metadatos, estructura, recursos sin procesar).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /courses/versions/{versionId}/modules:
+    post:
+      summary: Agrega un módulo a una versión en borrador
+      operationId: addModule
+      parameters: [{ name: versionId, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionedTitle" }
+      responses:
+        "201": { description: Módulo creado. }
+
+  /courses/versions/{versionId}/modules/{moduleId}:
+    patch:
+      summary: Actualiza un módulo
+      operationId: updateModule
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: moduleId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionedTitle" }
+      responses:
+        "200": { description: Módulo actualizado. }
+    delete:
+      summary: Elimina un módulo y su contenido
+      operationId: deleteModule
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: moduleId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Módulo eliminado. }
+
+  /courses/versions/{versionId}/modules/{moduleId}/units:
+    post:
+      summary: Agrega una unidad a un módulo
+      operationId: addUnit
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: moduleId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionedTitle" }
+      responses:
+        "201": { description: Unidad creada. }
+
+  /courses/versions/{versionId}/units/{unitId}:
+    patch:
+      summary: Actualiza una unidad
+      operationId: updateUnit
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: unitId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionedTitle" }
+      responses:
+        "200": { description: Unidad actualizada. }
+    delete:
+      summary: Elimina una unidad y sus recursos
+      operationId: deleteUnit
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: unitId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Unidad eliminada. }
+
+  /courses/versions/{versionId}/units/{unitId}/resources:
+    post:
+      summary: Agrega un recurso a una unidad
+      operationId: addResource
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: unitId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceInput" }
+      responses:
+        "201": { description: Recurso creado. }
+
+  /courses/versions/{versionId}/resources/{resourceId}:
+    patch:
+      summary: Actualiza un recurso
+      operationId: updateResource
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResourceInput" }
+      responses:
+        "200": { description: Recurso actualizado. }
+    delete:
+      summary: Elimina un recurso
+      operationId: deleteResource
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Recurso eliminado. }
+
+  /courses/versions/{versionId}/resources/{resourceId}/upload-url:
+    post:
+      tags: [Multimedia]
+      summary: Emite una URL prefirmada de subida directa al almacenamiento de objetos
+      description: >
+        La API nunca recibe el binario: el navegador sube contra esta URL, que
+        vale 24 horas. Para archivos grandes se usa la carga multipart, que
+        además permite reanudar.
+      operationId: requestResourceUploadURL
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { mime_type: { type: string } }
+      responses:
+        "200":
+          description: URL prefirmada (PUT), válida 24 horas, y clave de objeto.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_url: { type: string, format: uri }
+                  object_key: { type: string }
+                  method: { type: string, enum: [PUT] }
+
+  /courses/versions/{versionId}/resources/{resourceId}/confirm-upload:
+    post:
+      tags: [Multimedia]
+      summary: Verifica una subida simple y encola el procesamiento asíncrono si aplica
+      description: >
+        Aplica los mismos controles que el cierre de una carga multipart:
+        integridad (checksum SHA-256 sobre el objeto almacenado), tipo MIME
+        real deducido de los bytes y escaneo antimalware. Un audio o vídeo
+        cuya cabecera no corresponde a ningún contenedor reconocible se
+        rechaza aquí, sin encolar una transcodificación que FFmpeg no podría
+        abrir. Un objeto rechazado se borra del almacén. Confirmar dos veces
+        la misma carga reutiliza el activo multimedia y no publica un segundo
+        trabajo.
+      operationId: confirmResourceUpload
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checksum_sha256:
+                  type: string
+                  description: >
+                    Hash calculado por el cliente antes de subir. Si viene y no
+                    coincide con el objeto almacenado, la carga se rechaza.
+      responses:
+        "200":
+          description: Recurso listo de inmediato (no requiere procesamiento).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "202":
+          description: Trabajo de transcodificación encolado (video/audio).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "422": { $ref: "#/components/responses/CargaRechazada" }
+        "503": { $ref: "#/components/responses/Problema" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/initiate:
+    post:
+      tags: [Multimedia]
+      summary: Inicia una carga multipart directa al almacenamiento
+      operationId: initiateMultipartUpload
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { content_type: { type: string } }
+      responses:
+        "200":
+          description: Identificador de la carga y clave del objeto.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id: { type: string }
+                  object_key: { type: string }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/part-url:
+    post:
+      tags: [Multimedia]
+      summary: Firma la subida de una parte
+      description: La URL vale 24 horas, que es el plazo de reanudación del alcance mínimo.
+      operationId: requestMultipartPartURL
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id, part_number]
+              properties:
+                upload_id: { type: string }
+                part_number: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: URL prefirmada de la parte.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_url: { type: string, format: uri }
+                  part_number: { type: integer }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/parts:
+    get:
+      tags: [Multimedia]
+      summary: Partes ya recibidas de una carga en curso
+      description: >
+        Es lo que permite reanudar: un cliente interrumpido pregunta qué llegó
+        y sube solo lo que falta.
+      operationId: listMultipartParts
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: upload_id, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Partes recibidas, ordenadas por número.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_id: { type: string }
+                  parts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        part_number: { type: integer }
+                        etag: { type: string }
+                        size_bytes: { type: integer, format: int64 }
+
+  /courses/versions/{versionId}/resources/{resourceId}/multipart/complete:
+    post:
+      tags: [Multimedia]
+      summary: Ensambla la carga multipart y la verifica
+      description: >
+        Tras ensamblar comprueba integridad, MIME real y antimalware. Si algo
+        falla, el objeto se borra y la carga se aborta.
+      operationId: completeMultipartUpload
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [upload_id, parts]
+              properties:
+                upload_id: { type: string }
+                checksum_sha256: { type: string }
+                parts:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [part_number, etag]
+                    properties:
+                      part_number: { type: integer, minimum: 1 }
+                      etag: { type: string }
+      responses:
+        "200":
+          description: Recurso listo de inmediato (no requiere procesamiento).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "202":
+          description: Trabajo de transcodificación encolado (video/audio).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CargaVerificada" }
+        "422": { $ref: "#/components/responses/CargaRechazada" }
+        "503": { $ref: "#/components/responses/Problema" }
+
+  /iframe-allowlist:
+    get:
+      tags: [Multimedia]
+      summary: Destinos autorizados para incrustar
+      description: >
+        La consulta la necesita también el profesor: al añadir un recurso de
+        tipo iframe tiene que saber qué dominios se admiten. Solo la
+        administración puede modificarla.
+      operationId: listIframeAllowlist
+      responses:
+        "200":
+          description: Destinos autorizados, con el sandbox común a todos.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/DestinoIframe" }
+                  sandbox:
+                    type: string
+                    description: Valor del atributo sandbox con que se sirve todo marco.
+                  referrer_policy: { type: string }
+
+  /resources/{resourceId}/captions:
+    get:
+      tags: [Multimedia]
+      summary: Pistas de subtítulos de un recurso
+      description: >
+        Autoriza por la misma vía que el contenido: si el recurso no se le
+        puede entregar a quien pregunta, sus subtítulos tampoco. La URL de cada
+        pista es la del WebVTT, firmada o servida por el CDN, y es lo que el
+        reproductor pone en `<track src>`.
+      operationId: listCaptions
+      parameters:
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Pistas disponibles.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        language: { type: string }
+                        label: { type: string }
+                        kind: { type: string, enum: [subtitles, captions] }
+                        url: { type: string, format: uri }
+
+  /resources/{resourceId}/transcript/{idioma}:
+    get:
+      tags: [Multimedia]
+      summary: Transcripción de un recurso reproducible
+      description: >
+        La transcripción se deriva de los subtítulos, que es donde ya está el
+        texto: pedir las dos cosas por separado garantizaría que acaben
+        diciendo cosas distintas. Es lo que hace el material legible para quien
+        no puede o no quiere reproducirlo, y lo que permite buscar dentro de
+        una clase grabada.
+      operationId: getTranscript
+      parameters:
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: idioma, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Texto corrido de la pista.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resource_title: { type: string }
+                  language: { type: string }
+                  transcript: { type: string }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/captions/{idioma}:
+    put:
+      tags: [Multimedia]
+      summary: Sube o reemplaza la pista de un idioma
+      description: >
+        El archivo va en el cuerpo JSON y no como carga directa al almacén, al
+        contrario que el vídeo, porque el servidor necesita leerlo para derivar
+        la transcripción. Reemplaza en lugar de acumular: subir otra vez el
+        mismo idioma es corregir la pista, no añadir una segunda que el
+        reproductor no sabría cuál elegir.
+
+        Solo se acepta WebVTT. Un SRT es casi idéntico pero el navegador lo
+        rechaza, así que aceptarlo aquí solo trasladaría el fallo a la pantalla
+        del estudiante.
+      operationId: saveCaptions
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: idioma, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vtt]
+              properties:
+                vtt: { type: string }
+                label: { type: string }
+                kind: { type: string, enum: [subtitles, captions] }
+      responses:
+        "200": { description: Pista guardada, con el número de fragmentos y la duración. }
+        "422": { $ref: "#/components/responses/Problema" }
+    delete:
+      tags: [Multimedia]
+      summary: Retira la pista de un idioma
+      operationId: deleteCaptions
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: idioma, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Pista retirada. }
+
+  /forum/{courseId}:
+    get:
+      tags: [Foro]
+      summary: Hilos del foro de un curso
+      description: >
+        El foro es del curso, no un tablón público: se lee y se escribe con
+        acceso a su contenido —estudiante inscrito, profesor dueño o
+        colaborador, administración—. Con `resource_stable_id` se acota a lo
+        que se discute sobre una lección.
+
+        Cuelga de /forum y no de /courses/{courseId}/forum por el mismo
+        conflicto de patrones que llevó el progreso a
+        /enrollments/{courseId}/progress.
+      operationId: listThreads
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resource_stable_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Hilos, el más activo primero.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Hilo" }
+        "403": { $ref: "#/components/responses/Problema" }
+    post:
+      tags: [Foro]
+      summary: Abre un hilo
+      description: >
+        Un hilo sobre una lección se ata a su `stable_id` y no a su
+        identificador de fila, de modo que la conversación sobrevive a la
+        publicación de una versión nueva.
+      operationId: createThread
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, body_md]
+              properties:
+                title: { type: string }
+                body_md: { type: string }
+                resource_stable_id: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Hilo abierto.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hilo" }
+
+  /forum/threads/{threadId}:
+    get:
+      tags: [Foro]
+      summary: Un hilo con sus respuestas
+      description: >
+        Las respuestas eliminadas se devuelven marcadas y sin cuerpo, no se
+        omiten: quitar un mensaje intermedio de una conversación deja sin
+        sentido a los que le respondían.
+      operationId: getThread
+      parameters:
+        - { name: threadId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Hilo y respuestas. }
+        "403": { $ref: "#/components/responses/Problema" }
+
+  /forum/threads/{threadId}/replies:
+    post:
+      tags: [Foro]
+      summary: Responde a un hilo
+      operationId: replyToThread
+      parameters:
+        - { name: threadId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body_md]
+              properties:
+                body_md: { type: string }
+      responses:
+        "201": { description: Respuesta publicada. }
+        "409": { description: El hilo está cerrado a nuevas respuestas. }
+
+  /forum/threads/{threadId}/lock:
+    post:
+      tags: [Foro]
+      summary: Cierra o reabre un hilo (solo el profesor del curso)
+      operationId: lockThread
+      parameters:
+        - { name: threadId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { locked: { type: boolean } }
+      responses:
+        "200": { description: Estado del hilo actualizado. }
+
+  /forum/posts/{postId}:
+    delete:
+      tags: [Foro]
+      summary: Oculta una respuesta
+      description: >
+        La puede borrar su autor o el profesor del curso; la administración,
+        siempre. La respuesta conserva su lugar en la conversación, marcada
+        como eliminada y sin cuerpo.
+      operationId: deleteForumPost
+      parameters:
+        - { name: postId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Respuesta ocultada. }
+        "403": { $ref: "#/components/responses/Problema" }
+
+  /badges/{code}/openbadge:
+    get:
+      tags: [Insignias]
+      summary: La insignia como credencial Open Badges 3.0
+      description: >
+        Open Badges 3.0 deja de ser una imagen con metadatos y pasa a ser una
+        Credencial Verificable del W3C. Esta respuesta es el documento JSON-LD
+        sin firmar, legible y apto para inspección.
+
+        No lleva nada de la persona: el sujeto se identifica por la propia URL
+        de verificación. Una insignia revocada responde 409: una credencial
+        firmada no se puede desdecir, y para el estado está la URL pública.
+      operationId: openBadgeCredential
+      security: []
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Credencial JSON-LD.
+          content:
+            application/ld+json:
+              schema: { type: object }
+        "409": { description: La insignia fue revocada. }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /badges/{code}/openbadge.jwt:
+    get:
+      tags: [Insignias]
+      summary: La credencial firmada como VC-JWT
+      description: >
+        La credencial como carga de un JWS firmado con Ed25519. Se elige esta
+        prueba y no una Data Integrity porque las pruebas de integridad exigen
+        canonicalizar el JSON-LD, y una canonicalización a medias produce
+        firmas que unos verificadores aceptan y otros no, que es peor que no
+        firmar.
+
+        Se verifica con la clave publicada en /.well-known/jwks.json, sin
+        volver a llamar a esta plataforma. Un despliegue sin clave configurada
+        responde 503: las insignias siguen siendo verificables por su URL
+        pública, y lo único que falta es la credencial portátil.
+      operationId: openBadgeJWT
+      security: []
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: VC-JWT.
+          content:
+            application/vc+ld+json+jwt:
+              schema: { type: string }
+        "503": { description: El despliegue no tiene clave de firma configurada. }
+
+  /.well-known/jwks.json:
+    get:
+      tags: [Insignias]
+      summary: Claves públicas con que se verifican las credenciales
+      description: >
+        Pública y cacheable: el sentido de una credencial verificable es que
+        cualquiera la compruebe sin tener cuenta aquí, y un verificador pide
+        este documento por cada credencial.
+      operationId: jwks
+      security: []
+      responses:
+        "200":
+          description: Conjunto de claves (RFC 8037, curva Ed25519).
+          content:
+            application/json:
+              schema: { type: object }
+
+  /me/export:
+    get:
+      tags: [Cuenta]
+      summary: Exportación de los datos personales de quien la pide
+      description: >
+        Sin restricción de rol: el derecho a llevarse los propios datos no
+        depende de para qué se use la plataforma. El identificador sale de la
+        sesión y no de la petición, así que cada quien exporta los suyos y solo
+        los suyos.
+
+        No sale lo que no es un dato personal: el hash del token de sesión es
+        la llave de la cuenta, y el snapshot de un intento son las preguntas y
+        la clave correcta del profesor.
+
+        Se entrega como descarga y con `Cache-Control: no-store`.
+      operationId: exportMyData
+      responses:
+        "200":
+          description: Paquete con cuenta, sesiones, inscripciones, progreso, evaluaciones e insignias.
+          content:
+            application/json:
+              schema: { type: object }
+        "401": { $ref: "#/components/responses/Problema" }
+
+  /collaborators/{courseId}:
+    get:
+      tags: [Autoría]
+      summary: Coautores de un curso
+      description: >
+        Solo el dueño (o la administración). Un colaborador edita el curso pero
+        no reparte acceso: si pudiera, invitar a alguien equivaldría a cederle
+        el curso.
+
+        La ruta cuelga de /collaborators y no de /courses/{courseId}/collaborators
+        porque ese prefijo ya tiene /courses/versions/{versionId} y el router
+        rechaza en el arranque dos patrones donde un comodín compite con un
+        literal en la misma posición.
+      operationId: listCollaborators
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Coautores del curso.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Colaborador" }
+        "403": { $ref: "#/components/responses/Problema" }
+    post:
+      tags: [Autoría]
+      summary: Da acceso de edición a un profesor
+      description: >
+        Se identifica por correo, que es lo que el dueño tiene a mano. La
+        respuesta no distingue "no existe" de "no es profesor": separarlas
+        convertiría este endpoint en una forma de averiguar qué correos están
+        registrados.
+      operationId: addCollaborator
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "201": { description: Acceso concedido. }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /collaborators/{courseId}/{userId}:
+    delete:
+      tags: [Autoría]
+      summary: Retira el acceso de un coautor
+      operationId: removeCollaborator
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Acceso retirado. }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /admin/metrics:
+    get:
+      tags: [Administración]
+      summary: Métricas agregadas de la plataforma
+      description: >
+        Cada bloque trae un total y su desglose por estado. El desglose es un
+        mapa abierto a propósito: añadir un estado en la base no debería
+        obligar a tocar el contrato ni el cliente.
+      operationId: platformMetrics
+      responses:
+        "200":
+          description: Foto de la plataforma.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { $ref: "#/components/schemas/Conteo" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/revisions:
+    get:
+      tags: [Autoría]
+      summary: Historial de revisiones de un recurso
+      description: >
+        No incluye el contenido de cada revisión: un historial largo de un
+        recurso extenso pesaría megabytes, y la lista solo necesita decir quién
+        guardó y cuándo. El contenido se pide por revisión.
+      operationId: listRevisions
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Revisiones, la más reciente primero.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Revision" }
+    post:
+      tags: [Autoría]
+      summary: Guarda el contenido y deja una revisión
+      description: >
+        Actualiza el contenido vigente del recurso y añade una revisión. Si el
+        contenido es idéntico al de la última responde 200 con
+        `status: sin_cambios` en lugar de crear una: el autoguardado dispara
+        cada pocos segundos y, sin esa guarda, media hora de escritura dejaría
+        cientos de revisiones idénticas.
+      operationId: saveRevision
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content_md]
+              properties:
+                content_md: { type: string }
+      responses:
+        "201":
+          description: Revisión creada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Revision" }
+        "200": { description: El contenido no cambió; no se creó ninguna revisión. }
+
+  /courses/versions/{versionId}/resources/{resourceId}/revisions/{numero}:
+    get:
+      tags: [Autoría]
+      summary: Una revisión concreta, con su contenido
+      operationId: getRevision
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: numero, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: Revisión con su contenido.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Revision" }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/revisions/{numero}/restore:
+    post:
+      tags: [Autoría]
+      summary: Restaura el contenido de una revisión anterior
+      description: >
+        No borra ni retrocede el historial: la restauración se guarda como una
+        revisión nueva. Así queda constancia de que alguien restauró, y deshacer
+        una restauración equivocada es otra restauración, no una pérdida.
+      operationId: restoreRevision
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: numero, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: Contenido restaurado, con la revisión que lo registra. }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /courses/versions/{versionId}/resources/{resourceId}/results:
+    get:
+      tags: [Evaluación]
+      summary: Resultados agregados de una evaluación
+      description: >
+        Los ve el profesor dueño o la administración. La agregación se hace
+        sobre el snapshot de cada intento y no sobre la definición vigente: un
+        quiz se puede editar después de presentarse, y contar contra la
+        definición actual haría aparecer como fallos respuestas que en su
+        momento fueron correctas.
+
+        La respuesta señala cuál era la opción correcta. No es una filtración
+        —quien la ve ya la conoce— y sin ella el informe no serviría para lo
+        que existe: detectar el distractor que se está llevando a media clase.
+      operationId: quizResults
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: Resultados agregados.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  quiz_id: { type: string, format: uuid }
+                  title: { type: string }
+                  resultados: { $ref: "#/components/schemas/ResultadosDeQuiz" }
+        "403": { $ref: "#/components/responses/Problema" }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /admin/iframe-allowlist:
+    post:
+      tags: [Administración]
+      summary: Autoriza un dominio incrustable
+      description: >
+        Acepta tanto un dominio suelto como una URL, de la que se extrae el
+        host. Repetir un host ya autorizado actualiza sus permisos en vez de
+        fallar. Queda auditado.
+      operationId: addIframeDestino
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host]
+              properties:
+                host: { type: string }
+                include_subdomains:
+                  type: boolean
+                  description: >
+                    Extiende la autorización a los subdominios, incluidos los
+                    que ese tercero cree después.
+                permissions:
+                  type: string
+                  description: Sintaxis del atributo `allow` ("fullscreen; autoplay").
+                description: { type: string }
+      responses:
+        "201":
+          description: Destino autorizado.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DestinoIframe" }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /admin/iframe-allowlist/{id}:
+    delete:
+      tags: [Administración]
+      summary: Retira un dominio de la lista
+      description: >
+        Surte efecto inmediato sobre los cursos ya publicados: la autorización
+        se rehace al servir cada recurso, así que los que apunten a ese host
+        dejan de entregarse. Queda auditado con el host retirado.
+      operationId: removeIframeDestino
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Destino retirado. }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /catalog:
+    get:
+      summary: Catálogo de cursos publicados, con búsqueda y filtros
+      operationId: listCatalog
+      security: []
+      parameters:
+        - { name: q, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: level, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: Lista de versiones publicadas. }
+
+  /catalog/{courseId}:
+    get:
+      summary: Detalle de la versión publicada vigente de un curso
+      operationId: getPublishedCourse
+      security: []
+      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Versión publicada con su árbol de contenido. }
+        "404": { description: El curso no tiene versión publicada. }
+
+  /resources/{resourceId}/content:
+    get:
+      tags: [Multimedia]
+      summary: Contenido de un recurso para el estudiante
+      x-iframe-note: >
+        En un recurso de tipo iframe la respuesta añade sandbox, allow y
+        referrer_policy. Los decide el servidor a partir de la lista blanca y
+        el cliente los aplica tal cual: si eligiera él cuánto restringir el
+        contenido de terceros, bastaría con manipularlo para que no
+        restringiera nada. Un destino retirado de la lista responde 422.
+      description: >
+        Devuelve lo necesario para presentar el recurso: la lista maestra HLS
+        en video y audio, la URL del objeto en PDF, imagen y descargables, el
+        Markdown en los recursos de texto, y la URL externa en enlaces e
+        iframes. En video y audio incluye además la última posición reportada,
+        para reanudar donde se dejó.
+
+
+        La autorización ocurre antes de resolver ninguna URL: el recurso debe
+        pertenecer a la versión vigente del curso, ser visible, y quien lo pide
+        debe estar inscrito (el profesor dueño y la administración pasan sin
+        inscripción). Un recurso oculto, de un borrador o de una versión
+        retirada responde como inexistente.
+
+
+        La URL procede del CDN cuando `S3_PUBLIC_URL` está configurado, y de
+        una firma temporal en caso contrario. El reproductor pide los segmentos
+        HLS con rutas relativas al manifiesto, así que su autorización la
+        resuelve el CDN, que además debe permitir el origen del frontend por
+        CORS para que hls.js pueda leerlos.
+      operationId: resourceContent
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Contenido del recurso.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceContent' }
+        "401": { $ref: '#/components/responses/Error' }
+        "404":
+          description: El recurso no existe, está oculto o quien lo pide no está inscrito.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "409":
+          description: El recurso existe pero su transcodificación no ha terminado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /resources/{resourceId}/position:
+    put:
+      tags: [Multimedia]
+      summary: Reportar la posición de reproducción
+      description: >
+        Registra el segundo donde reanudar un video o un audio.
+
+
+        Es una comodidad reportada por el cliente y **no acredita avance**: el
+        progreso lo calcula el servidor a partir de heartbeats y eventos de
+        apertura, así que lo que llegue aquí no sostiene ninguna decisión
+        académica. Se guarda por inscripción y contra el `stable_id` del
+        recurso, de modo que sobrevive a la publicación de una versión nueva.
+      operationId: saveResourcePosition
+      security: [{ sessionCookie: [] }]
+      parameters:
+        - name: resourceId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [position_seconds]
+              properties:
+                position_seconds:
+                  type: integer
+                  minimum: 0
+                  maximum: 86400
+      responses:
+        "204": { description: Posición registrada. }
+        "401": { $ref: '#/components/responses/Error' }
+        "404": { $ref: '#/components/responses/Error' }
+        "422":
+          description: Posición fuera de rango, o el recurso no se reproduce.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /enrollments:
+    post:
+      summary: Inscribe al estudiante autenticado en un curso publicado
+      operationId: enroll
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [course_id]
+              properties: { course_id: { type: string, format: uuid } }
+      responses:
+        "201": { description: Inscripción creada (o reactivada si era una reinscripción). }
+        "409": { description: Ya inscrito o el curso no tiene versión publicada. }
+
+  /enrollments/mine:
+    get:
+      summary: Lista las inscripciones del estudiante autenticado
+      operationId: listMyEnrollments
+      responses:
+        "200": { description: Lista de inscripciones. }
+
+  /enrollments/{courseId}/withdraw:
+    post:
+      summary: Retira al estudiante de un curso, conservando su progreso
+      operationId: withdraw
+      parameters: [{ name: courseId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Inscripción retirada. }
+
+  /courses/versions/{versionId}/resources/{resourceId}/quiz:
+    put:
+      tags: [Evaluacion]
+      summary: Define o reemplaza la evaluacion de un recurso de tipo quiz
+      description: >
+        Solo el profesor dueno y sobre una version en borrador. La respuesta no
+        devuelve las preguntas: incluirlas expondria la clave correcta.
+      operationId: defineQuiz
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, questions]
+              properties:
+                title: { type: string }
+                time_limit_seconds: { type: integer, nullable: true }
+                max_attempts: { type: integer, nullable: true }
+                pass_score: { type: number, minimum: 0, maximum: 100 }
+                feedback_policy:
+                  type: string
+                  enum: [immediate, after_submit, after_close, none]
+                shuffle_questions: { type: boolean }
+                questions:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [prompt_md, type, options]
+                    properties:
+                      prompt_md: { type: string }
+                      type: { type: string, enum: [single, multiple] }
+                      points: { type: number, exclusiveMinimum: 0 }
+                      options:
+                        type: array
+                        minItems: 2
+                        items:
+                          type: object
+                          required: [text_md]
+                          properties:
+                            text_md: { type: string }
+                            is_correct: { type: boolean }
+      responses:
+        "200": { description: Evaluacion guardada. }
+        "409": { $ref: "#/components/responses/Problema" }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /resources/{resourceId}/quiz/attempts:
+    post:
+      tags: [Evaluacion]
+      summary: Abre un intento, o devuelve el que ya estuviera en curso
+      description: >
+        Recargar la pagina no gasta un intento: si hay uno abierto se devuelve
+        ese. Las opciones viajan sin ninguna marca de cual es la correcta.
+      operationId: startQuizAttempt
+      parameters:
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "201": { description: Intento abierto. }
+        "409":
+          description: Se agoto el numero maximo de intentos.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /quiz/attempts/{attemptId}:
+    get:
+      tags: [Evaluacion]
+      summary: Consulta un intento propio
+      operationId: getQuizAttempt
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Estado del intento. }
+        "404":
+          description: >
+            Tambien se responde asi para un intento de otra persona: confirmar
+            que existe ya seria filtrar informacion ajena.
+
+  /quiz/attempts/{attemptId}/answers:
+    put:
+      tags: [Evaluacion]
+      summary: Guardado parcial de una pregunta
+      description: >
+        Se valida que la pregunta y las opciones pertenezcan al snapshot del
+        intento, y que una pregunta de respuesta unica no reciba varias.
+      operationId: saveQuizAnswer
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question_stable_id, selected_option_stable_ids]
+              properties:
+                question_stable_id: { type: string, format: uuid }
+                selected_option_stable_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200": { description: Respuesta guardada. }
+        "409": { $ref: "#/components/responses/Problema" }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /quiz/attempts/{attemptId}/submit:
+    post:
+      tags: [Evaluacion]
+      summary: Envio definitivo y calificacion en servidor
+      description: >
+        La nota se calcula contra el snapshot congelado al iniciar, asi que es
+        reproducible aunque el autor edite el quiz despues. Reintentar con la
+        misma Idempotency-Key devuelve la nota ya calculada en vez de calificar
+        otra vez.
+      operationId: submitQuizAttempt
+      parameters:
+        - { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: Intento calificado. }
+        "409": { $ref: "#/components/responses/Problema" }
+
+  /resources/{resourceId}/progress:
+    post:
+      tags: [Progreso]
+      summary: Reporta una senal de progreso
+      description: >
+        El cliente reporta que abrio, que sigue ahi o que cerro. El servidor
+        decide cuanto tiempo acredita comparando marcas de tiempo propias: un
+        porcentaje enviado por el cliente no se acepta. Las senales
+        implausibles se descartan y se auditan.
+      operationId: recordProgressEvent
+      parameters:
+        - { name: resourceId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [open, heartbeat, close] }
+                complete: { type: boolean }
+      responses:
+        "200": { description: Resumen de avance actualizado. }
+        "422": { $ref: "#/components/responses/Problema" }
+
+  /enrollments/{courseId}/progress:
+    get:
+      tags: [Progreso]
+      summary: Resumen de avance del estudiante en un curso
+      operationId: getCourseProgress
+      parameters:
+        - { name: courseId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Porcentaje de obligatorios, estado e insignia. }
+
+  /badges/mine:
+    get:
+      tags: [Insignias]
+      summary: Lista las insignias del estudiante autenticado
+      operationId: listMyBadges
+      responses:
+        "200":
+          description: Lista de insignias, con la URL de su imagen.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Insignia" }
+
+  /badges/{code}:
+    get:
+      tags: [Insignias]
+      summary: Verificacion publica de una insignia
+      description: >
+        No exige sesion, que es el sentido de una insignia verificable. No
+        expone el correo ni el identificador del estudiante.
+      operationId: verifyBadge
+      security: []
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Estado de la insignia y URL de su imagen.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Insignia" }
+        "404": { $ref: "#/components/responses/Problema" }
+
+  /badges/{code}/revoke:
+    post:
+      tags: [Insignias]
+      summary: Revoca una insignia (solo administracion)
+      description: >
+        La URL publica sigue resolviendo, pero reporta el estado revocado. La
+        revocacion queda auditada.
+      operationId: revokeBadge
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        "200": { description: Insignia revocada. }
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, maxLength: 200 }
+      description: >
+        Hace repetible la operación durante 24 horas: reintentar con la misma
+        clave devuelve la respuesta guardada sin volver a ejecutar nada. La
+        repetición se marca con la cabecera `Idempotency-Replayed: true`.
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: { type: string }
+      description: >
+        Valor de la cookie `mooc_csrf`, que la API emite junto con la sesión.
+        Se exige en toda operación que cambie estado y se autentique por
+        cookie; un sitio atacante no puede leerla para rellenarlo.
+
+  responses:
+    Error:
+      description: Error uniforme.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    Problema:
+      description: >
+        Error uniforme. El campo `error.code` identifica el motivo de forma
+        estable; `error.details` enumera los motivos cuando hay varios, como en
+        la validación de publicación.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+    CargaRechazada:
+      description: >
+        El objeto llegó pero no se acepta. `error.code` distingue el motivo:
+        `checksum_mismatch` (integridad), `mime_mismatch` (el contenido real no
+        corresponde al tipo del recurso), `malware_detected` (lo rechazó el
+        escaneo), `presentation_format_unsupported` (no es un PPTX ni un ODP
+        reconocible), `media_container_unrecognized` (el archivo no es un
+        contenedor de audio o vídeo reconocible) o `upload_missing` (no hay
+        objeto). Salvo en el último, el objeto ya fue borrado del almacén.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: mooc_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Hilo:
+      type: object
+      required: [id, course_id, title, body_md, locked]
+      properties:
+        id: { type: string, format: uuid }
+        course_id: { type: string, format: uuid }
+        resource_stable_id:
+          type: string
+          format: uuid
+          description: >
+            Ata el hilo a una lección. Es el stable_id, no el identificador de
+            fila, para que la conversación sobreviva a una versión nueva.
+        author_name: { type: string }
+        title: { type: string }
+        body_md: { type: string }
+        locked: { type: boolean }
+        replies: { type: integer }
+        created_at: { type: string, format: date-time }
+        last_activity_at: { type: string, format: date-time }
+
+    Colaborador:
+      type: object
+      required: [user_id, email, role]
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        role: { type: string, enum: [editor] }
+        added_at: { type: string, format: date-time }
+
+    Revision:
+      type: object
+      required: [id, resource_id, revision_number, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        resource_id: { type: string, format: uuid }
+        revision_number: { type: integer }
+        content_md:
+          type: string
+          description: Solo al pedir una revisión concreta, no en la lista.
+        author_email: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Conteo:
+      type: object
+      required: [total, desglose]
+      properties:
+        total: { type: integer }
+        desglose:
+          type: object
+          additionalProperties: { type: integer }
+
+    ResultadosDeQuiz:
+      type: object
+      required: [intentos, estudiantes, preguntas]
+      properties:
+        intentos: { type: integer }
+        estudiantes:
+          type: integer
+          description: >
+            Inscripciones distintas, no intentos: con tres intentos por persona
+            contar intentos triplicaría la población.
+        nota_media: { type: number }
+        nota_mediana:
+          type: number
+          description: >
+            Dice más que la media cuando la distribución es bimodal, que es el
+            caso típico de un quiz.
+        tasa_aprobado: { type: number }
+        preguntas:
+          type: array
+          items:
+            type: object
+            properties:
+              stable_id: { type: string, format: uuid }
+              prompt_md: { type: string }
+              respondida: { type: integer }
+              en_blanco:
+                type: integer
+                description: Dejarla en blanco no es lo mismo que fallarla.
+              aciertos: { type: integer }
+              tasa_acierto:
+                type: number
+                description: >
+                  Sobre los intentos que la vieron, no sobre los que la
+                  respondieron: una pregunta que casi nadie contesta es tan
+                  problemática como una que casi nadie acierta.
+              opciones:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    stable_id: { type: string, format: uuid }
+                    text_md: { type: string }
+                    es_correcta: { type: boolean }
+                    elegida: { type: integer }
+                    porcentaje: { type: number }
+
+    ClasificacionDeCambios:
+      type: object
+      required: [alcance, cambios]
+      properties:
+        alcance:
+          type: string
+          enum: [ninguno, menor, mayor]
+        cambios:
+          type: array
+          items:
+            type: object
+            required: [tipo, elemento, stable_id, titulo, afecta_progreso]
+            properties:
+              tipo: { type: string, enum: [agregado, eliminado, modificado, movido] }
+              elemento: { type: string, enum: [modulo, unidad, recurso] }
+              stable_id: { type: string, format: uuid }
+              titulo: { type: string }
+              detalle: { type: string }
+              afecta_progreso:
+                type: boolean
+                description: >
+                  Cierto solo cuando el cambio altera el conjunto de recursos
+                  obligatorios visibles, que es lo único que cambia lo que un
+                  estudiante debe completar.
+        obligatorios_agregados:
+          type: array
+          items: { type: string, format: uuid }
+        obligatorios_eliminados:
+          type: array
+          items: { type: string, format: uuid }
+
+    DestinoIframe:
+      type: object
+      required: [id, host, include_subdomains]
+      properties:
+        id: { type: string, format: uuid }
+        host: { type: string }
+        include_subdomains: { type: boolean }
+        permissions: { type: string }
+        description: { type: string }
+        example_url: { type: string, format: uri }
+
+    CargaVerificada:
+      type: object
+      description: Resultado de verificar un objeto recién cargado.
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ready, queued]
+          description: >
+            `ready` cuando el recurso queda disponible de inmediato; `queued`
+            cuando se encoló la transcodificación a HLS.
+        mime_type:
+          type: string
+          description: Tipo real deducido de los primeros bytes, no el declarado por el cliente.
+        size_bytes: { type: integer, format: int64 }
+        checksum_sha256:
+          type: string
+          description: SHA-256 calculado por el servidor sobre el objeto almacenado.
+        media_asset_id:
+          type: string
+          format: uuid
+          description: >
+            Solo en `queued`; identifica el trabajo asíncrono, que es la
+            transcodificación a HLS en vídeo y audio y la conversión a PDF en
+            presentaciones.
+
+    Insignia:
+      type: object
+      description: >
+        Insignia verificable. Nunca lleva el correo ni el identificador del
+        estudiante: la vista pública se comparte junto con la imagen.
+      required: [code, course_id, valid, issued_at]
+      properties:
+        code: { type: string }
+        course_id: { type: string, format: uuid }
+        valid: { type: boolean }
+        issued_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        image_url:
+          type: string
+          format: uri
+          description: >
+            Imagen SVG de la insignia. Sale del CDN cuando está configurado y
+            firmada en caso contrario.
+
+    User:
+      type: object
+      required: [id, email, full_name, role, status]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+        role:
+          type: string
+          enum: [admin, teacher, student]
+        status:
+          type: string
+          enum: [pending_verification, active, suspended]
+    Message:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+    AuditEntry:
+      type: object
+      required: [id, action, entity_type, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        actor_id: { type: string, format: uuid }
+        actor_email:
+          type: string
+          description: Vacío si la cuenta que actuó fue eliminada; el hecho auditado sobrevive a su autor.
+        action: { type: string }
+        entity_type: { type: string }
+        entity_id: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        ip_address: { type: string }
+        created_at: { type: string, format: date-time }
+    ResourceContent:
+      type: object
+      required: [type, title, downloadable]
+      properties:
+        type:
+          type: string
+          enum: [text, image, video, audio, pdf, presentation, file, iframe, link, quiz]
+        title: { type: string }
+        downloadable: { type: boolean }
+        url:
+          type: string
+          format: uri
+          description: Lista maestra HLS en video y audio; el archivo en PDF, imagen y descargables.
+        cdn:
+          type: boolean
+          description: Indica si la URL viene de una base pública y por tanto no caduca.
+        expires_in:
+          type: integer
+          description: Segundos de validez cuando la URL va firmada.
+        markdown:
+          type: string
+          description: Contenido de los recursos de texto.
+        external_url:
+          type: string
+          format: uri
+          description: Destino de enlaces e iframes.
+        position_seconds:
+          type: integer
+          description: Segundo donde reanudar. Solo en video y audio.
+    QueueInfo:
+      type: object
+      properties:
+        queue: { type: string }
+        pending: { type: integer }
+        active: { type: integer }
+        retry: { type: integer }
+        archived:
+          type: integer
+          description: Trabajos que agotaron sus reintentos y están en la dead-letter queue.
+        completed: { type: integer }
+        failed: { type: integer }
+    DeadTask:
+      type: object
+      properties:
+        id: { type: string }
+        queue: { type: string }
+        type: { type: string }
+        last_error: { type: string }
+        last_failed_at: { type: string, format: date-time }
+        retried: { type: integer }
+    Session:
+      type: object
+      required: [id, created_at, expires_at, current]
+      properties:
+        id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        ip_address: { type: string }
+        user_agent: { type: string }
+        current:
+          type: boolean
+          description: Indica si es la sesión que hace la petición.
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: array, items: { type: string } }
+    PositionedTitle:
+      type: object
+      required: [title, position]
+      properties:
+        title: { type: string }
+        position: { type: integer }
+    VersionMetadataInput:
+      type: object
+      properties:
+        title: { type: string }
+        summary: { type: string }
+        description_md: { type: string }
+        category: { type: string }
+        level: { type: string }
+        language: { type: string }
+        approval_min_score: { type: number }
+        approval_required_resources_pct: { type: number }
+    ResourceInput:
+      type: object
+      required: [type, title, position]
+      properties:
+        type:
+          type: string
+          enum: [text, image, video, audio, pdf, presentation, file, iframe, link, quiz]
+        title: { type: string }
+        position: { type: integer }
+        visible: { type: boolean }
+        required: { type: boolean }
+        downloadable: { type: boolean }
+        text_content_md: { type: string }
+        external_url: { type: string }
