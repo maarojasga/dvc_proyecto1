@@ -55,6 +55,39 @@ services:
     volumes:
       - minio_data:/data
 
+  # Crea el bucket y deja legible el prefijo hls/.
+  #
+  # El reproductor pide las listas de variante y los segmentos con rutas
+  # relativas al manifiesto, y una URL relativa no hereda la firma de aquella
+  # contra la que se resuelve. Firmar solo master.m3u8 deja el vídeo en un 403
+  # en cuanto hls.js pasa de la primera línea: el recurso figura "ready" y aun
+  # así no se ve. En produccion esa autorizacion la resuelve el CDN; en local
+  # no hay CDN delante, así que el prefijo tiene que ser legible.
+  #
+  # Solo hls/, que son derivados de reproducción con nombre impredecible. Los
+  # originales, los PDF y las descargas siguen firmándose uno a uno.
+  minio-init:
+    image: ${MINIO_MC_IMAGE:-quay.io/minio/mc:latest}
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-mooc}
+    # Reintenta el alias en lugar de esperar un healthcheck: MinIO tarda un
+    # instante en aceptar conexiones y este contenedor arranca a la vez.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+          sleep 1
+        done
+        mc mb --ignore-existing "local/$$S3_BUCKET"
+        mc anonymous set download "local/$$S3_BUCKET/hls"
+    restart: on-failure
+
   mailpit:
     # Con versión, no :latest: una etiqueta móvil hace que dos ejecuciones
     # del mismo commit puedan no ser la misma cosa.
@@ -180,7 +213,12 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz-proxy"]
+      # 127.0.0.1 explícito, no "localhost": /etc/hosts también resuelve
+      # localhost a ::1, y nginx aquí solo escucha en IPv4 (0.0.0.0:8080).
+      # wget probando el lado IPv6 se encuentra con nadie escuchando y
+      # responde "Connection refused", así que el healthcheck fallaba pese
+      # a que el proxy servía tráfico real sin problema.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz-proxy"]
       interval: 10s
       timeout: 3s
       retries: 3

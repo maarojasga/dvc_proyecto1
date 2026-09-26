@@ -48,6 +48,12 @@ export default function RecursoPage() {
         if (cancelado) return;
         if (e instanceof ApiError && e.code === "media_not_ready") {
           setAviso(t("recurso.procesando"));
+        } else if (e instanceof ApiError && e.code === "not_enrolled") {
+          // No inscrito también viaja como 404 —confirmar que la lección
+          // existe delataría el contenido a quien no tiene derecho a verlo—,
+          // pero para el estudiante es otra cosa: no le falta acceso, le falta
+          // inscribirse, y decirle "no existe" lo deja sin saber qué hacer.
+          setAviso(t("recurso.noInscrito"));
         } else if (e instanceof ApiError && e.status === 404) {
           setError(t("recurso.sinAcceso"));
         } else {

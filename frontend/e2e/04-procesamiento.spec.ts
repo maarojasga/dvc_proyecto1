@@ -18,6 +18,26 @@ import { createHash } from "node:crypto";
  * fallos; reproducirlos desde el navegador exigiría esperar tres reintentos
  * reales y no añadiría evidencia.
  */
+
+function wavSilencio(muestras = 1024): Buffer {
+  const dataSize = muestras * 2;
+  const buf = Buffer.alloc(44 + dataSize);
+  buf.write("RIFF", 0);
+  buf.writeUInt32LE(36 + dataSize, 4);
+  buf.write("WAVE", 8);
+  buf.write("fmt ", 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(8000, 24);
+  buf.writeUInt32LE(16000, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write("data", 36);
+  buf.writeUInt32LE(dataSize, 40);
+  return buf;
+}
+
 test.describe("4. Procesamiento y fallos", () => {
   test("confirmar la carga encola sin bloquear la API y conserva el original", async ({
     request,
@@ -61,12 +81,11 @@ test.describe("4. Procesamiento y fallos", () => {
       ).json()
     ).ID;
 
-    // Un contenedor que el olfateo da por genérico: basta para encolar.
-    const binario = Buffer.alloc(2048, 7);
+    const binario = wavSilencio();
     const { upload_url: url } = await (
       await request.post(
         `${API}/api/v1/courses/versions/${versionId}/resources/${resourceId}/upload-url`,
-        { headers: conToken(token), data: { mime_type: "application/octet-stream" } },
+        { headers: conToken(token), data: { mime_type: "audio/wav" } },
       )
     ).json();
     await request.fetch(url, { method: "PUT", data: binario });
@@ -96,12 +115,77 @@ test.describe("4. Procesamiento y fallos", () => {
     expect(recurso.ProcessingStatus, "y su estado lo refleja").toMatch(/pending|processing|ready/);
     expect(recurso.ObjectKey, "el original se conserva bajo su clave").toBeTruthy();
 
-    // Doble entrega: repetir la confirmación no debe romper ni duplicar.
+    // Doble entrega: repetir la confirmación reutiliza el activo y no encola
+    // una segunda transcodificación.
     const repetida = await request.post(
       `${API}/api/v1/courses/versions/${versionId}/resources/${resourceId}/confirm-upload`,
       { headers: conToken(token), data: { checksum_sha256: sha } },
     );
     expect(repetida.ok(), "confirmar dos veces es inofensivo").toBeTruthy();
+    const repetido = await repetida.json();
+    expect(repetido.media_asset_id, "la segunda confirmación reutiliza el activo").toBe(
+      resultado.media_asset_id,
+    );
+  });
+
+  test("un audio que no es audio se rechaza al confirmar y no se encola", async ({
+    request,
+  }) => {
+    const token = await tokenDeAdmin(request);
+    const marca = sufijo();
+
+    const { version_id: versionId } = await (
+      await request.post(`${API}/api/v1/courses`, {
+        headers: conToken(token),
+        data: { slug: `basura-${marca}`, title: `Basura ${marca}` },
+      })
+    ).json();
+    const moduloId = (
+      await (
+        await request.post(`${API}/api/v1/courses/versions/${versionId}/modules`, {
+          headers: conToken(token), data: { title: "M", position: 1 },
+        })
+      ).json()
+    ).ID;
+    const unidadId = (
+      await (
+        await request.post(
+          `${API}/api/v1/courses/versions/${versionId}/modules/${moduloId}/units`,
+          { headers: conToken(token), data: { title: "U", position: 1 } },
+        )
+      ).json()
+    ).ID;
+    const resourceId = (
+      await (
+        await request.post(
+          `${API}/api/v1/courses/versions/${versionId}/units/${unidadId}/resources`,
+          {
+            headers: conToken(token),
+            data: {
+              type: "audio", title: "Audio falso", position: 1,
+              visible: true, required: false, downloadable: true,
+            },
+          },
+        )
+      ).json()
+    ).ID;
+
+    const binario = Buffer.alloc(2048, 7);
+    const { upload_url: url } = await (
+      await request.post(
+        `${API}/api/v1/courses/versions/${versionId}/resources/${resourceId}/upload-url`,
+        { headers: conToken(token), data: { mime_type: "application/octet-stream" } },
+      )
+    ).json();
+    await request.fetch(url, { method: "PUT", data: binario });
+
+    const confirmacion = await request.post(
+      `${API}/api/v1/courses/versions/${versionId}/resources/${resourceId}/confirm-upload`,
+      { headers: conToken(token), data: { checksum_sha256: createHash("sha256").update(binario).digest("hex") } },
+    );
+    expect(confirmacion.status(), "la basura no entra a la cola").toBe(422);
+    const cuerpo = await confirmacion.json();
+    expect(cuerpo.error?.code).toBe("media_container_unrecognized");
   });
 
   test("un recurso que aún se procesa no se entrega como si estuviera listo", async ({

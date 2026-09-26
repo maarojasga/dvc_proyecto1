@@ -22,7 +22,7 @@ Cobertura del alcance mínimo (sección 5.1 del enunciado):
 |---|---|---|
 | 1 | Registro, verificación de correo, sesiones revocables y recuperación | Completo, con pruebas de integración |
 | 2 | Gestión administrativa de usuarios | Completo: usuarios, roles, estados, sesiones (ver y cerrar), consulta de la bitácora inmutable y protección del último administrador activo |
-| 3 | Autoría, jerarquía y versiones | Completo: jerarquía de cuatro niveles con `stable_id`, ordenamiento, previsualización, validación exhaustiva de publicación y versiones publicadas inmutables |
+| 3 | Autoría, jerarquía y versiones | Completo: jerarquía de cuatro niveles con `stable_id`, ordenamiento, previsualización, validación exhaustiva de publicación y versiones publicadas inmutables. Un curso publicado no se edita: hay que despublicarlo, y el borrador que se abre entonces parte de la versión retirada |
 | 4 | Editor de bloques con autosave y Markdown canónico | Completo en lo que el MVP delimita: bloques de encabezado, párrafo, lista, código y aviso, con autoguardado y recuperación del borrador local. La ida y vuelta AST ↔ Markdown cubre ese subconjunto, no el Markdown extendido entero |
 | 5 | Carga multimedia | Completo: multipart directa reanudable durante 24 h, checksum SHA-256 extremo a extremo, MIME real deducido de los bytes y escaneo antimalware. Los mismos controles se aplican a la subida simple |
 | 6 | Procesamiento asíncrono a HLS | Completo: worker asynq con FFmpeg sin upscaling, original conservado, toma exclusiva del trabajo, reintentos con backoff, dead-letter queue con alerta y entrega autorizada por CDN |
@@ -90,6 +90,8 @@ el escáner. Si algo no cuadra, el objeto se borra del almacén y la respuesta e
 | `checksum_mismatch` | El hash que calculó el navegador no coincide con el objeto almacenado |
 | `mime_mismatch` | El contenido real no corresponde al tipo del recurso (un HTML subido como PDF) |
 | `malware_detected` | El escaneo reconoció el archivo |
+| `presentation_format_unsupported` | El ZIP no es un PPTX ni un ODP reconocible |
+| `media_container_unrecognized` | El archivo no empieza por una firma de audio o vídeo conocida |
 | `upload_missing` | No hay objeto en la clave, o está vacío |
 | `scanner_unavailable` (503) | No se pudo escanear. La carga se rechaza: dar por limpio lo que no se escaneó convertiría apagar el antivirus en una vía de entrada |
 
@@ -156,10 +158,15 @@ devuelve la URL del manifiesto en el CDN; sin ella, devuelve una URL firmada de
 
 Dos condiciones del despliegue que conviene no descubrir en la demostración:
 
-- **Los segmentos los pide el reproductor con rutas relativas al manifiesto**,
-  así que su autorización la resuelve el CDN. Sin CDN delante, el prefijo
-  `hls/` del bucket debe ser legible por el reproductor: firmar solo el
-  manifiesto no alcanza para los segmentos.
+- **Los segmentos y las listas de variante los pide el reproductor con rutas
+  relativas al manifiesto**, y una URL relativa no hereda la firma de aquella
+  contra la que se resuelve, así que su autorización la resuelve el CDN. Sin
+  CDN delante, el prefijo `hls/` del bucket debe ser legible por el
+  reproductor: firmar solo el manifiesto deja el vídeo en un `403` en cuanto
+  hls.js pasa de la primera línea, con el recurso marcado `ready` y la
+  pantalla en negro. En el compose lo resuelve el servicio `minio-init`, que
+  abre a lectura anónima únicamente ese prefijo; los originales, los PDF y las
+  descargas se siguen firmando uno a uno.
 - **El origen del frontend debe estar permitido por CORS en el almacenamiento
   o el CDN.** Safari reproduce HLS de forma nativa y no lo necesita, pero el
   resto de navegadores usan hls.js, que lee el manifiesto y los segmentos por
@@ -369,12 +376,23 @@ El enunciado exige cuatro cosas para aceptar. Estado real, medido:
 | **CI** completo antes de la demostración | **Cubierto.** [`.github/workflows/ci.yml`](.github/workflows/ci.yml): build, lint, análisis de seguridad, migraciones, pruebas, E2E, accesibilidad y carga |
 
 ```bash
-cd frontend && npm run e2e          # los nueve flujos y la accesibilidad
+cd frontend && npx playwright install chromium   # solo la primera vez
+cd frontend && npm run e2e                       # los nueve flujos y la accesibilidad
 ```
 
-Las E2E necesitan la plataforma en marcha y el administrador sembrado
-(`E2E_ADMIN_EMAIL` y `E2E_ADMIN_PASSWORD`). Levantan un navegador de verdad:
-no simulan la API.
+Las E2E necesitan la plataforma en marcha y levantan un navegador de verdad: no
+simulan la API. Las credenciales del administrador salen del `.env` de la raíz
+(`ADMIN_EMAIL` y `ADMIN_PASSWORD`, las mismas con las que la API lo siembra al
+arrancar); `E2E_ADMIN_EMAIL` y `E2E_ADMIN_PASSWORD` solo hacen falta para
+apuntar a otra cuenta, y es lo que hace CI.
+
+Antes de correr la suite entera hay que descomentar
+`AUTH_RATE_LIMIT_PER_MINUTE=300` en el `.env` y reiniciar la API
+(`docker compose up -d api`). Toda la suite sale de una misma IP y con el valor
+de producción (10) las pruebas se ahogan entre ellas: el síntoma son veintitantos
+429 que parecen un fallo del producto. Por lo mismo, dos ejecuciones seguidas
+necesitan un minuto de pausa, porque `99-limite-de-tasa` agota el presupuesto a
+propósito.
 
 ### Por qué Next va en 16 y no en 14
 

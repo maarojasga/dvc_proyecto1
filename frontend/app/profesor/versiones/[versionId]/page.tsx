@@ -99,9 +99,12 @@ export default function VersionEditorPage() {
         {t("version.etiqueta", { n: version.VersionNumber, estado: version.Status })}
       </p>
 
+      {/* Una sola advertencia: antes se pintaban dos banners seguidos, uno de
+          aviso y otro de error, diciendo lo mismo con distinto color. */}
       {!isDraft && (
         <p className="warning-banner" role="status">
-          {t("version.inmutable")}
+          {t("version.inmutable")}{" "}
+          <Link href="/profesor">{t("version.irADespublicar")}</Link>
         </p>
       )}
 
@@ -115,12 +118,6 @@ export default function VersionEditorPage() {
             ))}
           </ul>
         </div>
-      )}
-
-      {!isDraft && (
-        <p className="error-banner">
-          {t("version.noBorrador", { estado: version.Status })}
-        </p>
       )}
 
       <MetadataForm version={version} disabled={!isDraft} onSaved={load} />

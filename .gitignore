@@ -1,117 +1,3 @@
-# =====================================================================
-# ADVERTENCIAS ANTES DE PRESENTAR O DESPLEGAR ESTE PROYECTO
-#
-# Van aquí porque este es el primer archivo que se abre al clonar. El
-# detalle completo está en README.md, docs/demostracion.md y load/README.md;
-# esto es el resumen que no conviene descubrir a mitad de la demostración.
-#
-# ---------------------------------------------------------------------
-# LO QUE ESTÁ ACREDITADO (condición de aceptación, sección 10)
-# ---------------------------------------------------------------------
-#   - Los nueve flujos críticos, con 34 pruebas E2E en frontend/e2e/.
-#   - Prueba de carga de Etapa 1 ejecutada: 42.075 peticiones a 200 VU en
-#     4 min, 0 % de error, p95 de 2 ms (catalogo), 5 ms (consumo), 5 ms
-#     (quiz) y 277 ms (login).
-#   - Recorrido de la API por los nueve segmentos con la coleccion de
-#     postman/: 55 peticiones, 113 aserciones, y corre en CI para que no
-#     se desincronice de la API.
-#   - Auditoría de accesibilidad con axe-core (WCAG 2.2 A y AA) sobre 13
-#     pantallas, en español y en inglés: cero violaciones.
-#   - Pipeline de CI con build, lint, análisis de seguridad, migraciones,
-#     pruebas, E2E, accesibilidad y carga.
-#
-# ---------------------------------------------------------------------
-# LO QUE NO SE PUEDE AFIRMAR, AUNQUE LO PAREZCA
-# ---------------------------------------------------------------------
-#   - NO decir "aguanta 2.000 usuarios concurrentes". No se ha medido. Lo
-#     medido es 200 VU con dos órdenes de magnitud de margen, lo que
-#     sugiere holgura pero no la acredita: el techo real sigue sin
-#     conocerse. Para medirlo hacen falta 2.000 cuentas sembradas y una
-#     máquina que no sea la de desarrollo.
-#
-#   - NO decir "la plataforma es accesible". Lo acreditado es que no tiene
-#     los defectos que una máquina detecta. axe cubre del orden de la mitad
-#     de los problemas reales; el orden de foco, el texto alternativo que es
-#     correcto pero inútil y el recorrido con lector de pantalla siguen
-#     necesitando a una persona.
-#
-#   - NO decir que la recuperación cumple RPO <= 15 min y RTO <= 4 h. No hay
-#     backup, ni restauración, ni prueba que lo acredite.
-#
-#   - NO presentar la prueba de carga como caracterización del sistema. Con
-#     los márgenes actuales, sus umbrales detectan una regresión grosera y
-#     poco más. El único número informativo es el p95 del login (277 ms), y
-#     lo que mide es Argon2id, que cuesta a propósito.
-#
-# ---------------------------------------------------------------------
-# PENDIENTE (restricciones técnicas de la sección 7 y segmento 9)
-# ---------------------------------------------------------------------
-#   - OpenTelemetry: hoy hay logs estructurados y correlación por
-#     X-Request-Id, pero no métricas ni trazas. Sin ellas no se puede ver
-#     DÓNDE se va el p95 cuando se rompe un umbral.
-#   - Cursores y ETag en las colecciones (seccion 7). Hoy el catalogo pagina
-#     con LIMIT/OFFSET y no hay ETag ni If-None-Match en ninguna respuesta.
-#
-#   - Cifrado en reposo y gestion externa de secretos (seccion 7). No hay
-#     nada: las credenciales viajan por variables de entorno del compose.
-#
-#   - TLS 1.2+ (seccion 7). El compose local sirve HTTP; el proxy nginx no
-#     termina TLS.
-#
-#   - Redis no lleva sesiones ni cache, aunque la seccion 4 lo pida. Las
-#     sesiones viven en PostgreSQL (revocacion transaccional, sobreviven a un
-#     reinicio de Redis) y cache no hay ninguna. Son desviaciones conscientes,
-#     explicadas en el README, no olvidos.
-#   - El escaneo de secretos usa el BINARIO de gitleaks, no gitleaks-action:
-#     la herramienta es MIT, pero el envoltorio de Action exige licencia de
-#     pago para organizaciones. Los falsos positivos ya revisados van por
-#     huella en .gitleaksignore, con su motivo; no se desactiva ninguna regla.
-#
-#   - cmd/seed se niega a correr si APP_ENV no es un entorno de pruebas. Es el
-#     control que impide crear cuentas con contraseña pública donde no debe;
-#     se puede saltar a conciencia con SEED_PERMITIR_ENTORNO=1.
-#
-#   - Al añadir una variable de entorno nueva, declararla en el
-#     `environment:` del servicio en docker-compose.yml. Ponerla solo en el
-#     .env NO la inyecta en el contenedor: Compose usa el .env para interpolar
-#     el archivo. El servicio arranca con su valor por defecto y no avisa. Hay
-#     un guardián en .github/scripts/verificar-entorno.py que lo comprueba en
-#     el CI antes de levantar nada.
-#
-#   - Fijar MINIO_IMAGE a una release concreta. MinIO dejó de publicar su
-#     imagen de forma publica en Docker Hub, asi que el compose apunta a
-#     quay.io con la etiqueta movil :latest. Las demas imagenes si llevan
-#     version; esta es la unica que no.
-#
-#   - ENCENDER las alertas de Dependabot en el repositorio. El archivo
-#     .github/dependabot.yml ya está, pero solo configura las actualizaciones
-#     de VERSIÓN (las programadas). Las de SEGURIDAD hay que activarlas en
-#     Settings -> Code security -> Dependabot, y son las que avisan en cuanto
-#     aparece un advisory. Sin ese paso, el hueco que dejó pudrirse a Next 14
-#     hasta veinte advisories sigue abierto: `npm audit` en el CI solo mira
-#     cuando alguien empuja.
-#   - Backup y restauración con su prueba de recuperación.
-#   - Fallos inyectados durante la carga (tirar una réplica a mitad de la
-#     meseta y demostrar que el p95 se recupera).
-#
-# ---------------------------------------------------------------------
-# AL LEVANTAR EL ENTORNO
-# ---------------------------------------------------------------------
-#   - El escáner antimalware integrado NO lleva firmas reales. Para la
-#     demostración hay que levantar el perfil antivirus y apuntar
-#     CLAMAV_ADDR a clamd:
-#         docker compose --profile antivirus up -d clamav
-#         CLAMAV_ADDR=clamav:3310 docker compose up -d
-#     Tarda: la primera vez descarga varios cientos de MB de firmas.
-#
-#   - Sin BADGE_SIGNING_KEY las insignias siguen siendo verificables por su
-#     URL pública, pero no se emiten como credencial Open Badges firmada.
-#
-#   - cmd/seed NO debe ejecutarse jamás contra un entorno real: crea cuentas
-#     con una contraseña pública y escribe sus tokens de sesión en un
-#     archivo.
-# =====================================================================
-
 # Go
 backend/bin/
 *.exe
@@ -160,3 +46,26 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# Material de apoyo, no entregable
+# Guiones y notas de preparación: ayudan a grabar y ensayar, pero no forman
+# parte del sistema ni de su documentación técnica.
+docs/video-sustentacion.md
+NOTAS.md
+notas/
+
+
+.cursor/
+.cursorrules
+.cursorignore
+.claude/
+CLAUDE.md
+AGENTS.md
+.aider*
+.specstory/
+.continue/
+.windsurfrules
+.github/copilot-instructions.md
+*.canvas.tsx
+prompts/
+.prompts/

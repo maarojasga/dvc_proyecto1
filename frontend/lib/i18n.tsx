@@ -172,6 +172,7 @@ const es = {
   "curso.obligatorio": "obligatorio",
 
   "recurso.procesando": "Este recurso todavía se está procesando. Vuelve en unos minutos.",
+  "recurso.noInscrito": "Tienes que inscribirte en el curso para ver esta lección.",
   "recurso.sinAcceso": "El recurso no existe o no tienes acceso a él.",
   "recurso.error": "No se pudo cargar el recurso",
   "recurso.cargando": "Cargando recurso…",
@@ -290,8 +291,18 @@ const es = {
   "profesor.publicado": "Publicado",
   "profesor.sinPublicar": "Sin publicar",
   "profesor.verPublicada": "Ver versión publicada",
+  "profesor.publicadoAyuda":
+    "Un curso publicado no se edita. Despublícalo para abrir un borrador: saldrá del catálogo hasta que vuelvas a publicar, y quienes ya están inscritos conservan su progreso.",
+  "profesor.editarBorrador": "Editar borrador",
+  "profesor.crearVersion": "Crear nueva versión",
+  "profesor.despublicarParaEditar": "Despublicar para editar",
+  "profesor.despublicando": "Despublicando…",
+  "profesor.confirmarDespublicar":
+    "Despublicar «{slug}» lo retirará del catálogo hasta que publiques la nueva versión. ¿Continuar?",
   "profesor.error": "No se pudieron cargar tus cursos",
   "profesor.errorCrear": "No se pudo crear el curso",
+  "profesor.errorBorrador": "No se pudo abrir el borrador",
+  "profesor.errorDespublicar": "No se pudo despublicar el curso",
 
   "version.error": "No se pudo cargar la versión",
   "version.publicada": "¡Versión publicada!",
@@ -301,8 +312,8 @@ const es = {
   "version.etiqueta": "Versión {n} · {estado}",
   "version.inmutable":
     "Esta versión está publicada y es inmutable. Para editarla hay que despublicar el curso primero.",
+  "version.irADespublicar": "Ir a mis cursos para despublicarlo",
   "version.motivos": "No se pudo publicar. Motivos:",
-  "version.noBorrador": "Esta versión no es un borrador ({estado}); no se puede editar.",
   "version.publicar": "Publicar versión",
   "version.estructura": "Estructura",
   "version.metadatos": "Metadatos",
@@ -706,6 +717,7 @@ const en: Record<Clave, string> = {
   "curso.obligatorio": "required",
 
   "recurso.procesando": "This resource is still being processed. Come back in a few minutes.",
+  "recurso.noInscrito": "You have to enroll in the course to see this lesson.",
   "recurso.sinAcceso": "The resource does not exist or you do not have access to it.",
   "recurso.error": "Could not load the resource",
   "recurso.cargando": "Loading resource…",
@@ -822,8 +834,18 @@ const en: Record<Clave, string> = {
   "profesor.publicado": "Published",
   "profesor.sinPublicar": "Not published",
   "profesor.verPublicada": "View the published version",
+  "profesor.publicadoAyuda":
+    "A published course cannot be edited. Unpublish it to open a draft: it will leave the catalog until you publish again, and students already enrolled keep their progress.",
+  "profesor.editarBorrador": "Edit draft",
+  "profesor.crearVersion": "Create new version",
+  "profesor.despublicarParaEditar": "Unpublish to edit",
+  "profesor.despublicando": "Unpublishing…",
+  "profesor.confirmarDespublicar":
+    "Unpublishing “{slug}” will remove it from the catalog until you publish the new version. Continue?",
   "profesor.error": "Could not load your courses",
   "profesor.errorCrear": "Could not create the course",
+  "profesor.errorBorrador": "Could not open the draft",
+  "profesor.errorDespublicar": "Could not unpublish the course",
 
   "version.error": "Could not load the version",
   "version.publicada": "Version published.",
@@ -833,8 +855,8 @@ const en: Record<Clave, string> = {
   "version.etiqueta": "Version {n} · {estado}",
   "version.inmutable":
     "This version is published and immutable. To edit it, the course has to be unpublished first.",
+  "version.irADespublicar": "Go to my courses to unpublish it",
   "version.motivos": "It could not be published. Reasons:",
-  "version.noBorrador": "This version is not a draft ({estado}); it cannot be edited.",
   "version.publicar": "Publish version",
   "version.estructura": "Structure",
   "version.metadatos": "Metadata",

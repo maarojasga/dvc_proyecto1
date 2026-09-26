@@ -149,6 +149,15 @@ test.describe("8. Insignia y actualización", () => {
     ).json();
     expect(antes.required_completed, "la lección cuenta como completada").toBeGreaterThan(0);
 
+    // Lo que está delante de los estudiantes no se edita: primero se retira
+    // la versión vigente y después se abre el borrador. La inscripción y el
+    // avance sobreviven a ese paso, que es justo lo que se está comprobando.
+    const retirada = await request.post(
+      `${API}/api/v1/courses/${curso.courseId}/unpublish`,
+      { headers: conToken(tokenProfesor) },
+    );
+    expect(retirada.ok(), `despublicar antes de editar: ${await retirada.text()}`).toBeTruthy();
+
     // Borrador de actualización: la estructura se copia con los mismos
     // stable_id, que es lo que permite no perder el avance.
     const borrador = await request.post(

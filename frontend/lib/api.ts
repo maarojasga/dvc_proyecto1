@@ -690,6 +690,10 @@ export interface Course {
   TeacherID: string;
   Slug: string;
   CurrentPublishedVersionID?: string | null;
+  // El borrador editable más reciente, si existe. Un curso recién creado lo
+  // tiene desde el principio; uno recién despublicado no tiene ninguno hasta
+  // crear un borrador de actualización.
+  LatestDraftVersionID?: string | null;
   CreatedAt: string;
   UpdatedAt: string;
 }
