@@ -1,0 +1,365 @@
+# Pipeline de integración continua.
+#
+# La sección 10.1 del enunciado lo exige literalmente: "El pipeline de CI debe
+# completar build, lint, análisis de seguridad, migraciones y pruebas antes de
+# la demostración". Los cinco están aquí, y ninguno es decorativo: si algo
+# falla, el trabajo falla.
+#
+# Los cuatro trabajos se reparten por lo que tardan y por lo que necesitan.
+# `calidad` no toca la red ni la base y da el veredicto en un minuto;
+# `aceptacion` levanta la plataforma entera y es el que acredita la condición
+# de aceptación.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# Una rama que recibe dos empujones seguidos no necesita dos corridas: la
+# primera ya no interesa a nadie.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "20"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Build y lint. Lo barato primero: si esto no pasa, lo demás da igual.
+  # ---------------------------------------------------------------------
+  calidad:
+    name: Build y lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Compilar el backend
+        working-directory: backend
+        run: go build ./...
+
+      - name: go vet
+        working-directory: backend
+        run: go vet ./...
+
+      - name: Comprobar el formato
+        working-directory: backend
+        run: |
+          # gofmt no devuelve error: hay que mirar si escribió algo.
+          sin_formato=$(gofmt -l .)
+          if [ -n "$sin_formato" ]; then
+            echo "Estos archivos no están formateados:"
+            echo "$sin_formato"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias del frontend
+        working-directory: frontend
+        run: npm ci
+
+      - name: Comprobar los tipos
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Lint del frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Compilar el frontend
+        working-directory: frontend
+        run: npm run build
+
+  # ---------------------------------------------------------------------
+  # Análisis de seguridad. Tres capas distintas, porque encuentran cosas
+  # distintas: el código propio, las dependencias y los secretos filtrados.
+  # ---------------------------------------------------------------------
+  seguridad:
+    name: Análisis de seguridad
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks necesita el historial para revisar los commits, no solo
+          # el árbol: un secreto borrado en el último commit sigue estando.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: govulncheck (vulnerabilidades conocidas en Go)
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          # Solo reporta las que el código realmente alcanza, así que un
+          # hallazgo no es ruido: es una ruta ejecutable hasta el fallo.
+          govulncheck ./...
+
+      - name: gosec (patrones inseguros en el código propio)
+        working-directory: backend
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          # Las exclusiones van en .gosec.json, una por una y con su motivo
+          # escrito. Bajar el umbral global sería más cómodo y no diría nada:
+          # un análisis que no encuentra nada porque no mira no acredita
+          # seguridad. Si el código cambia, esas justificaciones hay que
+          # revisarlas.
+          gosec -exclude-generated -severity medium -confidence medium \
+                -exclude=G104,G124,G204,G404,G115,G703,G705 ./...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm audit (dependencias del frontend)
+        working-directory: frontend
+        run: |
+          npm ci
+          # Solo alto y crítico: por debajo de eso el ruido de las
+          # dependencias de desarrollo bloquearía cada corrida sin que haya
+          # nada explotable en lo que se despliega.
+          npm audit --audit-level=high --omit=dev
+
+      - name: gitleaks (secretos en el historial)
+        run: |
+          # El binario, no gitleaks/gitleaks-action. La herramienta es MIT y
+          # gratuita; lo que exige licencia de pago para organizaciones es el
+          # envoltorio de Action, que aquí no aporta nada: escanea lo mismo.
+          #
+          # Los hallazgos ya revisados y descartados van por huella en
+          # .gitleaksignore, con su motivo escrito. No se desactiva ninguna
+          # regla: una huella deja de coincidir en cuanto el archivo cambia, y
+          # entonces el hallazgo vuelve a aparecer.
+          go install github.com/zricethezav/gitleaks/v8@latest
+          # `git` y no `dir`: recorre el historial, porque un secreto borrado
+          # en el último commit sigue estando en los anteriores.
+          gitleaks git --no-banner --redact --verbose .
+
+  # ---------------------------------------------------------------------
+  # Migraciones y pruebas con Postgres real. Los dobles no acreditan que una
+  # migración aplique, y buena parte de las reglas viven en restricciones de
+  # la base: sin base no se está probando lo que se despliega.
+  # ---------------------------------------------------------------------
+  pruebas:
+    name: Migraciones y pruebas
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mooc_test
+          POSTGRES_USER: mooc
+          POSTGRES_PASSWORD: mooc
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U mooc"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Aplicar las migraciones
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://mooc:mooc@localhost:5432/mooc_test?sslmode=disable
+        # cmd/migrate aplica y termina, así que el código de salida distingue
+        # un fallo de migración de un fallo de arranque de la API.
+        run: go run ./cmd/migrate
+
+      - name: Pruebas del backend
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgres://mooc:mooc@localhost:5432/mooc_test?sslmode=disable
+          REDIS_ADDR: localhost:6379
+        run: go test ./... -count=1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Pruebas del frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm test
+
+  # ---------------------------------------------------------------------
+  # Los nueve flujos críticos, la accesibilidad y la carga. Es el trabajo que
+  # acredita la condición de aceptación de la sección 10, así que levanta la
+  # plataforma entera con Docker Compose, igual que la demostración.
+  # ---------------------------------------------------------------------
+  aceptacion:
+    name: E2E, accesibilidad y carga
+    runs-on: ubuntu-latest
+    needs: [calidad]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Levantar la plataforma
+        env:
+          ADMIN_EMAIL: admin@ci.local
+          ADMIN_PASSWORD: admin-clave-ci-2026
+        run: |
+          cp .env.example .env
+          {
+            echo "ADMIN_EMAIL=$ADMIN_EMAIL"
+            echo "ADMIN_PASSWORD=$ADMIN_PASSWORD"
+            echo "PUBLIC_BASE_URL=http://localhost:3000"
+            # Toda la suite sale de una misma IP y el límite se cuenta por
+            # IP, así que con el valor de producción las pruebas se ahogan
+            # entre ellas. No se puede esquivar inyectando X-Forwarded-For:
+            # el proxy lo sobrescribe con la dirección real, que es
+            # justamente el control que impide saltarse el límite rotando
+            # una cabecera.
+            #
+            # Cien inicios de sesión por minuto desde una máquina es un
+            # artefacto de las pruebas, no un patrón de uso. El limitador se
+            # ejercita aparte, en 99-limite-de-tasa.spec.ts, que corre el
+            # último porque agota el presupuesto a propósito.
+            echo "AUTH_RATE_LIMIT_PER_MINUTE=300"
+          } >> .env
+
+          # Comprobar que la configuración del .env LLEGA a los contenedores
+          # antes de construir nada. Compose usa el .env para interpolar este
+          # archivo, no para inyectar variables en los procesos: lo que no
+          # está declarado en el `environment:` del servicio no llega, y el
+          # servicio arranca con su valor por defecto sin decir nada. Pasó con
+          # AUTH_RATE_LIMIT_PER_MINUTE, y el síntoma fueron veintitantas
+          # pruebas en 429 que parecían un fallo del limitador.
+          #
+          # Va antes del `up` a propósito: falla en segundos en vez de después
+          # de construir las imágenes y correr la suite entera.
+          pip install --quiet pyyaml
+          docker compose config > /tmp/compose-resuelto.yml
+          python3 .github/scripts/verificar-entorno.py /tmp/compose-resuelto.yml \
+            api:AUTH_RATE_LIMIT_PER_MINUTE=300 \
+            api:ADMIN_EMAIL="$ADMIN_EMAIL" \
+            api:PUBLIC_BASE_URL=http://localhost:3000
+
+          docker compose up -d --build
+          # Compose da el contenedor por arrancado en cuanto el proceso vive;
+          # que la API responda es otra cosa.
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/api/v1/health && break
+            sleep 5
+          done
+          curl -sf http://localhost:3000/ >/dev/null
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar Playwright
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Los nueve flujos críticos y la auditoría de accesibilidad
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          E2E_API_URL: http://localhost:8080
+          E2E_MAILPIT_URL: http://localhost:8025
+          E2E_ADMIN_EMAIL: admin@ci.local
+          E2E_ADMIN_PASSWORD: admin-clave-ci-2026
+          E2E_AUTH_RATE_LIMIT: 300
+        run: npx playwright test
+
+      - name: Recorrido de la API por los nueve segmentos (Postman)
+        env:
+          ADMIN_EMAIL: admin@ci.local
+          ADMIN_PASSWORD: admin-clave-ci-2026
+        run: |
+          # Una colección de Postman sin ejecutar se pudre: basta con que un
+          # campo de la API cambie de nombre para que el día de la
+          # demostración devuelva 400 delante de la cámara. Aquí corre contra
+          # la misma plataforma que las E2E, así que si se desincroniza, se
+          # entera CI y no el evaluador.
+          #
+          # La carpeta 99 se queda fuera a propósito: agota el presupuesto del
+          # limitador de autenticación y dejaría sin servicio a cualquier paso
+          # posterior durante un minuto. Su comportamiento ya lo cubre
+          # frontend/e2e/99-limite-de-tasa.spec.ts.
+          npm install --no-save --prefix /tmp/newman newman
+          /tmp/newman/node_modules/.bin/newman run \
+            postman/plataforma-mooc.postman_collection.json \
+            -e postman/local.postman_environment.json \
+            --env-var adminEmail="$ADMIN_EMAIL" \
+            --env-var adminPassword="$ADMIN_PASSWORD" \
+            --folder "0 · Preparación" \
+            --folder "1 · Identidad y administración" \
+            --folder "2 · Autoría y publicación" \
+            --folder "3 · Carga multimedia" \
+            --folder "4 · Procesamiento y fallos" \
+            --folder "5 · Consumo de contenido" \
+            --folder "6 · Evaluación" \
+            --folder "7 · Progreso y aprobación" \
+            --folder "8 · Insignia" \
+            --folder "9 · Operación"
+
+      - name: Sembrar los datos sintéticos de la prueba de carga
+        env:
+          SEED_STUDENTS: 250
+        run: docker compose --profile carga run --rm -e SEED_STUDENTS seed
+
+      - name: Prueba de carga de Etapa 1
+        env:
+          # Por debajo de los 200 de Etapa 1: un runner compartido de GitHub
+          # tiene dos núcleos, y forzarlo mediría el runner. El escalón
+          # completo se corre en la demostración, sobre la máquina real.
+          VUS_OBJETIVO: 200
+          MESETA: 1m
+        run: docker compose --profile carga run --rm -e VUS_OBJETIVO -e MESETA k6
+
+      - name: Recoger la evidencia
+        if: always()
+        run: |
+          mkdir -p evidencia
+          cp -r frontend/playwright-report evidencia/ 2>/dev/null || true
+          cp -r frontend/test-results evidencia/ 2>/dev/null || true
+          cp -r load/salida evidencia/carga 2>/dev/null || true
+          docker compose logs --no-color > evidencia/compose.log 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidencia-de-aceptacion
+          path: evidencia/
+          retention-days: 14
+
+      - name: Apagar
+        if: always()
+        run: docker compose down -v

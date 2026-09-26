@@ -1,0 +1,4 @@
+# El escenario sembrado y el resumen de la prueba son resultados de una
+# ejecución concreta, no fuente. Se regeneran con `--profile carga`.
+*
+!.gitignore

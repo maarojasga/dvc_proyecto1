@@ -3,20 +3,69 @@ backend/bin/
 *.exe
 *.test
 *.out
+# Binarios que deja `go build ./cmd/...` en la raíz del módulo: toman el
+# nombre del paquete, así que no hay un patrón que los cubra por extensión.
+backend/api
+backend/worker
+backend/seed
 
 # Node / Next.js
 frontend/node_modules/
 frontend/.next/
 frontend/out/
-frontend/next-env.d.ts.bak
+frontend/build/
+frontend/coverage/
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+frontend/.pnp
+frontend/.pnp.*
+frontend/.yarn/*
+!frontend/.yarn/patches
+!frontend/.yarn/plugins
+!frontend/.yarn/releases
+!frontend/.yarn/versions
+frontend/.vercel
+# Resultados de Playwright: informes, trazas y vídeos de una corrida concreta.
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/.playwright/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
 # Entornos y secretos
 .env
 .env.local
 .env.*.local
+*.pem
 
 # Sistema operativo / editores
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# Material de apoyo, no entregable
+# Guiones y notas de preparación: ayudan a grabar y ensayar, pero no forman
+# parte del sistema ni de su documentación técnica.
+docs/video-sustentacion.md
+NOTAS.md
+notas/
+
+
+.cursor/
+.cursorrules
+.cursorignore
+.claude/
+CLAUDE.md
+AGENTS.md
+.aider*
+.specstory/
+.continue/
+.windsurfrules
+.github/copilot-instructions.md
+*.canvas.tsx
+prompts/
+.prompts/

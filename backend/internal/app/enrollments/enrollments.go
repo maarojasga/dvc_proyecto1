@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 )
@@ -17,10 +18,17 @@ import (
 type Service struct {
 	enrollments *postgres.EnrollmentRepo
 	courses     *postgres.CourseRepo
+	progreso    *postgres.ProgressRepo
+	iframes     ListaDeIframes
 }
 
-func NewService(enrollments *postgres.EnrollmentRepo, courses *postgres.CourseRepo) *Service {
-	return &Service{enrollments: enrollments, courses: courses}
+func NewService(enrollments *postgres.EnrollmentRepo, courses *postgres.CourseRepo, progreso *postgres.ProgressRepo, iframes ListaDeIframes) *Service {
+	return &Service{enrollments: enrollments, courses: courses, progreso: progreso, iframes: iframes}
+}
+
+// ListaDeIframes entrega la lista blanca de destinos incrustables.
+type ListaDeIframes interface {
+	Listar(ctx context.Context) (iframe.Lista, error)
 }
 
 // Enroll inscribe al estudiante en la versión publicada vigente del curso.
@@ -76,6 +84,191 @@ func (s *Service) Withdraw(ctx context.Context, student *user.User, courseID uui
 		return err
 	}
 	return s.enrollments.Update(ctx, e)
+}
+
+// ErrMediaNoLista indica que el recurso existe pero su transcodificación aún
+// no ha terminado o falló.
+var ErrMediaNoLista = errors.New("enrollments: el recurso multimedia todavía no está listo")
+
+// ErrPosicionInvalida indica una posición fuera de rango o un tipo de recurso
+// que no se reproduce.
+var ErrPosicionInvalida = errors.New("enrollments: posición de reproducción inválida")
+
+// ClaveDeReproduccion autoriza la reproducción de un recurso multimedia y
+// devuelve la clave de su lista maestra HLS.
+//
+// Se exige que el recurso pertenezca a la versión vigente del curso, que sea
+// visible y que quien lo pide esté inscrito; el profesor dueño y la
+// administración pasan sin inscripción, porque necesitan revisarlo. Un
+// recurso oculto o de un borrador responde como inexistente, para no delatar
+// contenido que no está publicado.
+// Contenido es lo necesario para presentar un recurso al estudiante.
+//
+// Solo uno de los campos de origen viene relleno, según el tipo: la clave del
+// objeto para lo que se sirve desde el almacenamiento, el Markdown para el
+// texto, o la URL externa para enlaces e iframes.
+type Contenido struct {
+	Tipo   string
+	Titulo string
+	// StableID identifica el recurso a través de las versiones. Lo necesita el
+	// foro, que ata las conversaciones a la lección y no a la fila: una
+	// discusión sobre una clase sigue valiendo cuando se publica una versión
+	// nueva del curso.
+	StableID    uuid.UUID
+	Descargable bool
+	ClaveObjeto string
+	Markdown    string
+	URLExterna  string
+	// Segundos donde reanudar. Solo tiene sentido en video y audio.
+	PosicionSegundos int
+	// Sandbox, Permisos y ReferrerPolicy solo se rellenan en iframes. Los
+	// calcula el servidor a partir de la lista blanca y viajan al cliente
+	// para que los ponga en el marco: dejar que el navegador decida los
+	// atributos de seguridad de un contenido de terceros sería confiar la
+	// contención a quien la sufre.
+	Sandbox        string
+	Permisos       string
+	ReferrerPolicy string
+	// ClaveOriginal es el archivo tal como lo subió el profesor, cuando el
+	// recurso se entrega convertido y además es descargable.
+	ClaveOriginal string
+}
+
+// autorizarRecurso comprueba el derecho de acceso a un recurso y, de paso,
+// devuelve la inscripción cuando quien pide es un estudiante.
+//
+// Se exige que el recurso pertenezca a la versión vigente del curso y que sea
+// visible; el profesor dueño y la administración pasan sin inscripción,
+// porque necesitan revisarlo. Un recurso oculto o de un borrador responde
+// como inexistente, para no delatar contenido que no está publicado.
+func (s *Service) autorizarRecurso(ctx context.Context, actor *user.User, resourceID uuid.UUID) (*postgres.RecursoPublicadoConMedia, *enrollment.Enrollment, error) {
+	rec, err := s.courses.GetRecursoPublicadoConMedia(ctx, resourceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !rec.Visible {
+		return nil, nil, postgres.ErrNotFound
+	}
+	if actor.Role == user.RoleAdmin || actor.ID == rec.TeacherID {
+		return rec, nil, nil
+	}
+
+	insc, err := s.enrollments.GetByStudentAndCourse(ctx, actor.ID, rec.CourseID)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			return nil, nil, enrollment.ErrNotEnrolled
+		}
+		return nil, nil, err
+	}
+	if !insc.DaAccesoAlContenido() {
+		return nil, nil, enrollment.ErrNotEnrolled
+	}
+	return rec, insc, nil
+}
+
+// ContenidoDeRecurso autoriza y describe cómo presentar un recurso.
+//
+// Para video y audio devuelve la lista maestra HLS y la última posición
+// reportada; para PDF y descargables, la clave del objeto; para texto, el
+// Markdown; y para enlaces e iframes, la URL externa.
+func (s *Service) ContenidoDeRecurso(ctx context.Context, actor *user.User, resourceID uuid.UUID) (*Contenido, error) {
+	rec, insc, err := s.autorizarRecurso(ctx, actor, resourceID)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &Contenido{
+		Tipo: rec.Type, Titulo: rec.Title, StableID: rec.StableID, Descargable: rec.Downloadable,
+		Markdown: rec.TextContent, URLExterna: rec.ExternalURL,
+	}
+
+	switch rec.Type {
+	case "video", "audio":
+		if rec.AssetStatus != "ready" || rec.HLSMasterKey == "" {
+			return nil, ErrMediaNoLista
+		}
+		out.ClaveObjeto = rec.HLSMasterKey
+		if insc != nil && s.progreso != nil {
+			// La posición es por inscripción: cada estudiante reanuda donde
+			// dejó, y solo si está inscrito.
+			pos, err := s.progreso.Posicion(ctx, insc.ID, rec.StableID)
+			if err != nil {
+				return nil, err
+			}
+			out.PosicionSegundos = pos
+		}
+	case "pdf", "image", "file":
+		if rec.ObjectKey == "" {
+			return nil, ErrMediaNoLista
+		}
+		out.ClaveObjeto = rec.ObjectKey
+	case "presentation":
+		// Lo que se entrega es el PDF convertido, para que se pueda
+		// previsualizar con el visor: la presentación original no la abre el
+		// navegador. Si la conversión aún no terminó, el recurso no está listo.
+		if rec.AssetStatus != "ready" || rec.DerivedPDFKey == "" {
+			return nil, ErrMediaNoLista
+		}
+		out.ClaveObjeto = rec.DerivedPDFKey
+		// El original sigue disponible para descargarlo cuando el profesor lo
+		// marcó descargable: convertir no debe quitarle al estudiante el
+		// archivo que el autor quiso entregarle.
+		if rec.Downloadable {
+			out.ClaveOriginal = rec.ObjectKey
+		}
+	case "iframe":
+		// Se vuelve a autorizar al servir, no solo al guardar: la lista pudo
+		// cambiar desde entonces, y quien la recorta espera que el contenido
+		// deje de entregarse sin tener que repasar los cursos ya publicados.
+		destino, err := s.autorizarIframe(ctx, rec.ExternalURL)
+		if err != nil {
+			return nil, err
+		}
+		out.Sandbox = iframe.Sandbox()
+		out.Permisos = destino.Permisos
+		out.ReferrerPolicy = iframe.ReferrerPolicy
+	}
+	return out, nil
+}
+
+func (s *Service) autorizarIframe(ctx context.Context, url string) (*iframe.Destino, error) {
+	if s.iframes == nil {
+		return nil, iframe.ErrHostNoAutorizado
+	}
+	lista, err := s.iframes.Listar(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return lista.Autorizar(url)
+}
+
+// PosicionMaxima acota lo que un cliente puede reportar. Sirve para reanudar,
+// no para acreditar nada, así que basta con un techo generoso que descarte
+// valores absurdos.
+const PosicionMaxima = 24 * 60 * 60
+
+// GuardarPosicion registra dónde reanudar la reproducción de un recurso.
+//
+// Es una comodidad reportada por el cliente y no acredita avance: el progreso
+// lo calcula el servidor por su cuenta. Por eso se acepta sin más validación
+// que el rango, y por eso no toca el estado del recurso.
+func (s *Service) GuardarPosicion(ctx context.Context, actor *user.User, resourceID uuid.UUID, segundos int) error {
+	if segundos < 0 || segundos > PosicionMaxima {
+		return ErrPosicionInvalida
+	}
+	rec, insc, err := s.autorizarRecurso(ctx, actor, resourceID)
+	if err != nil {
+		return err
+	}
+	if insc == nil {
+		// Profesores y administración pueden revisar el material, pero no
+		// tienen inscripción donde anotar una posición.
+		return nil
+	}
+	if rec.Type != "video" && rec.Type != "audio" {
+		return ErrPosicionInvalida
+	}
+	return s.progreso.GuardarPosicion(ctx, insc.ID, rec.StableID, segundos)
 }
 
 func (s *Service) ListMine(ctx context.Context, student *user.User) ([]*enrollment.Enrollment, error) {

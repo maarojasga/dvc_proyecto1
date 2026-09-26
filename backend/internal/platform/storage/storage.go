@@ -7,6 +7,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -16,8 +17,18 @@ import (
 )
 
 type Client struct {
-	mc        *minio.Client
-	bucket    string
+	mc     *minio.Client
+	bucket string
+
+	// firmante firma las URLs que va a abrir el navegador. Normalmente es
+	// el mismo cliente que mc, pero cuando la API habla con el almacén por
+	// un nombre de red interno ("minio:9000") y el navegador lo alcanza por
+	// otro ("localhost:9100"), son dos clientes distintos: la firma SigV4
+	// incluye el Host, así que una URL firmada contra el host interno es
+	// inservible fuera de la red de contenedores y no se puede reescribir
+	// a posteriori sin invalidar la firma.
+	firmante *minio.Client
+
 	publicURL string // si está vacío, se usan URLs prefirmadas también para GET
 }
 
@@ -27,7 +38,13 @@ type Config struct {
 	SecretKey string
 	UseSSL    bool
 	Bucket    string
+	Region    string
 	PublicURL string
+
+	// PublicEndpoint es el host por el que el navegador alcanza el almacén.
+	// Vacío significa "el mismo que Endpoint".
+	PublicEndpoint string
+	PublicUseSSL   bool
 }
 
 func New(ctx context.Context, cfg Config) (*Client, error) {
@@ -49,13 +66,49 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		}
 	}
 
-	return &Client{mc: mc, bucket: cfg.Bucket, publicURL: cfg.PublicURL}, nil
+	firmante, err := clienteDeFirma(cfg, mc)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{mc: mc, firmante: firmante, bucket: cfg.Bucket, publicURL: cfg.PublicURL}, nil
 }
+
+// clienteDeFirma devuelve el cliente con el que se firman las URLs que abrirá
+// el navegador. Si no hay endpoint público configurado reutiliza el interno,
+// que es lo correcto cuando API y navegador ven el almacén por el mismo host.
+func clienteDeFirma(cfg Config, interno *minio.Client) (*minio.Client, error) {
+	if cfg.PublicEndpoint == "" || cfg.PublicEndpoint == cfg.Endpoint {
+		return interno, nil
+	}
+	// Region va explícita a propósito: sin ella minio-go resuelve la
+	// ubicación del bucket con una petición real, y este cliente apunta a un
+	// host que puede no resolver desde aquí (es el del navegador). Firmar no
+	// debe requerir red.
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+	c, err := minio.New(cfg.PublicEndpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Secure: cfg.PublicUseSSL,
+		Region: region,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: no se pudo crear el cliente público: %w", err)
+	}
+	return c, nil
+}
+
+// SirveDesdeCDN informa si los objetos se entregan por una base pública en
+// lugar de firmarse uno a uno. Lo expone la API para que el cliente sepa si
+// la URL que recibe caduca.
+func (c *Client) SirveDesdeCDN() bool { return c.publicURL != "" }
 
 // PresignedPutURL emite una URL prefirmada de subida directa (carga
 // multipart directa a objetos, sin pasar por la API).
 func (c *Client) PresignedPutURL(ctx context.Context, objectKey string, expiry time.Duration) (string, error) {
-	u, err := c.mc.PresignedPutObject(ctx, c.bucket, objectKey, expiry)
+	u, err := c.firmante.PresignedPutObject(ctx, c.bucket, objectKey, expiry)
 	if err != nil {
 		return "", fmt.Errorf("storage: no se pudo firmar PUT: %w", err)
 	}
@@ -73,7 +126,7 @@ func (c *Client) PresignedGetURL(ctx context.Context, objectKey string, expiry t
 	if filename != "" {
 		reqParams.Set("response-content-disposition", fmt.Sprintf("inline; filename=%q", filename))
 	}
-	u, err := c.mc.PresignedGetObject(ctx, c.bucket, objectKey, expiry, reqParams)
+	u, err := c.firmante.PresignedGetObject(ctx, c.bucket, objectKey, expiry, reqParams)
 	if err != nil {
 		return "", fmt.Errorf("storage: no se pudo firmar GET: %w", err)
 	}
@@ -96,7 +149,7 @@ func (c *Client) PresignedUploadPartURL(ctx context.Context, objectKey, uploadID
 	reqParams := url.Values{}
 	reqParams.Set("partNumber", fmt.Sprintf("%d", partNumber))
 	reqParams.Set("uploadId", uploadID)
-	u, err := c.mc.Presign(ctx, http.MethodPut, c.bucket, objectKey, expiry, reqParams)
+	u, err := c.firmante.Presign(ctx, http.MethodPut, c.bucket, objectKey, expiry, reqParams)
 	if err != nil {
 		return "", fmt.Errorf("storage: no se pudo firmar la parte %d: %w", partNumber, err)
 	}
@@ -105,13 +158,25 @@ func (c *Client) PresignedUploadPartURL(ctx context.Context, objectKey, uploadID
 
 // CompleteMultipartUpload finaliza la carga una vez el cliente confirma
 // todas las partes con su ETag.
-func (c *Client) CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, parts []minio.CompletePart) error {
+func (c *Client) CompleteMultipartUpload(ctx context.Context, objectKey, uploadID string, partes []ParteCargada) error {
 	core := minio.Core{Client: c.mc}
-	_, err := core.CompleteMultipartUpload(ctx, c.bucket, objectKey, uploadID, parts, minio.PutObjectOptions{})
+	completas := make([]minio.CompletePart, len(partes))
+	for i, p := range partes {
+		completas[i] = minio.CompletePart{PartNumber: p.Numero, ETag: p.ETag}
+	}
+	_, err := core.CompleteMultipartUpload(ctx, c.bucket, objectKey, uploadID, completas, minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("storage: no se pudo completar multipart: %w", err)
 	}
 	return nil
+}
+
+// AbortMultipartUpload descarta una carga multipart a medias y libera las
+// partes ya subidas. Se llama cuando la verificación rechaza el objeto: sin
+// esto, el almacén conserva y factura partes de un archivo que nunca existió.
+func (c *Client) AbortMultipartUpload(ctx context.Context, objectKey, uploadID string) error {
+	core := minio.Core{Client: c.mc}
+	return core.AbortMultipartUpload(ctx, c.bucket, objectKey, uploadID)
 }
 
 // DownloadToFile descarga un objeto completo a una ruta local; usado por los
@@ -132,13 +197,57 @@ func (c *Client) UploadFile(ctx context.Context, objectKey, srcPath, contentType
 	return nil
 }
 
-// StatObject obtiene metadatos (tamaño, content-type) de un objeto ya
-// cargado, usado para verificación de integridad tras la subida directa.
-func (c *Client) StatObject(ctx context.Context, objectKey string) (minio.ObjectInfo, error) {
-	return c.mc.StatObject(ctx, c.bucket, objectKey, minio.StatObjectOptions{})
+// StatObject obtiene metadatos de un objeto ya cargado, usado para
+// verificación de integridad tras la subida directa.
+func (c *Client) StatObject(ctx context.Context, objectKey string) (ObjetoInfo, error) {
+	info, err := c.mc.StatObject(ctx, c.bucket, objectKey, minio.StatObjectOptions{})
+	if err != nil {
+		return ObjetoInfo{}, err
+	}
+	return ObjetoInfo{Tamano: info.Size, ContentType: info.ContentType}, nil
 }
 
 // RemoveObject elimina un objeto (p.ej. tras fallo de escaneo antimalware).
 func (c *Client) RemoveObject(ctx context.Context, objectKey string) error {
 	return c.mc.RemoveObject(ctx, c.bucket, objectKey, minio.RemoveObjectOptions{})
+}
+
+// AbrirObjeto devuelve el contenido completo del objeto.
+//
+// Existe para que la verificación posterior a la carga —checksum, MIME real y
+// escaneo antimalware— recorra el objeto una sola vez. Antes cada una de esas
+// comprobaciones lo descargaba por su cuenta.
+func (c *Client) AbrirObjeto(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+	obj, err := c.mc.GetObject(ctx, c.bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("storage: no se pudo abrir el objeto: %w", err)
+	}
+	return obj, nil
+}
+
+// GuardarObjeto escribe un objeto generado por la propia plataforma (hoy, la
+// imagen de una insignia). Los binarios subidos por usuarios no pasan por
+// aquí: esos van directos al almacén con una URL prefirmada.
+func (c *Client) GuardarObjeto(ctx context.Context, objectKey string, r io.Reader, tamano int64, contentType string) error {
+	_, err := c.mc.PutObject(ctx, c.bucket, objectKey, r, tamano, minio.PutObjectOptions{ContentType: contentType})
+	if err != nil {
+		return fmt.Errorf("storage: no se pudo guardar %s: %w", objectKey, err)
+	}
+	return nil
+}
+
+// ListObjectParts consulta las partes ya subidas de una carga multipart en
+// curso, permitiendo que un cliente interrumpido reanude la subida sin
+// reenviar lo que ya llegó.
+func (c *Client) ListObjectParts(ctx context.Context, objectKey, uploadID string) ([]ParteCargada, error) {
+	core := minio.Core{Client: c.mc}
+	res, err := core.ListObjectParts(ctx, c.bucket, objectKey, uploadID, 0, 1000)
+	if err != nil {
+		return nil, fmt.Errorf("storage: no se pudieron listar las partes: %w", err)
+	}
+	partes := make([]ParteCargada, 0, len(res.ObjectParts))
+	for _, p := range res.ObjectParts {
+		partes = append(partes, ParteCargada{Numero: p.PartNumber, ETag: p.ETag, Tamano: p.Size})
+	}
+	return partes, nil
 }
