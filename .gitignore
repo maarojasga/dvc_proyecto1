@@ -58,6 +58,12 @@ deploy/gcp/respaldos/
 *.tfvars
 !*.tfvars.example
 crash.log
+# Backend local opcional en lugar del bucket (ver deploy/gcp/lib.sh).
+*_override.tf
+# Credenciales federadas que deja google-github-actions/auth en el
+# directorio de trabajo durante un despliegue desde GitHub Actions. No son
+# una llave, pero no pintan nada en el repositorio.
+gha-creds-*.json
 
 # Sistema operativo / editores
 .DS_Store

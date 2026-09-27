@@ -15,7 +15,10 @@
 #
 # crear_bd se guarda en terraform/bd.auto.tfvars (ignorado por git), que
 # Terraform lee solo: así un desplegar-infra.sh posterior no vuelve a crear
-# la base que se acaba de eliminar.
+# la base que se acaba de eliminar. Ese archivo solo existe en este
+# portátil: si el equipo despliega desde GitHub Actions, la variable del
+# repositorio CREAR_BD tiene que decir lo mismo, o el siguiente `infra` de CI
+# recrearía una base vacía (o borraría la recreada).
 source "$(dirname "$0")/lib.sh"
 requiere terraform
 comprobar_gcloud
@@ -79,6 +82,7 @@ case "$accion" in
     aviso "eliminando $BD"
     tf apply -input=false -var bd_proteccion_terraform=false -var bd_proteccion_api=false
     aviso "base eliminada. Para recrearla: deploy/gcp/bd.sh recrear $(cat "$ESTADO/ultimo-export")"
+    aviso "si despliegan desde GitHub Actions: fijar la variable del repositorio CREAR_BD=false"
     ;;
   recrear)
     origen="${1:?uso: bd.sh recrear <gs://...sql.gz | archivo local>}"
@@ -99,6 +103,7 @@ case "$accion" in
     gc sql import sql "$BD" "$origen" --database mooc --user mooc --quiet
     aviso "recreada ($BD, IP $(salida bd_ip_privada)). La IP privada cambió: regenerar los .env y redesplegar:"
     aviso "  deploy/gcp/generar-env.sh -f && deploy/gcp/desplegar-vm.sh worker && deploy/gcp/desplegar-vm.sh web"
+    aviso "  (desde GitHub Actions: CREAR_BD=true o borrarla, y la acción 'desplegar')"
     ;;
   detener)
     requiere_bd

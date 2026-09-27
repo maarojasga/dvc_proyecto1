@@ -22,6 +22,20 @@ git -C "$RAIZ" cat-file -e "$TAG^{commit}" 2>/dev/null || morir "el tag $TAG no 
 ENV_LOCAL="$RAIZ/deploy/$rol/.env"
 [[ -f "$ENV_LOCAL" ]] || morir "falta $ENV_LOCAL (deploy/gcp/generar-env.sh)"
 
+# Que el commit exista en git no quiere decir que se haya publicado. Sin
+# esta comprobación el fallo llega después, como un `compose pull` roto en
+# la VM a medio desplegar.
+case "$rol" in
+  web) imagenes=(mooc-api mooc-migrate) ;;
+  worker) imagenes=(mooc-worker redis) ;;
+esac
+for img in "${imagenes[@]}"; do
+  etiqueta="$TAG"
+  [[ "$img" == redis ]] && etiqueta=7.4-alpine
+  gc artifacts docker images describe "$(salida registro)/$img:$etiqueta" >/dev/null 2>&1 \
+    || morir "no está publicada $(salida registro)/$img:$etiqueta: ejecuta deploy/gcp/publicar.sh en ese commit"
+done
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP:?}"' EXIT
 mkdir -p "$TMP/paquete"

@@ -12,15 +12,19 @@ terraform {
     }
   }
 
-  # Estado local por defecto (terraform.tfstate, ignorado por git). Contiene
-  # en claro la contraseña de la base y los secretos HMAC, porque Terraform
-  # los genera. Para compartirlo en el equipo, un bucket propio con acceso
-  # restringido a sus integrantes:
+  # Estado remoto en Cloud Storage, compartido por los portátiles del equipo
+  # y GitHub Actions. Configuración parcial: el bucket no se escribe aquí
+  # porque depende del proyecto; lo pasa deploy/gcp/lib.sh (tf_init):
   #
   #   terraform init -backend-config="bucket=<proyecto>-tfstate" -backend-config="prefix=mooc"
   #
-  # tras descomentar:
-  # backend "gcs" {}
+  # El bucket lo crea deploy/gcp/bootstrap-ci.sh (versionado, acceso uniforme,
+  # prevención de acceso público). El estado contiene EN CLARO la contraseña
+  # de la base, la del administrador y los secretos HMAC, porque Terraform
+  # los genera: quien lee el bucket lee esos secretos.
+  #
+  # Validar o probar sin bucket: terraform init -backend=false.
+  backend "gcs" {}
 }
 
 provider "google" {
@@ -31,7 +35,10 @@ provider "google" {
   # El presupuesto (billingbudgets.googleapis.com) exige un proyecto de cuota
   # explícito cuando se usan credenciales de usuario (gcloud auth
   # application-default login); sin esto la API responde 403 aunque el
-  # usuario administre la cuenta de facturación.
+  # usuario administre la cuenta de facturación. El proyecto de cuota va en
+  # todas las peticiones, así que quien aplica necesita
+  # serviceusage.services.use en él (la cuenta de CI lo tiene por
+  # roles/serviceusage.serviceUsageConsumer, ver bootstrap-ci.sh).
   user_project_override = true
   billing_project       = var.project_id
 

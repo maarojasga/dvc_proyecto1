@@ -3,81 +3,98 @@
 #
 #   deploy/gcp/desplegar-infra.sh                     # con terraform.tfvars
 #   deploy/gcp/desplegar-infra.sh -var habilitar_nat=false
+#   deploy/gcp/desplegar-infra.sh --plan <archivo> [opciones de plan]
+#   deploy/gcp/desplegar-infra.sh --aplicar <archivo>
+#   deploy/gcp/desplegar-infra.sh --migrar-estado
 #
-# Los argumentos van tal cual a `terraform apply`. Antes habilita las APIs
-# del proyecto (Terraform las necesita para planificar) y después asegura la
+# Sin opción, los argumentos van tal cual a `terraform apply`, que muestra el
+# plan y pide confirmación. Antes habilita las APIs que falten y asegura la
 # clave de firma de insignias en Secret Manager.
+#
+# --plan y --aplicar separan las dos mitades para GitHub Actions: se revisa
+# un plan guardado y se aplica exactamente ese. --plan sale como
+# `terraform plan -detailed-exitcode`: 0 sin cambios, 2 con cambios, 1 error.
+#
+# --migrar-estado sube al bucket un terraform.tfstate local de antes del
+# backend remoto (una sola vez, ver README).
 source "$(dirname "$0")/lib.sh"
-requiere terraform openssl
+requiere terraform
 comprobar_gcloud
+comprobar_adc
+
+modo=aplicar-interactivo
+archivo=""
+case "${1:-}" in
+  --plan|--aplicar)
+    modo="${1#--}"
+    archivo="${2:?falta el archivo del plan}"
+    shift 2
+    # Absoluto: tf() corre con -chdir y una ruta relativa acabaría dentro
+    # de deploy/gcp/terraform.
+    [[ "$archivo" == /* ]] || archivo="$PWD/$archivo"
+    ;;
+  --migrar-estado)
+    modo=migrar
+    shift
+    ;;
+esac
+
+if [[ "$modo" == migrar ]]; then
+  hay_override_backend && morir "hay un backend_override.tf: el estado ya es local por decisión propia"
+  [[ -s "$DIR_TF/terraform.tfstate" ]] || morir "no hay $DIR_TF/terraform.tfstate que migrar"
+  BUCKET="$(bucket_estado)"
+  gcloud storage buckets describe "gs://$BUCKET" --format 'value(name)' >/dev/null \
+    || morir "no existe gs://$BUCKET: deploy/gcp/bootstrap-ci.sh lo crea"
+  # -force-copy responde que sí a todo, también a sobrescribir un estado
+  # remoto que ya exista (p. ej. de un despliegue desde GitHub). Eso sería
+  # perder la infraestructura que describe; se comprueba antes.
+  if gcloud storage objects describe "gs://$BUCKET/$PREFIJO_ESTADO/default.tfstate" >/dev/null 2>&1; then
+    morir "gs://$BUCKET/$PREFIJO_ESTADO/default.tfstate ya existe: hay dos estados de la misma infraestructura; decidir a mano cuál vale"
+  fi
+  aviso "subiendo el estado local a gs://$BUCKET/$PREFIJO_ESTADO/"
+  tf init -input=false -migrate-state -force-copy \
+    -backend-config="bucket=$BUCKET" -backend-config="prefix=$PREFIJO_ESTADO"
+  # Terraform deja el archivo local tal cual. Se aparta con otro nombre
+  # (sigue ignorado por git) para que tf_init no lo tome por un despliegue
+  # sin migrar; se puede borrar cuando el remoto esté comprobado.
+  apartado="$DIR_TF/terraform.tfstate.migrado-$(date -u +%Y%m%d-%H%M%S)"
+  mv "$DIR_TF/terraform.tfstate" "$apartado"
+  aviso "estado migrado. Copia local apartada en $apartado (contiene secretos: borrarla tras comprobar con 'terraform output')"
+  exit 0
+fi
+
+if [[ "$modo" == aplicar ]]; then
+  [[ -f "$archivo" ]] || morir "no existe el plan $archivo"
+  tf_init
+  # Un plan guardado se aplica sin preguntar: la revisión fue antes. Si el
+  # estado cambió desde que se generó, Terraform lo rechaza por obsoleto.
+  tf apply -input=false "$archivo"
+  releer_salidas
+  tf output
+  exit 0
+fi
 
 TFVARS="$DIR_TF/terraform.tfvars"
-[[ -f "$TFVARS" ]] || morir "falta $TFVARS (cópialo de terraform.tfvars.example)"
-PROYECTO="$(sed -n 's/^[[:space:]]*project_id[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TFVARS")"
+[[ -f "$TFVARS" ]] || morir "falta $TFVARS (cópialo de terraform.tfvars.example; en CI lo escribe escribir-tfvars.sh)"
+PROYECTO="$(valor_tfvars project_id)"
 [[ -n "$PROYECTO" ]] || morir "project_id vacío en $TFVARS"
-PREFIJO="$(sed -n 's/^[[:space:]]*prefijo[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TFVARS")"
+PREFIJO="$(valor_tfvars prefijo)"
 PREFIJO="${PREFIJO:-mooc}"
-REGION="$(sed -n 's/^[[:space:]]*region[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TFVARS")"
+REGION="$(valor_tfvars region)"
 REGION="${REGION:-us-central1}"
 
-gcloud auth application-default print-access-token >/dev/null 2>&1 \
-  || morir "Terraform usa las credenciales de aplicación: gcloud auth application-default login"
+# Terraform necesita las APIs habilitadas para planificar.
+habilitar_apis "$PROYECTO" "${APIS[@]}"
+asegurar_clave_insignias "$PROYECTO" "$PREFIJO" "$REGION"
 
-# Todas las APIs que usa la plantilla. billingbudgets solo hace falta con
-# presupuesto, pero habilitarla no cuesta nada.
-APIS=(
-  compute.googleapis.com
-  sqladmin.googleapis.com
-  servicenetworking.googleapis.com
-  secretmanager.googleapis.com
-  artifactregistry.googleapis.com
-  iap.googleapis.com
-  storage.googleapis.com
-  iam.googleapis.com
-  cloudresourcemanager.googleapis.com
-  serviceusage.googleapis.com
-  logging.googleapis.com
-  monitoring.googleapis.com
-  billingbudgets.googleapis.com
-)
-aviso "habilitando APIs en $PROYECTO"
-gcloud services enable "${APIS[@]}" --project "$PROYECTO"
+tf_init
 
-# La clave de firma de insignias vive fuera de Terraform a propósito: un
-# `terraform destroy` borraría el secreto, y las credenciales Open Badges ya
-# emitidas dejarían de verificarse con la clave nueva del entorno recreado.
-# Es una clave Ed25519 en bruto (semilla + pública, 64 bytes, en base64), el
-# formato que espera BADGE_SIGNING_KEY, y Terraform no la sabe producir.
-SECRETO_BADGE="$PREFIJO-badge-signing-key"
-asegurar_clave_insignias() {
-  if ! gcloud secrets describe "$SECRETO_BADGE" --project "$PROYECTO" >/dev/null 2>&1; then
-    gcloud secrets create "$SECRETO_BADGE" --project "$PROYECTO" \
-      --replication-policy user-managed --locations "$REGION" \
-      --labels proyecto="$PREFIJO" >/dev/null
-  fi
-  if [[ -n "$(gcloud secrets versions list "$SECRETO_BADGE" --project "$PROYECTO" \
-               --filter 'state:ENABLED' --format 'value(name)' --limit 1)" ]]; then
-    return
-  fi
-  aviso "generando la clave de firma de insignias en Secret Manager ($SECRETO_BADGE)"
-  local tmp
-  tmp="$(mktemp -d)"
-  chmod 700 "$tmp"
-  # shellcheck disable=SC2064
-  trap "rm -rf '${tmp:?}'" EXIT
-  openssl genpkey -algorithm ed25519 -outform DER -out "$tmp/privada.der"
-  openssl pkey -inform DER -in "$tmp/privada.der" -pubout -outform DER -out "$tmp/publica.der"
-  # En DER, los últimos 32 bytes son la semilla (PKCS#8) y la clave pública
-  # (SPKI); ed25519.PrivateKey de Go es la concatenación de ambas.
-  { tail -c 32 "$tmp/privada.der"; tail -c 32 "$tmp/publica.der"; } | base64 | tr -d '\n' > "$tmp/clave"
-  # --data-file y no el valor en la línea de órdenes, donde lo vería `ps`.
-  gcloud secrets versions add "$SECRETO_BADGE" --project "$PROYECTO" --data-file "$tmp/clave" >/dev/null
-  rm -rf "${tmp:?}"
-  trap - EXIT
-}
-asegurar_clave_insignias
+if [[ "$modo" == plan ]]; then
+  rc=0
+  tf plan -input=false -detailed-exitcode -out "$archivo" "$@" || rc=$?
+  exit "$rc"
+fi
 
-tf init -input=false
 tf apply -input=false "$@"
 releer_salidas
 

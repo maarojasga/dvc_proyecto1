@@ -5,6 +5,12 @@
 #
 #   deploy/gcp/generar-env.sh [-f]     # -f sobrescribe los existentes
 #
+# Parámetros que se toman del entorno si están definidos (en CI, de las
+# variables del repositorio), porque en CI el .env se regenera en cada
+# despliegue y no hay dónde editarlo a mano: TLS_EMAIL, ADMIN_EMAIL,
+# AUTH_RATE_LIMIT_PER_MINUTE (Web) y WORKER_CONCURRENCY (Worker). Vacíos, se
+# queda el valor del .env.example.
+#
 # Los .env no llevan secretos, solo sus nombres: los valores los lee
 # en-vm.sh en la VM, con la cuenta de servicio de esa VM, al desplegar. Así
 # no pasan por el portátil de nadie ni quedan en disco en la VM.
@@ -36,6 +42,17 @@ poner() {
   rm -f "${archivo:?}.bak"
 }
 
+# poner_si CLAVE valor archivo: como poner, solo si hay valor.
+poner_si() {
+  [[ -z "$2" ]] || poner "$@"
+}
+
+# Son parámetros del experimento de capacidad: un valor mal escrito haría
+# arrancar el servicio con su valor por defecto sin avisar.
+for n in WORKER_CONCURRENCY AUTH_RATE_LIMIT_PER_MINUTE; do
+  [[ -z "${!n:-}" || "${!n}" =~ ^[1-9][0-9]*$ ]] || morir "$n tiene que ser un entero positivo (es '${!n}')"
+done
+
 generar() {
   local rol="$1" destino="$RAIZ/deploy/$1/.env"
   if [[ -f "$destino" && "$forzar" != true ]]; then
@@ -61,10 +78,13 @@ generar() {
     poner PUBLIC_BASE_URL "$(salida url_publica)" "$destino"
     poner TLS_HOST "$(salida host_web)" "$destino"
     poner TLS_EMAIL "${TLS_EMAIL:-}" "$destino"
+    poner_si ADMIN_EMAIL "${ADMIN_EMAIL:-}" "$destino"
+    poner_si AUTH_RATE_LIMIT_PER_MINUTE "${AUTH_RATE_LIMIT_PER_MINUTE:-}" "$destino"
   else
     poner S3_ACCESS_KEY "$(salida hmac_worker_access_id)" "$destino"
     poner SECRETO_S3_SECRET_KEY "$(salida secreto_hmac_worker)" "$destino"
     poner REDIS_BIND_IP "$(salida ip_worker)" "$destino"
+    poner_si WORKER_CONCURRENCY "${WORKER_CONCURRENCY:-}" "$destino"
   fi
   aviso "generado $destino"
 }
