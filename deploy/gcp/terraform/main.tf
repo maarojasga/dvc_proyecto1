@@ -131,7 +131,7 @@ resource "google_compute_firewall" "web_publico" {
   direction               = "INGRESS"
   priority                = 1000
   source_ranges           = ["0.0.0.0/0"]
-  target_service_accounts = [google_service_account.web.email]
+  target_service_accounts = [data.google_service_account.web.email]
 
   # 80 solo para el reto HTTP-01 de Let's Encrypt y la redirección a 443.
   allow {
@@ -145,8 +145,8 @@ resource "google_compute_firewall" "redis" {
   network                 = google_compute_network.vpc.id
   direction               = "INGRESS"
   priority                = 1000
-  source_service_accounts = [google_service_account.web.email]
-  target_service_accounts = [google_service_account.worker.email]
+  source_service_accounts = [data.google_service_account.web.email]
+  target_service_accounts = [data.google_service_account.worker.email]
 
   # Redis no tiene contraseña (la API y el worker no la soportan): lo
   # protegen esta regla y que el contenedor solo escuche en la IP interna.
@@ -166,7 +166,7 @@ resource "google_compute_firewall" "ssh_iap" {
   # Internet y quién entra lo decide IAM (roles/iap.tunnelResourceAccessor y
   # OS Login), no una llave repartida.
   source_ranges           = ["35.235.240.0/20"]
-  target_service_accounts = [google_service_account.web.email, google_service_account.worker.email]
+  target_service_accounts = [data.google_service_account.web.email, data.google_service_account.worker.email]
 
   allow {
     protocol = "tcp"
@@ -185,7 +185,7 @@ resource "google_compute_firewall" "sql_permitir" {
   direction               = "EGRESS"
   priority                = 900
   destination_ranges      = [local.rango_psa]
-  target_service_accounts = [google_service_account.web.email, google_service_account.worker.email]
+  target_service_accounts = [data.google_service_account.web.email, data.google_service_account.worker.email]
 
   allow {
     protocol = "tcp"

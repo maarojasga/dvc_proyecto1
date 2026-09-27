@@ -5,22 +5,41 @@
 # el worker firman contra Cloud Storage. Así los permisos sobre los buckets
 # son distintos por componente, como pide el enunciado.
 
-resource "google_service_account" "web" {
-  account_id   = "${var.prefijo}-web"
-  display_name = "MOOC Web Server (API)"
-  description  = "VM Web y API: firma cargas y descargas, lee Secret Manager y Artifact Registry."
+# Las dos cuentas las crea deploy/gcp/bootstrap-ci.sh, no Terraform. Crear
+# cuentas de servicio exige iam.serviceAccountAdmin de proyecto, que también
+# da setIamPolicy sobre TODAS las cuentas del proyecto, incluida la de CI: con
+# él, la cuenta de despliegue podría darse tokenCreator sobre cualquiera, o
+# dárselo a un tercero y tener acceso fuera de GitHub. Creadas aparte, la
+# cuenta de CI solo necesita actAs sobre estas dos (serviceAccountUser a
+# nivel de cuenta, también del bootstrap).
+data "google_service_account" "web" {
+  account_id = "${var.prefijo}-web"
 }
 
-resource "google_service_account" "worker" {
-  account_id   = "${var.prefijo}-worker"
-  display_name = "MOOC Worker Server"
-  description  = "VM Worker: lee originales, escribe derivados HLS y PDFs de presentaciones."
+data "google_service_account" "worker" {
+  account_id = "${var.prefijo}-worker"
+}
+
+# Estados anteriores a este cambio tienen las cuentas como recursos. Se
+# olvidan sin borrarlas: siguen existiendo y ahora se leen como data.
+removed {
+  from = google_service_account.web
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = google_service_account.worker
+  lifecycle {
+    destroy = false
+  }
 }
 
 locals {
   cuentas = {
-    web    = google_service_account.web
-    worker = google_service_account.worker
+    web    = data.google_service_account.web
+    worker = data.google_service_account.worker
   }
 }
 
@@ -47,11 +66,11 @@ resource "google_project_iam_member" "metricas" {
 # usuario); el secret va a Secret Manager y a ningún archivo.
 
 resource "google_storage_hmac_key" "web" {
-  service_account_email = google_service_account.web.email
+  service_account_email = data.google_service_account.web.email
 }
 
 resource "google_storage_hmac_key" "worker" {
-  service_account_email = google_service_account.worker.email
+  service_account_email = data.google_service_account.worker.email
 }
 
 # --- Secret Manager ------------------------------------------------------------
@@ -117,18 +136,20 @@ resource "google_secret_manager_secret_iam_member" "lector" {
   member    = local.cuentas[each.value.lector].member
 }
 
-# La clave de firma de insignias la crea desplegar-infra.sh, fuera de
-# Terraform, para que sobreviva a un destroy: con otra clave, las
-# credenciales Open Badges ya emitidas dejarían de verificarse. Aquí solo se
-# lee para dar acceso a la API.
-data "google_secret_manager_secret" "badge" {
-  secret_id = "${var.prefijo}-badge-signing-key"
+# La clave de firma de insignias vive fuera de Terraform (la crean
+# bootstrap-ci.sh o desplegar-infra.sh), para que sobreviva a un destroy: con
+# otra clave, las credenciales Open Badges ya emitidas dejarían de
+# verificarse. Aquí solo se da acceso a la API. El ID se compone en lugar de
+# leerse con un data source para que el plan no dependa de que ya exista: en
+# CI el plan no crea nada, y la clave se asegura justo antes del apply.
+locals {
+  secreto_badge = "${var.prefijo}-badge-signing-key"
 }
 
 resource "google_secret_manager_secret_iam_member" "badge_web" {
-  secret_id = data.google_secret_manager_secret.badge.id
+  secret_id = "projects/${var.project_id}/secrets/${local.secreto_badge}"
   role      = "roles/secretmanager.secretAccessor"
-  member    = google_service_account.web.member
+  member    = data.google_service_account.web.member
 }
 
 # --- Artifact Registry ---------------------------------------------------------

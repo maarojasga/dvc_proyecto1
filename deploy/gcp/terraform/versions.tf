@@ -1,5 +1,6 @@
 terraform {
-  required_version = ">= 1.6"
+  # 1.7: bloques removed (identidades.tf) y mock_provider de las pruebas.
+  required_version = ">= 1.7"
 
   required_providers {
     google = {

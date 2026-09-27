@@ -110,7 +110,7 @@ resource "google_storage_bucket" "respaldos" {
 resource "google_storage_bucket_iam_member" "web_objetos" {
   bucket = google_storage_bucket.objetos.name
   role   = "roles/storage.objectUser"
-  member = google_service_account.web.member
+  member = data.google_service_account.web.member
 }
 
 # La API firma la URL de la lista maestra HLS; con la firma la petición llega
@@ -119,14 +119,14 @@ resource "google_storage_bucket_iam_member" "web_objetos" {
 resource "google_storage_bucket_iam_member" "web_hls" {
   bucket = google_storage_bucket.hls.name
   role   = "roles/storage.objectViewer"
-  member = google_service_account.web.member
+  member = data.google_service_account.web.member
 }
 
 # Worker: lee cualquier objeto (los originales que procesa)...
 resource "google_storage_bucket_iam_member" "worker_objetos_lectura" {
   bucket = google_storage_bucket.objetos.name
   role   = "roles/storage.objectViewer"
-  member = google_service_account.worker.member
+  member = data.google_service_account.worker.member
 }
 
 # ...pero solo escribe bajo presentaciones/, el PDF que genera LibreOffice.
@@ -136,7 +136,7 @@ resource "google_storage_bucket_iam_member" "worker_objetos_lectura" {
 resource "google_storage_bucket_iam_member" "worker_objetos_escritura" {
   bucket = google_storage_bucket.objetos.name
   role   = "roles/storage.objectUser"
-  member = google_service_account.worker.member
+  member = data.google_service_account.worker.member
 
   condition {
     title       = "solo-presentaciones"
@@ -149,7 +149,7 @@ resource "google_storage_bucket_iam_member" "worker_objetos_escritura" {
 resource "google_storage_bucket_iam_member" "worker_hls" {
   bucket = google_storage_bucket.hls.name
   role   = "roles/storage.objectUser"
-  member = google_service_account.worker.member
+  member = data.google_service_account.worker.member
 }
 
 # El agente de servicio de Cloud SQL escribe los exports y lee lo que se

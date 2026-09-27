@@ -43,7 +43,7 @@ resource "google_compute_instance" "web" {
   }
 
   service_account {
-    email = google_service_account.web.email
+    email = data.google_service_account.web.email
     # cloud-platform porque Secret Manager no tiene un alcance propio: los
     # alcances son un mecanismo heredado y Google recomienda este con los
     # permisos acotados por IAM. Lo que la VM puede hacer es lo que tiene
@@ -87,7 +87,7 @@ resource "google_compute_instance" "worker" {
   }
 
   service_account {
-    email  = google_service_account.worker.email
+    email  = data.google_service_account.worker.email
     scopes = ["cloud-platform"]
   }
 

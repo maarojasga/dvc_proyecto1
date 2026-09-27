@@ -5,13 +5,16 @@
 #
 #   deploy/gcp/bootstrap-ci.sh --proyecto desarrollo-soluciones-cloud \
 #     [--repo maarojasga/dvc_proyecto1] [--region us-central1] [--zona us-central1-a] \
-#     [--cuenta-facturacion XXXXXX-XXXXXX-XXXXXX] [--bucket <nombre>] [--solo-rama main]
+#     [--cuenta-facturacion XXXXXX-XXXXXX-XXXXXX] [--bucket <nombre>] \
+#     [--rama main | --cualquier-rama] [--conservar-sa-compute]
 #
 # Qué deja hecho:
 #   1. Las APIs: las de la federación y todas las de la plantilla, porque la
 #      cuenta de CI no puede habilitar APIs.
 #   2. El bucket del estado de Terraform.
-#   3. La cuenta de servicio mooc-deployer con los roles mínimos.
+#   3. Las cuentas de servicio: mooc-deployer con los roles mínimos, y las
+#      de las VM (mooc-web, mooc-worker), de las que CI solo puede hacer uso.
+#      Deshabilita la cuenta por defecto de Compute Engine.
 #   4. Workload Identity Federation: GitHub se autentica con el token OIDC
 #      de cada ejecución y no hay ninguna llave JSON que guardar ni rotar.
 #   5. La clave de firma de insignias en Secret Manager.
@@ -35,7 +38,9 @@ REGION=us-central1
 ZONA=us-central1-a
 CUENTA_FACTURACION=""
 BUCKET=""
-SOLO_RAMA=""
+# Por defecto solo la rama main obtiene credenciales (ver la condición).
+SOLO_RAMA=main
+CONSERVAR_SA_COMPUTE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --proyecto) PROYECTO="${2:?}"; shift ;;
@@ -44,7 +49,9 @@ while [[ $# -gt 0 ]]; do
     --zona) ZONA="${2:?}"; shift ;;
     --cuenta-facturacion) CUENTA_FACTURACION="${2:?}"; shift ;;
     --bucket) BUCKET="${2:?}"; shift ;;
-    --solo-rama) SOLO_RAMA="${2:?}"; shift ;;
+    --rama) SOLO_RAMA="${2:?}"; shift ;;
+    --cualquier-rama) SOLO_RAMA="" ;;
+    --conservar-sa-compute) CONSERVAR_SA_COMPUTE=true ;;
     *) morir "opción desconocida '$1'" ;;
   esac
   shift
@@ -182,17 +189,6 @@ ROLES=(
   # identidades.tf: el repositorio Docker, su política de limpieza y su IAM;
   # publicar.sh sube las imágenes (incluye escribir).
   roles/artifactregistry.admin
-  # identidades.tf: crear y borrar las cuentas de servicio mooc-web y
-  # mooc-worker.
-  roles/iam.serviceAccountAdmin
-  # Crear una VM con cuenta de servicio y entrar por OS Login en ella exigen
-  # iam.serviceAccounts.actAs sobre esa cuenta. A nivel de proyecto y no
-  # sobre mooc-web y mooc-worker porque (1) esas cuentas las crea Terraform
-  # después de este script, (2) darlo desde Terraform justo antes de crear la
-  # VM choca con la propagación de IAM, y (3) serviceAccountAdmin ya permite
-  # a esta cuenta concederse actAs sobre cualquier cuenta del proyecto: el
-  # alcance menor no restaría nada real.
-  roles/iam.serviceAccountUser
   # user_project_override del provider (versions.tf): cada petición lleva el
   # proyecto de cuota y exige serviceusage.services.use. También lista las
   # APIs habilitadas (desplegar-infra.sh). No puede habilitar APIs.
@@ -204,11 +200,87 @@ ROLES=(
 )
 # Sin roles de Logging ni de Monitoring: la plantilla no crea alertas,
 # paneles ni sumideros; solo da logWriter y metricWriter a las VM (abajo).
+#
+# Deliberadamente fuera: iam.serviceAccountAdmin (setIamPolicy sobre todas
+# las cuentas del proyecto, incluida esta: podría darse tokenCreator o
+# dárselo a un tercero y tener acceso fuera de GitHub) e
+# iam.serviceAccountUser de proyecto (actAs sobre cualquier cuenta: una VM
+# con la cuenta por defecto de Compute, que es Editor). Las cuentas de las
+# VM se crean abajo y el actAs se da solo sobre ellas.
 for rol in "${ROLES[@]}"; do
   gcloud projects add-iam-policy-binding "$PROYECTO" --member "serviceAccount:$SA" \
     --role "$rol" --condition None --quiet >/dev/null
   aviso "  $rol"
 done
+
+# tiene_rol_proyecto <miembro> <rol>
+tiene_rol_proyecto() {
+  gcloud projects get-iam-policy "$PROYECTO" --flatten 'bindings[].members' \
+    --filter "bindings.role='$2' AND bindings.members='$1'" --format 'value(bindings.role)' | grep -q .
+}
+
+# Una corrida anterior de este script daba esos dos roles: se retiran.
+for rol in roles/iam.serviceAccountAdmin roles/iam.serviceAccountUser; do
+  if tiene_rol_proyecto "serviceAccount:$SA" "$rol"; then
+    gcloud projects remove-iam-policy-binding "$PROYECTO" --member "serviceAccount:$SA" \
+      --role "$rol" --all --quiet >/dev/null
+    aviso "  retirado $rol de proyecto"
+  fi
+done
+
+# Cuentas de las VM. Terraform las lee (data en identidades.tf) y las usa
+# en las VM, el firewall, las claves HMAC y los permisos sobre buckets y
+# secretos. mooc-deployer puede usarlas (actAs: crear la VM con ellas y
+# entrar por OS Login) pero no cambiar su IAM ni crear otras.
+for rol_vm in web worker; do
+  cuenta="$PREFIJO-$rol_vm@$PROYECTO.iam.gserviceaccount.com"
+  if ! gcloud iam service-accounts describe "$cuenta" --project "$PROYECTO" >/dev/null 2>&1; then
+    aviso "creando la cuenta de servicio $cuenta"
+    if [[ "$rol_vm" == web ]]; then
+      gcloud iam service-accounts create "$PREFIJO-web" --project "$PROYECTO" \
+        --display-name "MOOC Web Server (API)" \
+        --description "VM Web y API: firma cargas y descargas, lee Secret Manager y Artifact Registry."
+    else
+      gcloud iam service-accounts create "$PREFIJO-worker" --project "$PROYECTO" \
+        --display-name "MOOC Worker Server" \
+        --description "VM Worker: lee originales, escribe derivados HLS y PDFs de presentaciones."
+    fi
+    for _ in $(seq 1 20); do
+      gcloud iam service-accounts describe "$cuenta" --project "$PROYECTO" >/dev/null 2>&1 && break
+      sleep 3
+    done
+  fi
+  gcloud iam service-accounts add-iam-policy-binding "$cuenta" --project "$PROYECTO" \
+    --member "serviceAccount:$SA" --role roles/iam.serviceAccountUser --condition None >/dev/null
+  aviso "  roles/iam.serviceAccountUser sobre $cuenta"
+done
+
+# La cuenta por defecto de Compute Engine (<número>-compute@...) nace con
+# roles/editor en proyectos sin organización. Nada de este despliegue la usa:
+# las VM corren con mooc-web y mooc-worker, y Cloud SQL, Artifact Registry y
+# servicenetworking trabajan con sus propios agentes de servicio
+# (service-<número>@gcp-sa-*). Viva y con Editor, cualquiera con actAs sobre
+# ella tendría Editor a través de una VM; se le quita el rol y se deshabilita.
+SA_COMPUTE="$NUMERO-compute@developer.gserviceaccount.com"
+if [[ "$CONSERVAR_SA_COMPUTE" == true ]]; then
+  aviso "se conserva $SA_COMPUTE (--conservar-sa-compute)"
+elif ! gcloud iam service-accounts describe "$SA_COMPUTE" --project "$PROYECTO" >/dev/null 2>&1; then
+  aviso "no existe $SA_COMPUTE (o aún no aparece tras habilitar Compute): repetir el script más tarde"
+else
+  if tiene_rol_proyecto "serviceAccount:$SA_COMPUTE" roles/editor; then
+    gcloud projects remove-iam-policy-binding "$PROYECTO" --member "serviceAccount:$SA_COMPUTE" \
+      --role roles/editor --all --quiet >/dev/null
+    aviso "retirado roles/editor de $SA_COMPUTE"
+  fi
+  en_uso="$(gcloud compute instances list --project "$PROYECTO" \
+              --filter "serviceAccounts.email=$SA_COMPUTE" --format 'value(name)' 2>/dev/null || true)"
+  if [[ -n "$en_uso" ]]; then
+    aviso "AVISO: $SA_COMPUTE la usan estas VM y no se deshabilita: $en_uso"
+  elif [[ "$(gcloud iam service-accounts describe "$SA_COMPUTE" --project "$PROYECTO" --format 'value(disabled)')" != True ]]; then
+    gcloud iam service-accounts disable "$SA_COMPUTE" --project "$PROYECTO" --quiet >/dev/null
+    aviso "deshabilitada $SA_COMPUTE"
+  fi
+fi
 
 # identidades.tf da logWriter y metricWriter a las cuentas de las VM con
 # google_project_iam_member, que exige cambiar la política IAM del proyecto.
@@ -251,8 +323,11 @@ fi
 # - un entorno de GitHub (gcp o gcp-rutina). Un trabajo sin `environment:`
 #   no recibe credenciales, y en los entornos el equipo decide en GitHub
 #   qué ramas pueden desplegar y si hace falta aprobación;
-# - con --solo-rama, además esa rama (refs/heads/<rama>). Más estricto,
-#   pero impide probar el flujo desde otra rama con `gh workflow run --ref`.
+# - la rama main (refs/heads/main, o la de --rama). Aunque alguien con
+#   permiso de escritura empuje otra rama con un workflow modificado que
+#   declare el entorno, no obtiene credenciales. --cualquier-rama lo quita
+#   para probar desde otra rama con `gh workflow run --ref`, y deja la
+#   restricción solo en las reglas de ramas de los entornos de GitHub.
 REPO_ID=""
 if command -v gh >/dev/null 2>&1; then
   REPO_ID="$(gh api "repos/$REPO" --jq .id 2>/dev/null || true)"
@@ -343,6 +418,7 @@ Secret Manager.
   GCP_REGION         = $REGION
   GCP_ZONE           = $ZONA
   TLS_EMAIL          = <correo del equipo para Let's Encrypt>
+  CREAR_BD           = true   (obligatoria; false tras bd.sh eliminar)
 EOF
 if [[ "$PRESUPUESTO_OK" == true ]]; then
   cat <<EOF
@@ -354,7 +430,7 @@ fi
 cat <<EOF
 
 Opcionales (vacías: el valor por defecto de variables.tf o del .env.example):
-  TIPO_MAQUINA, BD_TIER, HABILITAR_NAT, CREAR_BD, DOMINIO_WEB,
+  TIPO_MAQUINA, BD_TIER, HABILITAR_NAT, DOMINIO_WEB,
   WORKER_CONCURRENCY, AUTH_RATE_LIMIT_PER_MINUTE, ADMIN_EMAIL,
   APAGADO_NOCTURNO=true (apaga VM y Cloud SQL cada noche)
 
@@ -366,6 +442,7 @@ Con la CLI de GitHub (gh auth login antes):
   gh variable set TF_STATE_BUCKET  -R $REPO -b '$BUCKET'
   gh variable set GCP_REGION       -R $REPO -b '$REGION'
   gh variable set GCP_ZONE         -R $REPO -b '$ZONA'
+  gh variable set CREAR_BD         -R $REPO -b 'true'
 
 Después: crear los entornos gcp y gcp-rutina (Settings > Environments) y
 seguir deploy/gcp/README.md, "Desplegar desde GitHub Actions".

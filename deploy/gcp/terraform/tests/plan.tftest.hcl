@@ -1,10 +1,9 @@
 mock_provider "google" {
   mock_data "google_project" { defaults = { number = "123456789" } }
-  mock_data "google_secret_manager_secret" { defaults = { id = "projects/p/secrets/mooc-badge-signing-key", secret_id = "mooc-badge-signing-key" } }
+  mock_data "google_service_account" { defaults = { email = "sa@p.iam.gserviceaccount.com", member = "serviceAccount:sa@p.iam.gserviceaccount.com" } }
   mock_resource "google_compute_network" { defaults = { id = "projects/mi-proyecto/global/networks/mooc-vpc" } }
   mock_resource "google_compute_subnetwork" { defaults = { id = "projects/mi-proyecto/regions/us-central1/subnetworks/s" } }
   mock_resource "google_compute_address" { defaults = { address = "203.0.113.10" } }
-  mock_resource "google_service_account" { defaults = { email = "sa@p.iam.gserviceaccount.com", member = "serviceAccount:sa@p.iam.gserviceaccount.com" } }
   mock_resource "google_sql_database_instance" { defaults = { service_account_email_address = "p123@gcp-sa-cloud-sql.iam.gserviceaccount.com", private_ip_address = "10.30.0.3" } }
 }
 mock_provider "random" {}
@@ -38,6 +37,17 @@ run "completo" {
   assert {
     condition     = contains(google_storage_bucket.objetos.cors[0].response_header, "ETag")
     error_message = "cors etag"
+  }
+  # La clave de insignias no se lee con un data source: el plan de CI no
+  # debe depender de que ya exista.
+  assert {
+    condition     = google_secret_manager_secret_iam_member.badge_web.secret_id == "projects/mi-proyecto/secrets/mooc-badge-signing-key" && output.secreto_badge == "mooc-badge-signing-key"
+    error_message = "secreto de insignias"
+  }
+  # Las cuentas de las VM las crea bootstrap-ci.sh; aquí solo se leen.
+  assert {
+    condition     = google_compute_instance.web.service_account[0].email == data.google_service_account.web.email
+    error_message = "cuenta de servicio del Web"
   }
 }
 

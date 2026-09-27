@@ -13,7 +13,9 @@
 #
 # --plan y --aplicar separan las dos mitades para GitHub Actions: se revisa
 # un plan guardado y se aplica exactamente ese. --plan sale como
-# `terraform plan -detailed-exitcode`: 0 sin cambios, 2 con cambios, 1 error.
+# `terraform plan -detailed-exitcode`: 0 sin cambios, 2 con cambios, 1 error,
+# y no crea nada (tampoco la clave de insignias: solo avisa si falta, y
+# --aplicar la crea antes del apply).
 #
 # --migrar-estado sube al bucket un terraform.tfstate local de antes del
 # backend remoto (una sola vez, ver README).
@@ -66,6 +68,13 @@ fi
 if [[ "$modo" == aplicar ]]; then
   [[ -f "$archivo" ]] || morir "no existe el plan $archivo"
   tf_init
+  # Proyecto, prefijo y región del propio plan (en CI no hay tfvars en este
+  # trabajo). Solo esas variables: el JSON del plan lleva los secretos en
+  # claro y no se imprime ni se guarda.
+  requiere jq
+  vars_plan="$(tf show -json "$archivo" | jq -r '[.variables.project_id.value, (.variables.prefijo.value // "mooc"), (.variables.region.value // "us-central1")] | @tsv')"
+  IFS=$'\t' read -r PROYECTO PREFIJO REGION <<<"$vars_plan"
+  asegurar_clave_insignias "$PROYECTO" "$PREFIJO" "$REGION"
   # Un plan guardado se aplica sin preguntar: la revisión fue antes. Si el
   # estado cambió desde que se generó, Terraform lo rechaza por obsoleto.
   tf apply -input=false "$archivo"
@@ -85,16 +94,19 @@ REGION="${REGION:-us-central1}"
 
 # Terraform necesita las APIs habilitadas para planificar.
 habilitar_apis "$PROYECTO" "${APIS[@]}"
-asegurar_clave_insignias "$PROYECTO" "$PREFIJO" "$REGION"
 
 tf_init
 
 if [[ "$modo" == plan ]]; then
+  if ! gcloud secrets describe "$PREFIJO-badge-signing-key" --project "$PROYECTO" >/dev/null 2>&1; then
+    aviso "AVISO: no existe el secreto $PREFIJO-badge-signing-key; se creará al aplicar (--aplicar)"
+  fi
   rc=0
   tf plan -input=false -detailed-exitcode -out "$archivo" "$@" || rc=$?
   exit "$rc"
 fi
 
+asegurar_clave_insignias "$PROYECTO" "$PREFIJO" "$REGION"
 tf apply -input=false "$@"
 releer_salidas
 

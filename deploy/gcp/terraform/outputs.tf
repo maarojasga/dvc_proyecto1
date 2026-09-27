@@ -101,15 +101,15 @@ output "secreto_admin_password" {
 }
 
 output "secreto_badge" {
-  value = data.google_secret_manager_secret.badge.secret_id
+  value = local.secreto_badge
 }
 
 output "sa_web" {
-  value = google_service_account.web.email
+  value = data.google_service_account.web.email
 }
 
 output "sa_worker" {
-  value = google_service_account.worker.email
+  value = data.google_service_account.worker.email
 }
 
 output "nat_activa" {
