@@ -36,10 +36,16 @@ type Config struct {
 	Endpoint  string
 	AccessKey string
 	SecretKey string
-	UseSSL    bool
-	Bucket    string
-	Region    string
-	PublicURL string
+	// SessionToken acompaña a AccessKey/SecretKey cuando son credenciales
+	// temporales de STS (las de AWS Academy lo son): sin él, S3 rechaza la
+	// firma con InvalidAccessKeyId aunque la llave y el secreto sean buenos.
+	SessionToken string
+	UseSSL       bool
+	Bucket       string
+	Region       string
+	PublicURL    string
+	// CrearBucket permite crear el bucket si falta. Ver asegurarBucket.
+	CrearBucket bool
 
 	// PublicEndpoint es el host por el que el navegador alcanza el almacén.
 	// Vacío significa "el mismo que Endpoint".
@@ -48,22 +54,29 @@ type Config struct {
 }
 
 func New(ctx context.Context, cfg Config) (*Client, error) {
+	creds := credencialesDe(cfg)
+	// Sin llave explícita, la cadena puede quedarse sin proveedor (sin
+	// variables AWS_* y sin perfil de instancia) y minio-go seguiría en modo
+	// anónimo sin avisar: el primer síntoma sería un AccessDenied sobre el
+	// bucket, que apunta a la política y no a la falta de credenciales.
+	if v, err := creds.Get(); err != nil || v.SignerType.IsAnonymous() {
+		return nil, fmt.Errorf("storage: sin credenciales: S3_ACCESS_KEY vacío, sin AWS_ACCESS_KEY_ID y sin perfil de instancia (err: %v)", err)
+	}
+
 	mc, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Creds:  creds,
 		Secure: cfg.UseSSL,
+		// Region explícita también aquí: sin ella minio-go averigua la región
+		// del bucket con GetBucketLocation antes de cada operación nueva, lo
+		// que exige un permiso IAM más y una petición extra que no aportan.
+		Region: regionDe(cfg),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("storage: no se pudo crear el cliente: %w", err)
 	}
 
-	exists, err := mc.BucketExists(ctx, cfg.Bucket)
-	if err != nil {
-		return nil, fmt.Errorf("storage: no se pudo verificar el bucket: %w", err)
-	}
-	if !exists {
-		if err := mc.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{}); err != nil {
-			return nil, fmt.Errorf("storage: no se pudo crear el bucket: %w", err)
-		}
+	if err := asegurarBucket(ctx, mc, cfg); err != nil {
+		return nil, err
 	}
 
 	firmante, err := clienteDeFirma(cfg, mc)
@@ -72,6 +85,63 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	return &Client{mc: mc, firmante: firmante, bucket: cfg.Bucket, publicURL: cfg.PublicURL}, nil
+}
+
+// asegurarBucket comprueba que el bucket existe y, solo si se permite, lo crea.
+//
+// En local crearlo es cómodo: MinIO arranca vacío. En AWS lo crea
+// CloudFormation con su cifrado, su CORS y su bloqueo de acceso público, y un
+// bucket creado aquí por un nombre mal escrito nacería sin nada de eso; por
+// eso allí S3_CREATE_BUCKET=false convierte la ausencia en un error de
+// arranque en lugar de en un bucket nuevo.
+//
+// Un AccessDenied al comprobarlo no tumba el proceso: HeadBucket exige
+// s3:ListBucket, que una identidad limitada a objetos puede no tener sin que
+// eso le impida trabajar. Si de verdad no puede, lo dirá la primera
+// operación sobre un objeto, con el nombre de la clave.
+func asegurarBucket(ctx context.Context, mc *minio.Client, cfg Config) error {
+	exists, err := mc.BucketExists(ctx, cfg.Bucket)
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "AccessDenied" {
+			return nil
+		}
+		return fmt.Errorf("storage: no se pudo verificar el bucket: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	if !cfg.CrearBucket {
+		return fmt.Errorf("storage: el bucket %q no existe y S3_CREATE_BUCKET=false", cfg.Bucket)
+	}
+	if err := mc.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{Region: regionDe(cfg)}); err != nil {
+		return fmt.Errorf("storage: no se pudo crear el bucket: %w", err)
+	}
+	return nil
+}
+
+// credencialesDe elige de dónde salen las credenciales del almacén.
+//
+// Con S3_ACCESS_KEY definida se usan tal cual (MinIO en local, o una llave de
+// IAM). Vacía, se delega en la cadena estándar de AWS: primero las variables
+// AWS_* (credenciales temporales pegadas desde AWS Academy) y después el
+// perfil de instancia de EC2. Lo segundo es lo que se busca en la nube: la
+// llave rota sola, no vive en ningún .env y los permisos los fija el rol de
+// la máquina, no quien escribió el archivo de configuración.
+func credencialesDe(cfg Config) *credentials.Credentials {
+	if cfg.AccessKey != "" {
+		return credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, cfg.SessionToken)
+	}
+	return credentials.NewChainCredentials([]credentials.Provider{
+		&credentials.EnvAWS{},
+		&credentials.IAM{Client: &http.Client{Transport: http.DefaultTransport}},
+	})
+}
+
+func regionDe(cfg Config) string {
+	if cfg.Region == "" {
+		return "us-east-1"
+	}
+	return cfg.Region
 }
 
 // clienteDeFirma devuelve el cliente con el que se firman las URLs que abrirá
@@ -85,14 +155,15 @@ func clienteDeFirma(cfg Config, interno *minio.Client) (*minio.Client, error) {
 	// ubicación del bucket con una petición real, y este cliente apunta a un
 	// host que puede no resolver desde aquí (es el del navegador). Firmar no
 	// debe requerir red.
-	region := cfg.Region
-	if region == "" {
-		region = "us-east-1"
-	}
+	//
+	// Las credenciales son las mismas que las del cliente interno. Con el
+	// perfil de instancia son temporales, y una URL firmada con ellas deja de
+	// valer cuando caduca la sesión que la firmó, aunque su X-Amz-Expires
+	// diga más: es un límite de S3, no de este código.
 	c, err := minio.New(cfg.PublicEndpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Creds:  credencialesDe(cfg),
 		Secure: cfg.PublicUseSSL,
-		Region: region,
+		Region: regionDe(cfg),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("storage: no se pudo crear el cliente público: %w", err)

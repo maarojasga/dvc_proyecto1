@@ -14,13 +14,22 @@ type Config struct {
 	DatabaseURL string
 	RedisAddr   string
 
-	S3Endpoint  string
-	S3Bucket    string
-	S3AccessKey string
-	S3SecretKey string
-	S3UseSSL    bool
-	S3Region    string
-	S3PublicURL string // base URL pública/CDN para servir objetos (opcional)
+	S3Endpoint string
+	S3Bucket   string
+	// S3AccessKey vacía (definida pero sin valor) hace que el almacén use la
+	// cadena de credenciales de AWS: variables AWS_* y, en EC2, el perfil de
+	// instancia. Es lo que se quiere en la nube, donde no debe haber llaves
+	// estáticas en el .env.
+	S3AccessKey    string
+	S3SecretKey    string
+	S3SessionToken string
+	S3UseSSL       bool
+	// S3CreateBucket permite que la API y el worker creen el bucket si no
+	// existe. Cierto en local (MinIO arranca vacío); falso en AWS, donde el
+	// bucket lo crea CloudFormation con su política, su CORS y su cifrado.
+	S3CreateBucket bool
+	S3Region       string
+	S3PublicURL    string // base URL pública/CDN para servir objetos (opcional)
 
 	// S3PublicEndpoint es el host por el que el NAVEGADOR alcanza el
 	// almacén de objetos. Dentro de Docker, S3Endpoint es "minio:9000",
@@ -66,6 +75,12 @@ type Config struct {
 	// acabaría midiendo el limitador en vez del producto. El valor por defecto
 	// es el de producción; subirlo es una decisión explícita del entorno.
 	AuthRateLimitPerMinute int
+
+	// WorkerConcurrency es el número de trabajos que un worker procesa a la
+	// vez. Cada uno puede ser un FFmpeg o un LibreOffice, así que el valor
+	// correcto depende de la memoria de la máquina: 5 cabe en un portátil,
+	// pero en una VM de 2 GiB varios FFmpeg a la vez acaban en el OOM killer.
+	WorkerConcurrency int
 }
 
 // Load construye la configuración a partir de variables de entorno, con valores
@@ -77,13 +92,17 @@ func Load() Config {
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable"),
 		RedisAddr:   getEnv("REDIS_ADDR", "localhost:6379"),
 
-		S3Endpoint:  getEnv("S3_ENDPOINT", "localhost:9000"),
-		S3Bucket:    getEnv("S3_BUCKET", "mooc"),
-		S3AccessKey: getEnv("S3_ACCESS_KEY", "minioadmin"),
-		S3SecretKey: getEnv("S3_SECRET_KEY", "minioadmin"),
-		S3UseSSL:    getBool("S3_USE_SSL", false),
-		S3Region:    getEnv("S3_REGION", "us-east-1"),
-		S3PublicURL: getEnv("S3_PUBLIC_URL", ""),
+		S3Endpoint: getEnv("S3_ENDPOINT", "localhost:9000"),
+		S3Bucket:   getEnv("S3_BUCKET", "mooc"),
+		// Definida y vacía no es lo mismo que ausente: ausente conserva la
+		// llave de MinIO para `go run` en local; vacía pide la cadena de AWS.
+		S3AccessKey:    getEnvDefinida("S3_ACCESS_KEY", "minioadmin"),
+		S3SecretKey:    getEnvDefinida("S3_SECRET_KEY", "minioadmin"),
+		S3SessionToken: getEnv("S3_SESSION_TOKEN", ""),
+		S3UseSSL:       getBool("S3_USE_SSL", false),
+		S3CreateBucket: getBool("S3_CREATE_BUCKET", true),
+		S3Region:       getEnv("S3_REGION", "us-east-1"),
+		S3PublicURL:    getEnv("S3_PUBLIC_URL", ""),
 
 		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
 		S3PublicUseSSL:   getBool("S3_PUBLIC_USE_SSL", getBool("S3_USE_SSL", false)),
@@ -102,11 +121,21 @@ func Load() Config {
 		PublicBaseURL:          getEnv("PUBLIC_BASE_URL", "http://localhost:3000"),
 		CookieSecure:           getBool("COOKIE_SECURE", false),
 		AuthRateLimitPerMinute: getInt("AUTH_RATE_LIMIT_PER_MINUTE", 10),
+		WorkerConcurrency:      getInt("WORKER_CONCURRENCY", 5),
 	}
 }
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// getEnvDefinida distingue una variable ausente de una definida vacía, al
+// contrario que getEnv. Solo tiene sentido donde el vacío significa algo.
+func getEnvDefinida(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return fallback
