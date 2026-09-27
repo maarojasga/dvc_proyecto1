@@ -2,7 +2,7 @@
 # de la base, las claves HMAC y la del administrador las genera Terraform y
 # las guarda en Secret Manager.
 
-project_id = "mi-proyecto-mooc"
+project_id = "desarrollo-soluciones-cloud"
 region     = "us-central1"
 zona       = "us-central1-a"
 prefijo    = "mooc"
