@@ -166,7 +166,10 @@ Dos condiciones del despliegue que conviene no descubrir en la demostración:
   hls.js pasa de la primera línea, con el recurso marcado `ready` y la
   pantalla en negro. En el compose lo resuelve el servicio `minio-init`, que
   abre a lectura anónima únicamente ese prefijo; los originales, los PDF y las
-  descargas se siguen firmando uno a uno.
+  descargas se siguen firmando uno a uno. En Cloud Storage, con acceso
+  uniforme, no se puede abrir un solo prefijo: los derivados van a un bucket
+  aparte (`S3_BUCKET_HLS`) con las mismas claves, y el resto se queda en uno
+  privado. Ver [deploy/gcp/README.md](deploy/gcp/README.md#hls-sin-firma-bucket-separado).
 - **El origen del frontend debe estar permitido por CORS en el almacenamiento
   o el CDN.** Safari reproduce HLS de forma nativa y no lo necesita, pero el
   resto de navegadores usan hls.js, que lee el manifiesto y los segmentos por
@@ -196,6 +199,7 @@ publicación de una versión nueva.
 |-- docs/               Especificación OpenAPI, arquitectura y guion de la demostración
 |-- postman/            Colección que recorre los nueve segmentos de la demostración
 |-- load/               Prueba de carga de Etapa 1 (k6) y sus umbrales
+|-- deploy/             Despliegue en GCP (Entrega 2): Terraform, scripts y un compose por VM
 `-- docker-compose.yml  Postgres, Redis, MinIO, Mailpit, API, workers y frontend
 ```
 
@@ -223,7 +227,9 @@ Cada subproyecto tiene su propio README con el detalle.
   CORS habilitado para el origen del frontend y las cookies de sesión viajan
   con `credentials: "include"`.
 - **Despliegue**: Docker y Docker Compose, con API y workers preparados para
-  escalar a múltiples instancias.
+  escalar a múltiples instancias. En la nube (Entrega 2), dos VM de Compute
+  Engine con Cloud SQL, Cloud Storage y Artifact Registry, descritas con
+  Terraform: [deploy/gcp/README.md](deploy/gcp/README.md).
 
 ## Cómo levantar el entorno local
 

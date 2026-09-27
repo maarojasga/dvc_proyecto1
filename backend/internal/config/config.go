@@ -12,15 +12,32 @@ type Config struct {
 	Env         string
 	HTTPPort    string
 	DatabaseURL string
-	RedisAddr   string
+	// DBMaxConns es el tamaño del pool de PostgreSQL de cada proceso. Se
+	// suma entre la API y el worker y tiene que caber en el max_connections
+	// de la base administrada, que depende del tamaño de la instancia (en
+	// Cloud SQL, 25 en db-f1-micro y 50 en db-g1-small).
+	DBMaxConns int
+	RedisAddr  string
 
-	S3Endpoint  string
-	S3Bucket    string
+	S3Endpoint string
+	S3Bucket   string
+	// S3BucketHLS, si no está vacío, aloja las claves hls/*. En GCP es un
+	// bucket aparte y legible por cualquiera, porque el reproductor pide los
+	// segmentos sin firma; ver storage.Config.BucketHLS.
+	S3BucketHLS string
+	// S3AccessKey vacía (definida pero sin valor) es un error de arranque, no
+	// un "usar otra cosa": en la nube tiene que llegar la clave HMAC y un
+	// olvido no debe acabar firmando con la llave local de MinIO.
 	S3AccessKey string
 	S3SecretKey string
 	S3UseSSL    bool
-	S3Region    string
-	S3PublicURL string // base URL pública/CDN para servir objetos (opcional)
+	// S3CreateBucket permite que la API y el worker creen el bucket si no
+	// existe. Cierto en local (MinIO arranca vacío); falso en GCP, donde los
+	// buckets los crea Terraform con su CORS, su ciclo de vida y su
+	// prevención de acceso público.
+	S3CreateBucket bool
+	S3Region       string
+	S3PublicURL    string // base URL pública/CDN para servir objetos (opcional)
 
 	// S3PublicEndpoint es el host por el que el NAVEGADOR alcanza el
 	// almacén de objetos. Dentro de Docker, S3Endpoint es "minio:9000",
@@ -66,6 +83,12 @@ type Config struct {
 	// acabaría midiendo el limitador en vez del producto. El valor por defecto
 	// es el de producción; subirlo es una decisión explícita del entorno.
 	AuthRateLimitPerMinute int
+
+	// WorkerConcurrency es el número de trabajos que un worker procesa a la
+	// vez. Cada uno puede ser un FFmpeg o un LibreOffice, así que el valor
+	// correcto depende de la memoria de la máquina: 5 cabe en un portátil,
+	// pero en una VM de 2 GiB varios FFmpeg a la vez acaban en el OOM killer.
+	WorkerConcurrency int
 }
 
 // Load construye la configuración a partir de variables de entorno, con valores
@@ -75,15 +98,21 @@ func Load() Config {
 		Env:         getEnv("APP_ENV", "development"),
 		HTTPPort:    getEnv("API_PORT", "8080"),
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable"),
+		DBMaxConns:  getInt("DB_MAX_CONNS", 20),
 		RedisAddr:   getEnv("REDIS_ADDR", "localhost:6379"),
 
 		S3Endpoint:  getEnv("S3_ENDPOINT", "localhost:9000"),
 		S3Bucket:    getEnv("S3_BUCKET", "mooc"),
-		S3AccessKey: getEnv("S3_ACCESS_KEY", "minioadmin"),
-		S3SecretKey: getEnv("S3_SECRET_KEY", "minioadmin"),
-		S3UseSSL:    getBool("S3_USE_SSL", false),
-		S3Region:    getEnv("S3_REGION", "us-east-1"),
-		S3PublicURL: getEnv("S3_PUBLIC_URL", ""),
+		S3BucketHLS: getEnv("S3_BUCKET_HLS", ""),
+		// Definida y vacía no es lo mismo que ausente: ausente conserva la
+		// llave de MinIO para `go run` en local; vacía llega vacía y el
+		// almacén se niega a arrancar sin credenciales.
+		S3AccessKey:    getEnvDefinida("S3_ACCESS_KEY", "minioadmin"),
+		S3SecretKey:    getEnvDefinida("S3_SECRET_KEY", "minioadmin"),
+		S3UseSSL:       getBool("S3_USE_SSL", false),
+		S3CreateBucket: getBool("S3_CREATE_BUCKET", true),
+		S3Region:       getEnv("S3_REGION", "us-east-1"),
+		S3PublicURL:    getEnv("S3_PUBLIC_URL", ""),
 
 		S3PublicEndpoint: getEnv("S3_PUBLIC_ENDPOINT", ""),
 		S3PublicUseSSL:   getBool("S3_PUBLIC_USE_SSL", getBool("S3_USE_SSL", false)),
@@ -102,11 +131,21 @@ func Load() Config {
 		PublicBaseURL:          getEnv("PUBLIC_BASE_URL", "http://localhost:3000"),
 		CookieSecure:           getBool("COOKIE_SECURE", false),
 		AuthRateLimitPerMinute: getInt("AUTH_RATE_LIMIT_PER_MINUTE", 10),
+		WorkerConcurrency:      getInt("WORKER_CONCURRENCY", 5),
 	}
 }
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// getEnvDefinida distingue una variable ausente de una definida vacía, al
+// contrario que getEnv. Solo tiene sentido donde el vacío significa algo.
+func getEnvDefinida(key, fallback string) string {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return fallback

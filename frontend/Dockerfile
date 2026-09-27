@@ -11,6 +11,11 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Next incrusta NEXT_PUBLIC_API_URL en el bundle al compilar: pasarla al
+# arrancar el contenedor no tiene efecto. El valor por defecto es el del
+# compose local; deploy/gcp/publicar.sh pasa el origen HTTPS del Web Server.
+ARG NEXT_PUBLIC_API_URL=http://localhost:8080
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 
 FROM node:20-alpine AS runner

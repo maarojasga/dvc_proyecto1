@@ -1,0 +1,83 @@
+# Lo común a todos los trabajos que tocan GCP: comprobar que existen las
+# variables del repositorio, autenticarse sin llaves por Workload Identity
+# Federation e instalar gcloud y Terraform. Los scripts de deploy/gcp hacen
+# el resto igual que en un portátil.
+#
+# Las variables del repositorio (vars) no son visibles dentro de una acción
+# compuesta: llegan como entradas.
+
+name: Preparar GCP
+description: Autenticación federada, gcloud y Terraform para deploy/gcp.
+
+inputs:
+  proyecto:
+    description: vars.GCP_PROJECT_ID
+    required: true
+  proveedor:
+    description: vars.GCP_WIF_PROVIDER
+    required: true
+  cuenta:
+    description: vars.GCP_DEPLOYER_SA
+    required: true
+  bucket:
+    description: vars.TF_STATE_BUCKET
+    required: true
+  terraform:
+    description: Versión exacta de Terraform (el plan y su apply deben usar la misma)
+    required: true
+  cuenta_facturacion:
+    description: vars.CUENTA_FACTURACION, solo para enmascararla en el registro
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # El repositorio es público y el plan y el apply imprimen el ID de la
+    # cuenta de facturación (presupuesto). No es una credencial, pero no
+    # tiene por qué quedar a la vista.
+    - name: Enmascarar la cuenta de facturación
+      if: inputs.cuenta_facturacion != ''
+      shell: bash
+      env:
+        CUENTA: ${{ inputs.cuenta_facturacion }}
+      run: echo "::add-mask::$CUENTA"
+
+    - name: Comprobar las variables del repositorio
+      shell: bash
+      env:
+        GCP_PROJECT_ID: ${{ inputs.proyecto }}
+        GCP_WIF_PROVIDER: ${{ inputs.proveedor }}
+        GCP_DEPLOYER_SA: ${{ inputs.cuenta }}
+        TF_STATE_BUCKET: ${{ inputs.bucket }}
+      run: |
+        # Sin esto el primer error sería uno críptico de la autenticación.
+        faltan=()
+        for v in GCP_PROJECT_ID GCP_WIF_PROVIDER GCP_DEPLOYER_SA TF_STATE_BUCKET; do
+          [[ -n "${!v}" ]] || faltan+=("$v")
+        done
+        if [[ ${#faltan[@]} -gt 0 ]]; then
+          echo "::error::Faltan variables del repositorio: ${faltan[*]}. Las imprime deploy/gcp/bootstrap-ci.sh (ver deploy/gcp/README.md, 'Desplegar desde GitHub Actions')."
+          exit 1
+        fi
+
+    # Cambia el token OIDC del trabajo (permissions: id-token: write) por
+    # credenciales de corta duración de la cuenta de despliegue. Deja un
+    # archivo de configuración (no una llave) en GOOGLE_APPLICATION_CREDENTIALS
+    # para Terraform, y gcloud lo usa a través de setup-gcloud.
+    - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        project_id: ${{ inputs.proyecto }}
+        workload_identity_provider: ${{ inputs.proveedor }}
+        service_account: ${{ inputs.cuenta }}
+
+    - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      with:
+        project_id: ${{ inputs.proyecto }}
+
+    # Sin el envoltorio: los scripts leen `terraform output` y el envoltorio
+    # añade texto a la salida estándar.
+    - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: ${{ inputs.terraform }}
+        terraform_wrapper: false

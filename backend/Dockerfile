@@ -6,6 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/api ./cmd/api
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/worker ./cmd/worker
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/seed ./cmd/seed
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/migrate ./cmd/migrate
 
 FROM alpine:3.20 AS api
 RUN apk add --no-cache ca-certificates
@@ -45,3 +46,11 @@ FROM alpine:3.20 AS seed
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/seed /usr/local/bin/seed
 ENTRYPOINT ["seed"]
+
+# Migraciones como paso separado del despliegue (deploy/gcp/migrar.sh).
+# La API también migra al arrancar; esta imagen existe para que un fallo de
+# migración se vea en un código de salida y no enterrado en el arranque.
+FROM alpine:3.20 AS migrate
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /out/migrate /usr/local/bin/migrate
+ENTRYPOINT ["migrate"]

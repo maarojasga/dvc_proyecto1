@@ -1,0 +1,30 @@
+# Copiar a terraform.tfvars (ignorado por git). Sin secretos: la contraseña
+# de la base, las claves HMAC y la del administrador las genera Terraform y
+# las guarda en Secret Manager.
+
+project_id = "desarrollo-soluciones-cloud"
+region     = "us-central1"
+zona       = "us-central1-a"
+prefijo    = "mooc"
+
+# 2 vCPU y 2 GB por VM, como fija el enunciado. Ver README antes de cambiarlo:
+# un tipo distinto es una configuración distinta en el informe de capacidad.
+tipo_maquina = "e2-small"
+disco_gb     = 30
+
+# Vacío: <IP estática>.sslip.io
+dominio_web = ""
+
+# Cloud NAT para el Worker. Tras el primer despliegue se puede apagar
+# (false) y el Worker sigue funcionando por Private Google Access.
+habilitar_nat = true
+
+bd_tier              = "db-custom-1-3840"
+bd_disco_gb          = 10
+bd_retencion_backups = 3
+
+# Presupuesto: ID de la cuenta de facturación (Facturación > Administrar
+# cuentas). Vacío: no se crea.
+cuenta_facturacion = ""
+presupuesto_monto  = 50
+presupuesto_moneda = "USD"

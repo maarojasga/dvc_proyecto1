@@ -29,7 +29,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := postgres.Connect(ctx, cfg.DatabaseURL)
+	pool, err := postgres.ConnectConMaximo(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		log.Error("worker: postgres", "error", err)
 		os.Exit(1)
@@ -38,8 +38,8 @@ func main() {
 
 	storageClient, err := storage.New(ctx, storage.Config{
 		Endpoint: cfg.S3Endpoint, AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey,
-		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, Region: cfg.S3Region, PublicURL: cfg.S3PublicURL,
-		PublicEndpoint: cfg.S3PublicEndpoint, PublicUseSSL: cfg.S3PublicUseSSL,
+		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, BucketHLS: cfg.S3BucketHLS, Region: cfg.S3Region, PublicURL: cfg.S3PublicURL,
+		PublicEndpoint: cfg.S3PublicEndpoint, PublicUseSSL: cfg.S3PublicUseSSL, CrearBucket: cfg.S3CreateBucket,
 	})
 	if err != nil {
 		log.Error("worker: storage", "error", err)
@@ -69,7 +69,7 @@ func main() {
 	mux.HandleFunc(queue.TaskProcessMedia, processor.HandleProcessMedia)
 	mux.HandleFunc(queue.TaskConvertDocument, convertidor.HandleConvertDocument)
 
-	srv := queue.NewServer(cfg.RedisAddr, 5, log)
+	srv := queue.NewServer(cfg.RedisAddr, cfg.WorkerConcurrency, log)
 
 	go func() {
 		if err := srv.Run(mux); err != nil {
