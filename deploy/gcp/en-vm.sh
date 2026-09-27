@@ -8,6 +8,7 @@
 #   en-vm.sh web       # nginx + api + mailpit (y frontend si su perfil está)
 #   en-vm.sh worker    # redis + worker
 #   en-vm.sh migrar    # migraciones contra Cloud SQL (en el Web Server)
+#   en-vm.sh sembrar   # datos sintéticos de las pruebas de carga (Web Server)
 #   en-vm.sh estado    # contenedores, disco y memoria
 #
 # Los secretos acaban en el entorno de los contenedores (visible con
@@ -16,9 +17,9 @@
 # puede leer los suyos: los permisos están por secreto en Terraform.
 set -euo pipefail
 
-accion="${1:?uso: en-vm.sh <web|worker|migrar|estado>}"
+accion="${1:?uso: en-vm.sh <web|worker|migrar|sembrar|estado>}"
 case "$accion" in
-  web|migrar) rol=web ;;
+  web|migrar|sembrar) rol=web ;;
   worker) rol=worker ;;
   estado)
     rol=""
@@ -33,10 +34,9 @@ esac
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 CONFIG="${MOOC_CONFIG:-/opt/mooc/config/$rol.env}"
 [[ -f "$CONFIG" ]] || { echo "falta $CONFIG (deploy/gcp/generar-env.sh + desplegar-vm.sh)" >&2; exit 1; }
-set -a
-# shellcheck disable=SC1090
-source "$CONFIG"
-set +a
+# shellcheck source=deploy/gcp/env.sh
+source "$DIR/deploy/gcp/env.sh"
+cargar_env "$CONFIG"
 
 compose() { docker compose -f "$DIR/deploy/$rol/docker-compose.yml" --env-file "$CONFIG" "$@"; }
 
@@ -82,6 +82,7 @@ fijar_imagenes() {
   if [[ "$rol" == web ]]; then
     export IMAGEN_API="$REGISTRO/mooc-api:$tag"
     export IMAGEN_MIGRATE="$REGISTRO/mooc-migrate:$tag"
+    export IMAGEN_SEED="$REGISTRO/mooc-seed:$tag"
     export IMAGEN_FRONTEND="$REGISTRO/mooc-frontend:$tag"
   else
     export IMAGEN_WORKER="$REGISTRO/mooc-worker:$tag"
@@ -98,6 +99,12 @@ case "$accion" in
     # provisional; `certificado.sh letsencrypt` lo sustituye.
     MOOC_CONFIG="$CONFIG" "$DIR/deploy/web/certificado.sh" asegurar
     compose up -d --remove-orphans
+    # nginx se recrea siempre. Monta su configuración a través del enlace
+    # /opt/mooc/actual, y un bind mount fija el archivo al crear el
+    # contenedor: sin recrearlo seguiría leyendo la versión anterior, que la
+    # rotación de desplegar-vm.sh acaba borrando. Compose no lo detecta,
+    # porque la ruta escrita en el compose no cambia entre versiones.
+    compose up -d --no-deps --force-recreate nginx
     compose ps
     ;;
   worker)
@@ -111,6 +118,16 @@ case "$accion" in
     cargar_secretos
     fijar_imagenes
     compose run --rm migrate
+    ;;
+  sembrar)
+    # Cloud SQL solo es alcanzable desde las dos VM, así que el sembrador
+    # corre aquí. El escenario (ids y sesiones) queda en /opt/mooc/salida
+    # para copiarlo a la máquina del generador de carga:
+    #   deploy/gcp/remoto.sh web 'sudo cat /opt/mooc/salida/escenario.json' > load/salida/escenario.json
+    cargar_secretos
+    fijar_imagenes
+    mkdir -p /opt/mooc/salida
+    compose run --rm seed
     ;;
   estado)
     compose ps

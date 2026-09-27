@@ -21,10 +21,9 @@ accion="${1:?uso: certificado.sh <asegurar|autofirmado|letsencrypt|renovar>}"
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 CONFIG="${MOOC_CONFIG:-/opt/mooc/config/web.env}"
 [[ -f "$CONFIG" ]] || { echo "falta $CONFIG" >&2; exit 1; }
-set -a
-# shellcheck disable=SC1090
-source "$CONFIG"
-set +a
+# shellcheck source=deploy/gcp/env.sh
+source "$DIR/deploy/gcp/env.sh"
+cargar_env "$CONFIG"
 HOST="${TLS_HOST:?falta TLS_HOST en $CONFIG}"
 
 compose() { docker compose -f "$DIR/deploy/web/docker-compose.yml" --env-file "$CONFIG" "$@"; }
@@ -69,7 +68,11 @@ case "$accion" in
     # nginx tiene que estar sirviendo el reto por el puerto 80, y para
     # arrancar necesita algún certificado.
     hay_certificado || autofirmado
-    compose up -d nginx
+    # --no-deps: esto corre sin los secretos ni las imágenes del despliegue
+    # (los pone en-vm.sh), y si Compose revisara también la API la
+    # recrearía con DB_PASSWORD vacío y una imagen inexistente. nginx
+    # arranca sin la API porque la resuelve en cada petición.
+    compose up -d --no-deps nginx
     # Solo se retira el autofirmado; uno real existente lo gestiona certbot.
     en_certbot '[ -f /etc/letsencrypt/live/mooc/AUTOFIRMADO ] && rm -rf /etc/letsencrypt/live/mooc || true'
     correo=(--register-unsafely-without-email)

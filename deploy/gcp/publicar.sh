@@ -2,7 +2,7 @@
 # Construye las imágenes FUERA de las e2-small y las publica en Artifact
 # Registry con el commit como etiqueta.
 #
-#   deploy/gcp/publicar.sh              # api, migrate, worker y réplica de redis
+#   deploy/gcp/publicar.sh              # api, migrate, seed, worker y réplica de redis
 #   deploy/gcp/publicar.sh --frontend   # además el frontend existente
 #
 # Por qué no compilar en las VM: el builder de Go y la imagen del worker
@@ -22,7 +22,7 @@ for a in "$@"; do
   esac
 done
 
-cd "$RAIZ"
+cd "$RAIZ" || exit 1
 # Solo commits: una imagen de un árbol con cambios sin confirmar no se puede
 # reconstruir ni asociar al tag de la entrega.
 [[ -z "$(git status --porcelain)" ]] || morir "hay cambios sin confirmar; haz commit antes de publicar"
@@ -41,6 +41,7 @@ construir() {
 }
 construir api
 construir migrate
+construir seed
 construir worker
 
 if [[ "$frontend" == true ]]; then

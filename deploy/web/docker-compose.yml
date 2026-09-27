@@ -142,6 +142,26 @@ services:
     environment:
       DATABASE_URL: postgres://${DB_USER:?falta DB_USER}:${DB_PASSWORD:-}@${DB_HOST:?falta DB_HOST}:5432/${DB_NAME:?falta DB_NAME}?sslmode=require
 
+  # Datos sintéticos de las pruebas de carga: `en-vm.sh sembrar`. Corre aquí
+  # porque Cloud SQL solo es alcanzable desde las dos VM.
+  #
+  # El sembrador se niega a correr fuera de development/test/ci: crea cuentas
+  # con una contraseña pública y abre sus sesiones. Este entorno es de
+  # pruebas de la entrega, no de producción real, y se declara a conciencia
+  # con SEED_PERMITIR_ENTORNO=1 en lugar de disfrazar APP_ENV. Antes de dar
+  # la plataforma por pública habría que borrar esas cuentas.
+  seed:
+    image: ${IMAGEN_SEED:-sin-publicar/mooc-seed}
+    profiles: ["operacion"]
+    environment:
+      APP_ENV: production
+      SEED_PERMITIR_ENTORNO: "1"
+      DATABASE_URL: postgres://${DB_USER:?falta DB_USER}:${DB_PASSWORD:-}@${DB_HOST:?falta DB_HOST}:5432/${DB_NAME:?falta DB_NAME}?sslmode=require
+      SEED_STUDENTS: ${SEED_STUDENTS:-500}
+      SEED_OUT: /salida/escenario.json
+    volumes:
+      - /opt/mooc/salida:/salida
+
   # Emisión y renovación de certificados: deploy/web/certificado.sh.
   certbot:
     image: certbot/certbot:v2.11.0

@@ -106,6 +106,13 @@ Requisitos locales: `gcloud`, `terraform` >= 1.6, `docker` con buildx, `git`,
    deploy/gcp/desplegar-vm.sh web
    deploy/gcp/migrar.sh      # la API también migra al arrancar; esto da un código de salida
    ```
+   Datos sintéticos para las pruebas de carga. Cloud SQL solo es alcanzable
+   desde las VM, así que el sembrador corre en el Web Server, y el escenario
+   (ids y sesiones) se trae a la máquina del generador de carga:
+   ```bash
+   deploy/gcp/remoto.sh web 'sudo /opt/mooc/actual/deploy/gcp/en-vm.sh sembrar'
+   deploy/gcp/remoto.sh web 'sudo cat /opt/mooc/salida/escenario.json' > load/salida/escenario.json
+   ```
 8. **Certificado real** (sustituye al autofirmado provisional):
    ```bash
    deploy/gcp/remoto.sh web 'sudo /opt/mooc/actual/deploy/web/certificado.sh letsencrypt'
@@ -522,8 +529,9 @@ versiones del provider.
 
 - **No se ha probado contra un proyecto real.** La plantilla pasa
   `terraform validate` con los providers 7.46 y 8.4 y un `terraform test`
-  con proveedores simulados, y los scripts pasan `bash -n` y shellcheck,
-  pero nada de eso crea recursos.
+  con proveedores simulados (`terraform/tests/`, se corre con
+  `terraform test` dentro de `terraform/`), y los scripts pasan `bash -n` y
+  shellcheck, pero nada de eso crea recursos.
 - Puntos únicos de falla: cada VM, Redis (un solo contenedor, AOF en el disco
   del Worker), Cloud SQL zonal y la zona entera. Es lo que pide esta etapa.
 - Redis sin contraseña (el código no la soporta): lo protegen el firewall por

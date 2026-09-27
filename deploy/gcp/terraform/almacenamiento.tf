@@ -154,9 +154,11 @@ resource "google_storage_bucket_iam_member" "worker_hls" {
 
 # El agente de servicio de Cloud SQL escribe los exports y lee lo que se
 # importa. Sin esto `gcloud sql export sql` falla con 403.
+# Crear (export) y leer (import) bastan; objectAdmin le daría además borrar
+# respaldos y cambiar su acceso, que no necesita.
 resource "google_storage_bucket_iam_member" "sql_respaldos" {
-  count  = var.crear_bd ? 1 : 0
-  bucket = google_storage_bucket.respaldos.name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_sql_database_instance.bd[0].service_account_email_address}"
+  for_each = var.crear_bd ? toset(["roles/storage.objectCreator", "roles/storage.objectViewer"]) : toset([])
+  bucket   = google_storage_bucket.respaldos.name
+  role     = each.value
+  member   = "serviceAccount:${google_sql_database_instance.bd[0].service_account_email_address}"
 }
