@@ -9,7 +9,9 @@ y las imágenes en Artifact Registry.
 deploy/
 |-- gcp/
 |   |-- terraform/          VPC, firewall, NAT, VM, Cloud SQL, buckets, IAM, secretos, presupuesto
-|   |-- desplegar-infra.sh  habilita APIs, terraform apply, clave de insignias
+|   |-- bootstrap-ci.sh     (una vez, el dueño) bucket del estado, cuenta de CI, Workload Identity
+|   |-- desplegar-infra.sh  habilita APIs, terraform plan/apply, clave de insignias
+|   |-- escribir-tfvars.sh  (CI) terraform.tfvars desde las variables del repositorio
 |   |-- publicar.sh         construye y sube imágenes a Artifact Registry
 |   |-- generar-env.sh      deploy/web/.env y deploy/worker/.env desde las salidas
 |   |-- desplegar-vm.sh     copia deploy/ del commit por IAP y levanta el compose
@@ -17,12 +19,23 @@ deploy/
 |   |-- migrar.sh           migraciones contra Cloud SQL desde el Web Server
 |   |-- remoto.sh           ssh / comandos / túneles por IAP
 |   |-- energia.sh          detener e iniciar VM (y Cloud SQL)
+|   |-- resumen.sh          configuración efectiva en Markdown (evidencia del informe)
 |   |-- bd.sh               exportar, eliminar y recrear Cloud SQL
 |   `-- destruir.sh         respaldar y eliminar todo
 |-- web/                    compose del Web Server (nginx TLS, API, Mailpit, certbot)
 |-- worker/                 compose del Worker Server (Redis, worker)
 `-- nginx/web-tls.conf      proxy con TLS, 80 -> 443, X-Forwarded-* fijos
+
+.github/workflows/desplegar-gcp.yml    despliegue desde GitHub Actions (manual)
+.github/workflows/apagado-nocturno.yml apagado programado, opcional
+.github/actions/preparar-gcp/          autenticación federada, gcloud y Terraform
 ```
+
+Hay dos formas de operar, con los mismos scripts: desde GitHub Actions
+(recomendada: nadie necesita credenciales en su portátil, ver
+[Desplegar desde GitHub Actions](#desplegar-desde-github-actions)) o desde
+un portátil ([paso a paso](#paso-a-paso-desde-un-portátil)). Las dos
+comparten el estado de Terraform en un bucket.
 
 ## Arquitectura desplegada
 
@@ -64,7 +77,7 @@ el enunciado los excluye o no los pide en esta etapa.
              --GET sin firma (hls/*)--> bucket hls
 ```
 
-## Paso a paso
+## Paso a paso desde un portátil
 
 Requisitos locales: `gcloud`, `terraform` >= 1.6, `docker` con buildx, `git`,
 `openssl`. En Windows, desde WSL.
@@ -78,6 +91,14 @@ Requisitos locales: `gcloud`, `terraform` >= 1.6, `docker` con buildx, `git`,
    gcloud auth login
    gcloud auth application-default login   # Terraform usa estas credenciales
    gcloud config set project <proyecto>
+   ```
+   **Estado remoto** (una vez por proyecto): el estado de Terraform vive en
+   el bucket `<proyecto>-tfstate`, que crea `bootstrap-ci.sh` junto con lo
+   necesario para GitHub Actions (ver abajo). Quien solo quiera un estado
+   local, sin bucket, crea `terraform/backend_override.tf` (instrucciones en
+   `lib.sh`); no se debe mezclar con despliegues desde GitHub.
+   ```bash
+   deploy/gcp/bootstrap-ci.sh --proyecto <proyecto>
    ```
 3. **Variables.**
    ```bash
@@ -150,12 +171,251 @@ sudo docker run --rm -it postgres:16-alpine psql "host=<DB_HOST> user=mooc dbnam
 
 ### Permisos para el resto del equipo
 
-Además de lo que necesiten ver en la consola: `roles/iap.tunnelResourceAccessor`
+Desplegando desde GitHub Actions, el resto del equipo no necesita ningún
+permiso en GCP para desplegar: basta con permiso de escritura en el
+repositorio (y ser revisor del entorno `gcp` si se exige aprobación).
+
+Para entrar a las VM desde su portátil: `roles/iap.tunnelResourceAccessor`
 (túnel), `roles/compute.osAdminLogin` (entrar con sudo por OS Login) y
 `roles/iam.serviceAccountUser` sobre las dos cuentas de servicio de las VM
-(OS Login lo exige cuando la VM corre con una). Para desplegar,
-`roles/secretmanager.viewer` (generar-env.sh comprueba los secretos) y
-`roles/artifactregistry.writer`. El dueño del proyecto ya los tiene.
+(OS Login lo exige cuando la VM corre con una). Los scripts leen además las
+salidas del estado de Terraform, y el bucket del estado solo lo leen los
+dueños del proyecto y la cuenta de CI, porque contiene secretos en claro.
+Para desplegar desde un portátil hace falta, además, lo que tiene la cuenta
+de CI (lista en `bootstrap-ci.sh`); en la práctica, ser dueño del proyecto.
+
+## Desplegar desde GitHub Actions
+
+El workflow [`desplegar-gcp.yml`](../../.github/workflows/desplegar-gcp.yml)
+ejecuta los mismos scripts desde un runner de GitHub. Nadie necesita
+credenciales de GCP en su portátil ni hay llaves en el repositorio:
+
+```
+job de GitHub --token OIDC firmado por GitHub (repo, rama, entorno)--> STS de Google
+   |  (condición del proveedor: este repositorio, por nombre e ID, y entorno gcp o gcp-rutina)
+   v
+credenciales de 1 hora de mooc-deployer --> Terraform (estado en gs://<proyecto>-tfstate)
+                                        --> Artifact Registry (docker push)
+                                        --> IAP + OS Login --> Web / Worker (desplegar-vm.sh)
+```
+
+### Puesta en marcha (una vez)
+
+1. **Arranque en GCP.** El dueño del proyecto, desde Cloud Shell (ya trae
+   `gcloud`, `git` y `openssl`) o su máquina con `gcloud auth login`:
+   ```bash
+   git clone https://github.com/maarojasga/dvc_proyecto1 && cd dvc_proyecto1
+   deploy/gcp/bootstrap-ci.sh --proyecto desarrollo-soluciones-cloud \
+     --cuenta-facturacion XXXXXX-XXXXXX-XXXXXX   # opcional, para el presupuesto
+   ```
+   Confirmar antes el ID real del proyecto (`gcloud projects list`); el
+   nombre visible no sirve. El script es idempotente: repetirlo deja todo
+   como lo describe. Habilita las APIs, crea el bucket del estado, la cuenta
+   `mooc-deployer` con sus roles, el pool y el proveedor de Workload
+   Identity, y la clave de firma de insignias; al final imprime las
+   variables del paso 2 (y los `gh variable set` equivalentes).
+
+   Si el estado ya existía en un portátil, migrarlo ahora, antes de la
+   primera ejecución en GitHub (ver [Estado de Terraform y
+   secretos](#estado-de-terraform-y-secretos)).
+
+2. **Variables del repositorio** (Settings > Secrets and variables > Actions
+   > **Variables**, no Secrets: ninguna es secreta, y como variables se ven
+   en los registros, lo que ayuda a depurar):
+
+   | Variable | Obligatoria | Ejemplo | Para qué |
+   |---|---|---|---|
+   | `GCP_PROJECT_ID` | sí | `desarrollo-soluciones-cloud` | `project_id` |
+   | `GCP_WIF_PROVIDER` | sí | `projects/123.../providers/github` | autenticación |
+   | `GCP_DEPLOYER_SA` | sí | `mooc-deployer@<proyecto>.iam.gserviceaccount.com` | autenticación |
+   | `TF_STATE_BUCKET` | sí | `<proyecto>-tfstate` | backend de Terraform |
+   | `GCP_REGION`, `GCP_ZONE` | no | `us-central1`, `us-central1-a` | región y zona |
+   | `TLS_EMAIL` | recomendada | correo del equipo | avisos de Let's Encrypt |
+   | `CUENTA_FACTURACION` | no | `XXXXXX-XXXXXX-XXXXXX` | presupuesto (solo si el bootstrap pudo dar `billing.costsManager`) |
+   | `PRESUPUESTO_MONTO`, `PRESUPUESTO_MONEDA` | no | `50`, `USD` | presupuesto |
+   | `TIPO_MAQUINA`, `BD_TIER` | no | `e2-small`, `db-custom-1-3840` | configuración de la corrida |
+   | `HABILITAR_NAT`, `CREAR_BD` | no | `true` / `false` | NAT del Worker; `false` tras `bd.sh eliminar` |
+   | `DOMINIO_WEB` | no | vacío (sslip.io) | nombre del certificado |
+   | `WORKER_CONCURRENCY`, `AUTH_RATE_LIMIT_PER_MINUTE` | no | `2`, vacío | parámetros del experimento |
+   | `ADMIN_EMAIL` | no | correo | administrador inicial; quitarla tras el primer despliegue |
+   | `APAGADO_NOCTURNO` | no | `true` | apagado programado |
+
+   Con despliegues desde GitHub, **estas variables son la configuración**:
+   un `terraform.tfvars` distinto en un portátil haría que un apply local
+   deshiciera lo que aplicó CI, y al revés. Lo mismo `bd.auto.tfvars`, que
+   `bd.sh` escribe solo en el portátil: tras `bd.sh eliminar`, fijar
+   `CREAR_BD=false` aquí.
+
+3. **Entornos** (Settings > Environments > New environment): `gcp` y
+   `gcp-rutina`. El proveedor de Workload Identity solo acepta tokens de
+   trabajos que declaran uno de los dos: un trabajo sin entorno no recibe
+   credenciales. Si no se crean, GitHub los crea sin protección en la
+   primera ejecución.
+   - `gcp` (infra, publicar, desplegar, certificado, sembrar, encender,
+     apagar): **Deployment branches** limitado a `main` y, si el equipo lo
+     quiere, **Required reviewers**: el apply espera la aprobación después
+     de publicar el plan en el resumen de la ejecución.
+   - `gcp-rutina` (plan, estado, apagado nocturno): solo `main` en
+     Deployment branches y **sin** revisores, o el apagado nocturno se
+     quedaría esperando.
+
+   Las reglas de ramas del entorno son las que impiden que alguien con
+   permiso de escritura despliegue desde una rama propia con un workflow
+   modificado. Para exigirlo también en GCP, repetir el bootstrap con
+   `--solo-rama main`, que añade `assertion.ref == 'refs/heads/main'` a la
+   condición (a cambio, ya no se puede probar desde otra rama).
+
+4. **Llevar el workflow a `main`.** GitHub solo muestra el botón *Run
+   workflow* si el archivo está en la rama por defecto, y la API y `gh`
+   solo pueden lanzar en otra rama (`--ref`) un workflow que ya se ejecutó
+   alguna vez. Este solo se dispara a mano, así que la primera vez tiene
+   que estar en `main` (fusionar el PR). Después sí se puede ejecutar la
+   versión de otra rama, si las reglas del entorno la admiten:
+   ```bash
+   gh workflow run desplegar-gcp.yml --ref <rama> -f accion=plan
+   ```
+
+### Primera vez
+
+En Actions > *Desplegar en GCP* > *Run workflow*, o con `gh`, en este orden:
+
+| # | Acción | Qué hace | Tiempo aprox. |
+|---|---|---|---|
+| 1 | `plan` | Opcional: ver qué se va a crear, sin tocar nada | 2 min |
+| 2 | `infra` | Plan, aprobación (si `gcp` la exige) y apply de ese plan | 15-20 min (Cloud SQL) |
+| 3 | `publicar` | Construye api, migrate, seed y worker en el runner y las sube con el commit como etiqueta | 10-15 min la primera, menos con caché |
+| 4 | `desplegar` | `generar-env.sh`, Worker, Web y migraciones | 5-10 min |
+| 5 | `certificado` | Let's Encrypt en el Web Server (una vez) | 1 min |
+
+```bash
+gh workflow run desplegar-gcp.yml -f accion=infra
+gh run watch
+gh workflow run desplegar-gcp.yml -f accion=publicar
+gh workflow run desplegar-gcp.yml -f accion=desplegar
+gh workflow run desplegar-gcp.yml -f accion=certificado
+```
+
+`todo` encadena 2, 3 y 4 en una ejecución (con dos aprobaciones si `gcp`
+tiene revisores: la del apply y la del despliegue). Tras el paso 2 las VM
+tardan 3-5 minutos en instalar Docker; si `desplegar` llega antes, falla con
+"el arranque de la VM no terminó" y basta con repetirlo.
+
+Si el primer despliegue se hace con `ADMIN_EMAIL`, la contraseña está en
+Secret Manager (`mooc-admin-password`); después borrar la variable y volver a
+desplegar.
+
+### Operación
+
+- **Cambio de código:** `publicar` y `desplegar` (o `todo`, que además
+  planifica la infraestructura y no aplica nada si no hay cambios).
+- **Volver atrás:** `desplegar` con `tag` = un commit o un tag de git ya
+  publicado (p. ej. `entrega-2`). Se despliega `deploy/` de ese commit con sus
+  imágenes; si no se publicaron, el trabajo falla antes de tocar las VM.
+- **Cambio de infraestructura:** editar `terraform/` o las variables del
+  repositorio y `infra`. El plan queda en el resumen de la ejecución; si el
+  estado cambia entre el plan y la aprobación, el apply se rechaza por
+  obsoleto y hay que repetir.
+- **Datos sintéticos:** `sembrar`. El escenario (sesiones válidas de los
+  usuarios sintéticos) se queda en la VM, no se sube como artefacto; se trae
+  con `remoto.sh` (ver el resumen de la ejecución).
+- **Encender y apagar:** `encender` / `apagar` (`con_bd` incluye Cloud SQL).
+  Escriben en el resumen la hora de Colombia, la UTC y quién lo hizo: es la
+  bitácora de horas de uso para el informe de costos.
+- **Apagado nocturno:** con `APAGADO_NOCTURNO=true`,
+  [`apagado-nocturno.yml`](../../.github/workflows/apagado-nocturno.yml)
+  detiene VM y Cloud SQL a las 23:07 hora de Colombia (04:07 UTC). Comparte
+  grupo de concurrencia con los despliegues: si hay uno en curso, espera a
+  que termine. GitHub desactiva los programados de un repositorio público
+  tras 60 días sin actividad.
+- **Evidencia:** cada ejecución que despliega termina con
+  [`resumen.sh`](resumen.sh): URL, salud de la API (y si el certificado es
+  el autofirmado), commit desplegado en cada VM leído de la propia VM, tipo
+  de máquina y disco, tier, edición y estado de Cloud SQL,
+  `WORKER_CONCURRENCY` y el límite de autenticación efectivos. `estado` lo
+  da sin cambiar nada. En local: `deploy/gcp/resumen.sh`.
+- Lo que no tiene acción (`bd.sh`, `destruir.sh`, túneles a Mailpit, psql)
+  se sigue haciendo desde un portátil con permisos de dueño.
+
+### Qué ve cada quien
+
+Los registros y los resúmenes de un repositorio público los ve cualquiera.
+No llevan secretos:
+
+- Los `.env` que genera CI solo llevan nombres de secretos, IDs e IPs
+  privadas; los valores los lee cada VM de Secret Manager con su propia
+  cuenta de servicio (`en-vm.sh`) y no pasan por el runner.
+- `terraform plan` enmascara los valores sensibles (`(sensitive value)`); el
+  JSON del plan, que no los enmascara, solo se filtra con `jq` para listar
+  recursos y nunca se imprime ni se guarda. El plan binario va al bucket del
+  estado, no a un artefacto.
+- `generar-env.sh` comprueba que cada secreto tenga versión activa sin
+  leer su valor; `resumen.sh` solo lee dos parámetros no secretos de los
+  `.env` de las VM.
+- La clave de insignias se genera en `bootstrap-ci.sh` o `desplegar-infra.sh`
+  y va directa a Secret Manager desde un archivo temporal.
+
+### SSH desde CI
+
+`desplegar-vm.sh`, `migrar.sh` y `remoto.sh` entran por IAP con OS Login
+como `mooc-deployer` (usuario `sa_<id>`). `gcloud compute ssh` genera en el
+runner una llave efímera (`~/.ssh/google_compute_engine`, sin frase por
+`--quiet`) y registra la pública en el perfil de OS Login de la cuenta. La
+privada muere con el runner, pero la pública quedaría en el perfil; por eso
+`lib.sh` pasa `--ssh-key-expire-after 1h` cuando corre en GitHub Actions
+(gcloud la aplica también con OS Login; `MOOC_SSH_CADUCIDAD` la cambia) y el
+último paso de cada trabajo la retira con `gcloud compute os-login ssh-keys
+remove`. No hay llaves SSH en los secretos del repositorio ni en los
+metadatos de las VM.
+
+### Permisos de `mooc-deployer`
+
+Justificados uno a uno en `bootstrap-ci.sh`. Ni `roles/owner` ni
+`roles/editor`:
+
+| Rol | Por qué |
+|---|---|
+| `compute.instanceAdmin.v1` | VM y discos (`computo.tf`), detener y encender, `compute ssh` |
+| `compute.networkAdmin` | VPC, subredes, router, NAT, direcciones, rango y peering de PSA |
+| `compute.securityAdmin` | reglas de firewall (networkAdmin no las incluye) |
+| `servicenetworking.networksAdmin` | conexión de Private Service Access de Cloud SQL |
+| `cloudsql.admin` | instancia, base, usuario; detener, exportar, importar |
+| `storage.admin` | buckets, su IAM (incluido `allUsers` en `hls`), estado de Terraform |
+| `storage.hmacKeyAdmin` | claves HMAC de las cuentas de las VM |
+| `secretmanager.admin` | secretos, versiones e IAM por secreto; clave de insignias |
+| `artifactregistry.admin` | repositorio, limpieza, IAM y `docker push` |
+| `iam.serviceAccountAdmin` | crear y borrar `mooc-web` y `mooc-worker` |
+| `iam.serviceAccountUser` | crear VM con esas cuentas y entrar por OS Login (a nivel de proyecto: ver el comentario del script) |
+| `resourcemanager.projectIamAdmin` **con condición** | solo puede conceder o quitar `logging.logWriter` y `monitoring.metricWriter` (`identidades.tf`); sin la condición podría darse `owner` |
+| `serviceusage.serviceUsageConsumer` | `user_project_override` del provider; listar APIs. No puede habilitarlas: lo hace el bootstrap |
+| `iap.tunnelResourceAccessor` | túnel de IAP al puerto 22 |
+| `compute.osAdminLogin` | OS Login con sudo (`en-vm.sh` corre como root) |
+| `billing.costsManager` (en la cuenta de facturación, opcional) | presupuesto (`costos.tf`); solo si quien corre el bootstrap administra la cuenta |
+
+Más `storage.objectAdmin` sobre el bucket del estado y, para el pool,
+`iam.workloadIdentityUser` sobre la cuenta concedido al `principalSet` del
+repositorio. `serviceAccountAdmin` e `iam.serviceAccountUser` hacen de esta
+cuenta, en la práctica, capaz de actuar como cualquier cuenta de servicio
+del proyecto: es lo que cuesta que Terraform cree cuentas de servicio y VM.
+Lo que la limita es quién puede obtener sus credenciales (la condición del
+proveedor y las reglas de los entornos).
+
+### Alternativas descartadas
+
+- **Llave JSON de la cuenta de servicio en un secreto de GitHub:** no caduca,
+  hay que rotarla a mano y quien la filtre despliega desde cualquier lugar.
+  Con Workload Identity no hay nada que filtrar.
+- **Acceso directo del principal federado, sin cuenta de servicio:** OS
+  Login y la autorización de `actAs` para crear VM necesitan una cuenta de
+  servicio.
+- **Bootstrap en Terraform:** crea el bucket donde vive el estado; necesitaría
+  su propio estado en otro sitio. Ver la cabecera de `bootstrap-ci.sh`.
+- **Plan como artefacto de GitHub:** lleva los secretos del estado y el
+  repositorio es público.
+- **Construir con `docker/build-push-action`:** duplicaría en YAML la lista de
+  imágenes y etiquetas de `publicar.sh`; el script ya sirve igual en local y
+  en CI, y la caché `type=gha` se le da con `ghaction-github-runtime`.
+- **`gcloud builds submit` (Cloud Build):** otro servicio y otra cuenta de
+  servicio con permisos; el runner ya tiene Docker y basta.
 
 ## Migrar los datos de la entrega anterior
 
@@ -494,6 +754,12 @@ deploy/gcp/desplegar-vm.sh worker && deploy/gcp/desplegar-vm.sh web
 La importación va antes de desplegar la API: si arrancara contra la base
 vacía, migraría y la importación chocaría con las tablas creadas.
 
+`bd.sh` y `destruir.sh` se corren desde un portátil (dueño del proyecto),
+sobre el mismo estado remoto que usa GitHub Actions. Si el equipo despliega
+desde GitHub, tras `bd.sh eliminar` fijar la variable `CREAR_BD=false`, y tras
+`bd.sh recrear`, `CREAR_BD=true` (o borrarla) y la acción `desplegar`: la IP
+privada de la base cambió.
+
 Eliminación total (proyecto a cero salvo la clave de insignias):
 
 ```bash
@@ -510,11 +776,43 @@ recrear. Para reconstruir: pasos 4 a 8, `bd.sh recrear <export local>` y
 ## Estado de Terraform y secretos
 
 El estado de Terraform contiene **en claro** la contraseña de la base, la del
-administrador y los secretos HMAC, porque Terraform los genera. Por defecto es
-local (`deploy/gcp/terraform/terraform.tfstate`, ignorado por git). Para
-compartirlo en el equipo, un bucket propio con acceso restringido a sus
-integrantes y el backend `gcs` (instrucciones en `versions.tf`). Nunca
-subirlo al repositorio ni adjuntarlo a la entrega.
+administrador y los secretos HMAC, porque Terraform los genera. Vive en el
+bucket `gs://<proyecto>-tfstate/mooc/` (backend `gcs` con configuración
+parcial en `versions.tf`; `lib.sh` pasa el bucket al hacer `init`), que
+`bootstrap-ci.sh` crea con:
+
+- acceso uniforme y prevención de acceso público forzada;
+- versionado: un apply que deja el estado mal se deshace recuperando la
+  versión anterior (se conservan 30);
+- una política IAM fijada entera: dueños del proyecto y la cuenta de CI. Se
+  quitan los permisos que GCP da por defecto sobre cada bucket nuevo a los
+  lectores y editores del proyecto (`legacyObjectReader` a los lectores
+  bastaría para leer el estado). Un rol de proyecto con permisos de Storage
+  (`roles/editor`, `roles/storage.admin`) sigue alcanzando el bucket: no darlo
+  a quien no deba ver los secretos.
+
+Los planes guardados de CI (`planes/`) llevan los mismos secretos y por eso
+van a este bucket y no a un artefacto de GitHub, que en un repositorio
+público puede descargar cualquiera. Se borran al aplicarse, y a los 7 días si
+nadie los aplica.
+
+**Migrar un estado local existente** (un despliegue hecho antes de este
+cambio, con `terraform.tfstate` en `deploy/gcp/terraform/`), una sola vez y
+antes de cualquier despliegue desde GitHub:
+
+```bash
+deploy/gcp/bootstrap-ci.sh --proyecto <proyecto>      # crea el bucket
+deploy/gcp/desplegar-infra.sh --migrar-estado
+```
+
+Equivale a `terraform init -migrate-state -backend-config=bucket=<proyecto>-tfstate
+-backend-config=prefix=mooc`; además se niega a sobrescribir un estado remoto
+que ya exista y aparta el archivo local como `terraform.tfstate.migrado-<fecha>`
+(sigue ignorado por git; borrarlo cuando `terraform output` responda desde el
+bucket). Mientras exista un `terraform.tfstate` local sin migrar, los scripts
+se niegan a inicializar contra el bucket: aplicar sobre un estado remoto vacío
+intentaría crearlo todo otra vez. Nunca subir el estado al repositorio ni
+adjuntarlo a la entrega.
 
 Ningún secreto está en el repositorio, en los `.env` (solo nombres de
 secretos y el identificador de la clave HMAC, que sin su secreto no sirve),
@@ -523,10 +821,17 @@ solo en el entorno de los contenedores.
 
 `.terraform.lock.hcl` no está en el repositorio: se genera en el primer
 `terraform init`. Conviene confirmarlo tras ese primer `init` para fijar las
-versiones del provider.
+versiones del provider (con `terraform providers lock -platform=linux_amd64
+-platform=darwin_arm64` para que valga en CI y en los portátiles). Mientras no
+esté, el workflow lleva el lock del plan al apply para que ambos usen las
+mismas versiones.
 
 ## Limitaciones conocidas
 
+- **El despliegue desde GitHub Actions tampoco se ha ejecutado aún**: los
+  workflows pasan actionlint, los scripts shellcheck y `bootstrap-ci.sh` se
+  recorrió con un `gcloud` simulado, pero la federación, OS Login con la cuenta de servicio y la caché de
+  buildx se comprueban en la primera ejecución real.
 - **No se ha probado contra un proyecto real.** La plantilla pasa
   `terraform validate` con los providers 7.46 y 8.4 y un `terraform test`
   con proveedores simulados (`terraform/tests/`, se corre con
