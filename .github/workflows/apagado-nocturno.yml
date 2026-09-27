@@ -1,0 +1,77 @@
+# Apagado nocturno de las VM y de Cloud SQL, para no pagar horas que nadie
+# usa. Opcional: solo actúa si la variable del repositorio APAGADO_NOCTURNO
+# vale 'true'; sin ella el trabajo se salta y no consume nada.
+#
+# Detener no deja el costo en cero (discos, IP estática, almacenamiento y
+# backups de Cloud SQL, NAT si sigue habilitada): ver deploy/gcp/README.md,
+# "Costos". Para encender: acción `encender` de "Desplegar en GCP".
+#
+# GitHub solo ejecuta los programados desde la rama por defecto, y los
+# desactiva tras 60 días sin actividad en un repositorio público.
+
+name: Apagado nocturno
+
+on:
+  schedule:
+    # 23:07 en Colombia (UTC-5 todo el año, sin horario de verano) = 04:07
+    # UTC. No en punto: a esa hora GitHub acumula programados y los retrasa.
+    - cron: "7 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+# El mismo grupo que "Desplegar en GCP": si hay un despliegue en curso, el
+# apagado espera a que termine en lugar de detener la VM a medias.
+concurrency:
+  group: gcp-${{ github.repository }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_IN_AUTOMATION: "1"
+  CLOUDSDK_CORE_DISABLE_PROMPTS: "1"
+  TERRAFORM_VERSION: "1.16.4"
+
+jobs:
+  apagar:
+    name: Apagar VM y Cloud SQL
+    if: vars.APAGADO_NOCTURNO == 'true'
+    runs-on: ubuntu-latest
+    # gcp-rutina y no gcp: si el equipo exige aprobación en gcp, un apagado
+    # programado se quedaría esperando a un revisor a medianoche.
+    environment: gcp-rutina
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/preparar-gcp
+        with:
+          proyecto: ${{ vars.GCP_PROJECT_ID }}
+          proveedor: ${{ vars.GCP_WIF_PROVIDER }}
+          cuenta: ${{ vars.GCP_DEPLOYER_SA }}
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          terraform: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Apagar
+        run: |
+          source deploy/gcp/lib.sh
+          # Tras destruir.sh no queda nada que apagar: no es un error.
+          if [[ -z "$(salida proyecto)" ]]; then
+            echo "### Apagado nocturno: sin infraestructura desplegada" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          deploy/gcp/energia.sh detener --con-bd
+          {
+            echo "### Bitácora de uso"
+            echo
+            echo "| Acción | Cloud SQL | Hora de Colombia | UTC | Quién |"
+            echo "|---|---|---|---|---|"
+            echo "| apagado nocturno | incluida | $(TZ=America/Bogota date '+%Y-%m-%d %H:%M') | $(date -u '+%Y-%m-%d %H:%M') | $GITHUB_EVENT_NAME |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          deploy/gcp/energia.sh estado
