@@ -1,0 +1,98 @@
+# Worker Server (GCE e2-small, subred privada sin IP externa): workers asynq
+# y Redis.
+#
+#   sudo /opt/mooc/actual/deploy/gcp/en-vm.sh worker
+#
+# Presupuesto de memoria (2 GB, ~1,6 disponibles tras el sistema, Docker y
+# el Ops Agent): redis 256 MiB, worker 1280 MiB. El worker es el que importa:
+# cada trabajo concurrente puede ser un FFmpeg (transcodificación a varias
+# rendiciones) o un LibreOffice con su JVM, y ambos pasan con facilidad de
+# 300-500 MiB. Con WORKER_CONCURRENCY=5, el valor local, bastan dos vídeos
+# 1080p simultáneos para que el kernel mate procesos a mitad de trabajo. Por
+# eso en GCP va a 2 (ver .env.example) y el límite de memoria del contenedor
+# hace que, si aun así se desborda, el que caiga sea el worker —asynq
+# reintenta el trabajo— y no Redis con la cola dentro.
+
+name: mooc-worker
+
+x-registro: &registro
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  redis:
+    <<: *registro
+    # Réplica en Artifact Registry (publicar.sh): el Worker la baja por
+    # Private Google Access, sin depender de Docker Hub ni de Cloud NAT.
+    image: ${IMAGEN_REDIS:-redis:7.4-alpine}
+    restart: unless-stopped
+    mem_limit: 256m
+    # Sin contraseña: la API y el worker leen solo REDIS_ADDR (host:puerto) y
+    # construyen el cliente sin credenciales (asynq.RedisClientOpt{Addr} y
+    # redis.Options{Addr}). Añadir requirepass exige cambiar ese código, fuera
+    # del alcance de esta entrega. El control de acceso es de red: el puerto
+    # se publica solo en la IP interna de la VM y el firewall de la VPC admite
+    # 6379 únicamente desde la cuenta de servicio del Web Server.
+    #
+    # appendonly: la cola vive aquí, y sin persistencia un reinicio de la
+    # máquina perdería los trabajos aceptados que aún no se procesaron.
+    # noeviction: asynq guarda trabajos, no caché; que Redis expulse claves
+    # bajo presión de memoria corrompería la cola en silencio. Mejor que
+    # rechace escrituras y el error se vea en la API.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 192mb
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "${REDIS_BIND_IP:?falta REDIS_BIND_IP (IP interna de esta VM)}:6379:6379"
+    volumes:
+      - redis_datos:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    <<: *registro
+    # De Artifact Registry (deploy/gcp/publicar.sh); ver deploy/web.
+    image: ${IMAGEN_WORKER:-sin-publicar/mooc-worker}
+    restart: unless-stopped
+    mem_limit: 1280m
+    # FFmpeg y LibreOffice escriben temporales grandes; en /tmp del
+    # contenedor (disco de la VM), no en tmpfs, que restaría de la RAM.
+    environment:
+      APP_ENV: production
+      # Cloud SQL por IP privada, con TLS; ver deploy/web.
+      DATABASE_URL: postgres://${DB_USER:?falta DB_USER}:${DB_PASSWORD:-}@${DB_HOST:?falta DB_HOST}:5432/${DB_NAME:?falta DB_NAME}?sslmode=require
+      # Con WORKER_CONCURRENCY=2 el worker no necesita las 20 conexiones del
+      # pool por defecto; bajarlo deja sitio en el max_connections de Cloud
+      # SQL para la API.
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-5}
+      # Por la red del compose, no por la IP publicada: no sale de la máquina.
+      REDIS_ADDR: redis:6379
+      # Cloud Storage por la API XML y Private Google Access; ver deploy/web.
+      S3_ENDPOINT: storage.googleapis.com
+      S3_REGION: auto
+      S3_BUCKET: ${S3_BUCKET:?falta S3_BUCKET}
+      S3_BUCKET_HLS: ${S3_BUCKET_HLS:?falta S3_BUCKET_HLS}
+      # Clave HMAC de la cuenta de servicio del Worker, distinta de la de la
+      # API: solo lee originales y escribe presentaciones/ y el bucket HLS.
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?falta S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      S3_USE_SSL: "true"
+      S3_CREATE_BUCKET: "false"
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis_datos:

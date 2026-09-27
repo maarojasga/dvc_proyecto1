@@ -1,0 +1,11 @@
+# Hallazgos de gitleaks revisados y descartados, por huella.
+#
+# Se enumeran uno a uno en vez de desactivar la regla que los produce: una
+# regla apagada deja de mirar para siempre, y estas huellas solo cubren la
+# línea concreta que ya se revisó. Si el archivo cambia, la huella deja de
+# coincidir y el hallazgo vuelve a aparecer, que es justo lo que se quiere.
+
+# "Clave-Equivocada-1" en la prueba que verifica que no se pueden enumerar
+# cuentas: es la contraseña INCORRECTA que se manda a propósito para comprobar
+# que la respuesta es idéntica a la de un correo inexistente. No abre nada.
+e664670093ae541cdb92512b7ad95bd75b1e9b46:backend/internal/platform/httpserver/identidad_test.go:generic-api-key:163

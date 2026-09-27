@@ -5,6 +5,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,8 +22,58 @@ func NewService(users *postgres.UserRepo) *Service {
 	return &Service{users: users}
 }
 
+// ErrNoEsProfesor lo produce buscar por correo a alguien que no puede
+// escribir cursos.
+var ErrNoEsProfesor = errors.New("admin: la cuenta no existe o no es de profesor")
+
+// BuscarProfesorPorCorreo resuelve una cuenta de profesor activa.
+//
+// Devuelve el mismo error cuando el correo no existe, cuando no es de profesor
+// y cuando la cuenta no está activa. Distinguirlos convertiría este endpoint en
+// una forma de averiguar qué correos hay registrados, que es lo mismo que el
+// registro y la recuperación se cuidan de no revelar.
+func (s *Service) BuscarProfesorPorCorreo(ctx context.Context, correo string) (*user.User, error) {
+	u, err := s.users.GetByEmail(ctx, correo)
+	if err != nil {
+		return nil, ErrNoEsProfesor
+	}
+	if u.Role != user.RoleTeacher || u.Status != user.StatusActive {
+		return nil, ErrNoEsProfesor
+	}
+	return u, nil
+}
+
 func (s *Service) ListUsers(ctx context.Context, f postgres.ListUsersFilter) ([]*user.User, error) {
 	return s.users.List(ctx, f)
+}
+
+// ListAudit consulta la bitácora inmutable.
+func (s *Service) ListAudit(ctx context.Context, f postgres.ListAuditFilter) ([]*postgres.AuditRecord, error) {
+	return s.users.ListAudit(ctx, f)
+}
+
+// ListUserSessions muestra las sesiones activas de una cuenta, para que la
+// administración pueda ver desde dónde está abierta antes de cerrarla.
+func (s *Service) ListUserSessions(ctx context.Context, targetID uuid.UUID) ([]*user.Session, error) {
+	if _, err := s.users.GetByID(ctx, targetID); err != nil {
+		return nil, err
+	}
+	return s.users.ListActiveSessions(ctx, targetID, time.Now().UTC())
+}
+
+// RevokeUserSessions cierra todas las sesiones de una cuenta sin cambiar su
+// estado. Es la expulsión inmediata que se necesita ante un acceso
+// comprometido, sin llegar a suspender la cuenta.
+func (s *Service) RevokeUserSessions(ctx context.Context, actor *user.User, targetID uuid.UUID) error {
+	target, err := s.users.GetByID(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if err := s.users.RevokeAllSessionsForUser(ctx, target.ID, now); err != nil {
+		return err
+	}
+	return s.audit(ctx, actor, "user.sessions_revoked", target.ID, nil)
 }
 
 // UpdateRole cambia el rol de un usuario, rechazando la operación si dejaría

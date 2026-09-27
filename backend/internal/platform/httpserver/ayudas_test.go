@@ -5,17 +5,16 @@ import (
 	"strings"
 )
 
-// bytesContiene informa si el texto contiene la subcadena, evitando el caso
-// degenerado de buscar una cadena vacia.
-func bytesContiene(texto, subcadena string) bool {
+// contiene evita el caso degenerado de buscar una subcadena vacía.
+func contiene(texto, subcadena string) bool {
 	return subcadena != "" && strings.Contains(texto, subcadena)
 }
 
-// parsearCookies interpreta las cabeceras Set-Cookie de una respuesta.
-func parsearCookies(cabeceras []string) []*http.Cookie {
-	encabezado := http.Header{}
+// cookiesDe interpreta las cabeceras Set-Cookie de una respuesta.
+func cookiesDe(cabeceras []string) []*http.Cookie {
+	h := http.Header{}
 	for _, c := range cabeceras {
-		encabezado.Add("Set-Cookie", c)
+		h.Add("Set-Cookie", c)
 	}
-	return (&http.Response{Header: encabezado}).Cookies()
+	return (&http.Response{Header: h}).Cookies()
 }

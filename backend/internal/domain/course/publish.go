@@ -37,11 +37,11 @@ func (v *Version) Unpublish(now time.Time) error {
 // progreso de los estudiantes ya inscritos.
 func NewDraft(courseID uuid.UUID, previousVersionNumber int, now time.Time) *Version {
 	return &Version{
-		ID:            uuid.New(),
-		CourseID:      courseID,
-		VersionNumber: previousVersionNumber + 1,
-		Status:        VersionDraft,
-		Language:      "es",
+		ID:                           uuid.New(),
+		CourseID:                     courseID,
+		VersionNumber:                previousVersionNumber + 1,
+		Status:                       VersionDraft,
+		Language:                     "es",
 		ApprovalMinScore:             60,
 		ApprovalRequiredResourcesPct: 100,
 		CreatedAt:                    now,

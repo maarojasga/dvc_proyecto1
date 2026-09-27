@@ -1,0 +1,438 @@
+# Despliegue en GCP desde el repositorio.
+#
+# Los trabajos llaman a los mismos scripts de deploy/gcp que se usan desde un
+# portátil; lo que cambia es la identidad. En lugar de la sesión de gcloud de
+# un integrante, cada trabajo cambia su token OIDC de GitHub por credenciales
+# de corta duración de la cuenta de servicio mooc-deployer (Workload Identity
+# Federation). No hay llaves JSON en los secretos del repositorio. La puesta
+# en marcha (bootstrap-ci.sh, variables, entornos) está en
+# deploy/gcp/README.md, "Desplegar desde GitHub Actions".
+#
+# Acciones:
+#   plan         terraform plan, sin aplicar (queda en el resumen)
+#   infra        plan y, tras la aprobación del entorno gcp, apply de ESE plan
+#   publicar     construye las imágenes en el runner y las sube, etiquetadas con el commit
+#   desplegar    genera los .env, despliega Worker y Web y migra
+#   todo         infra + publicar + desplegar
+#   certificado  Let's Encrypt en el Web Server (una vez, tras el primer despliegue)
+#   sembrar      datos sintéticos de las pruebas de carga
+#   encender     VM (y Cloud SQL con con_bd)
+#   apagar       ídem
+#   estado       configuración efectiva, sin cambiar nada
+
+name: Desplegar en GCP
+
+on:
+  workflow_dispatch:
+    inputs:
+      accion:
+        description: Qué hacer
+        type: choice
+        required: true
+        default: plan
+        options:
+          - plan
+          - infra
+          - publicar
+          - desplegar
+          - todo
+          - certificado
+          - sembrar
+          - encender
+          - apagar
+          - estado
+      tag:
+        description: "Solo desplegar: commit o tag de git ya publicado (vuelta atrás). Vacío: el commit de esta ejecución"
+        type: string
+        required: false
+        default: ""
+      con_bd:
+        description: "Solo encender/apagar: incluir Cloud SQL"
+        type: boolean
+        required: false
+        default: true
+
+# id-token para pedir el token OIDC que se cambia por credenciales de GCP.
+# Nada más: el despliegue no escribe en el repositorio.
+permissions:
+  contents: read
+  id-token: write
+
+# Un despliegue a la vez: dos applies simultáneos se pelearían por el
+# bloqueo del estado. El que llega espera en lugar de cancelar al que corre;
+# GitHub solo guarda una ejecución pendiente por grupo, así que si llega una
+# tercera, la pendiente anterior se cancela (se relanza a mano).
+#
+# El grupo NO se comparte con el apagado nocturno: por esa misma regla, un
+# apagado en espera se perdería al llegar un despliegue. El apagado espera
+# por su cuenta a que termine el despliegue en curso (apagado-nocturno.yml).
+concurrency:
+  group: gcp-despliegue-${{ github.repository }}
+  cancel-in-progress: false
+
+# `shell: bash` explícito para que los run lleven -o pipefail: el valor por
+# defecto de GitHub (bash -e) no lo pone y un fallo a la izquierda de una
+# tubería pasaría inadvertido.
+defaults:
+  run:
+    shell: bash
+
+env:
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_IN_AUTOMATION: "1"
+  CLOUDSDK_CORE_DISABLE_PROMPTS: "1"
+  # Exacta: un plan guardado solo se puede aplicar con la misma versión.
+  TERRAFORM_VERSION: "1.16.4"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Plan. En el entorno gcp-rutina, sin aprobación: no cambia nada y es lo
+  # que el revisor mira antes de aprobar el apply.
+  # -------------------------------------------------------------------------
+  plan:
+    name: Plan de Terraform
+    if: contains(fromJSON('["plan","infra","todo"]'), inputs.accion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gcp-rutina
+    outputs:
+      cambios: ${{ steps.plan.outputs.cambios }}
+      objeto: ${{ steps.plan.outputs.objeto }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/preparar-gcp
+        with:
+          proyecto: ${{ vars.GCP_PROJECT_ID }}
+          proveedor: ${{ vars.GCP_WIF_PROVIDER }}
+          cuenta: ${{ vars.GCP_DEPLOYER_SA }}
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          terraform: ${{ env.TERRAFORM_VERSION }}
+          cuenta_facturacion: ${{ vars.CUENTA_FACTURACION }}
+
+      - name: Variables de Terraform
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ vars.GCP_REGION }}
+          GCP_ZONE: ${{ vars.GCP_ZONE }}
+          TIPO_MAQUINA: ${{ vars.TIPO_MAQUINA }}
+          BD_TIER: ${{ vars.BD_TIER }}
+          HABILITAR_NAT: ${{ vars.HABILITAR_NAT }}
+          CREAR_BD: ${{ vars.CREAR_BD }}
+          DOMINIO_WEB: ${{ vars.DOMINIO_WEB }}
+          CUENTA_FACTURACION: ${{ vars.CUENTA_FACTURACION }}
+          PRESUPUESTO_MONTO: ${{ vars.PRESUPUESTO_MONTO }}
+          PRESUPUESTO_MONEDA: ${{ vars.PRESUPUESTO_MONEDA }}
+        run: deploy/gcp/escribir-tfvars.sh
+
+      - name: Planificar
+        id: plan
+        env:
+          CUENTA_FACTURACION: ${{ vars.CUENTA_FACTURACION }}
+        run: |
+          plan="$RUNNER_TEMP/infra.tfplan"
+          rc=0
+          deploy/gcp/desplegar-infra.sh --plan "$plan" || rc=$?
+          [[ $rc -eq 0 || $rc -eq 2 ]] || exit "$rc"
+
+          tf() { terraform -chdir=deploy/gcp/terraform "$@"; }
+          {
+            echo "### Plan de Terraform"
+            echo
+            if [[ $rc -eq 2 ]]; then
+              echo "Recursos que cambian:"
+              echo
+              echo '```'
+              # `show -json` lleva los valores sensibles EN CLARO (contraseña de
+              # la base, secretos HMAC): va directo a jq, que solo extrae la
+              # acción y la dirección de cada recurso, y nunca a un archivo ni
+              # al registro.
+              tf show -json "$plan" | jq -r '.resource_changes[] | select(.change.actions != ["no-op"]) | "\(.change.actions | join("/"))\t\(.address)"'
+              echo '```'
+            else
+              echo "Sin cambios: la infraestructura coincide con el código."
+            fi
+            # El texto sí enmascara los sensibles ("(sensitive value)").
+            tf show -no-color "$plan" > "$RUNNER_TEMP/plan.txt"
+            # add-mask cubre el registro; el resumen se limpia aparte.
+            if [[ -n "$CUENTA_FACTURACION" ]]; then
+              sed -i "s/$CUENTA_FACTURACION/(cuenta de facturación)/g" "$RUNNER_TEMP/plan.txt"
+            fi
+            echo
+            echo "<details><summary>Plan completo</summary>"
+            echo
+            echo '```'
+            head -c 60000 "$RUNNER_TEMP/plan.txt"
+            echo
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ $rc -eq 2 ]]; then
+            # El plan guardado lleva los mismos secretos que el estado: va al
+            # bucket del estado (acceso restringido), no a un artefacto de
+            # GitHub, que en un repositorio público descarga cualquiera. El
+            # lock de providers viaja con él: el apply tiene que usar las
+            # mismas versiones.
+            objeto="gs://$TF_STATE_BUCKET/planes/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            gcloud storage cp "$plan" deploy/gcp/terraform/.terraform.lock.hcl "$objeto/"
+            echo "cambios=true" >> "$GITHUB_OUTPUT"
+            echo "objeto=$objeto" >> "$GITHUB_OUTPUT"
+          else
+            echo "cambios=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # -------------------------------------------------------------------------
+  # Apply del plan guardado. Entorno gcp: si el equipo exige revisores, aquí
+  # espera la aprobación. Si el estado cambió desde el plan, Terraform lo
+  # rechaza por obsoleto y hay que volver a planificar.
+  # -------------------------------------------------------------------------
+  infra:
+    name: Aplicar la infraestructura
+    needs: plan
+    if: contains(fromJSON('["infra","todo"]'), inputs.accion) && needs.plan.outputs.cambios == 'true'
+    runs-on: ubuntu-latest
+    # Cloud SQL tarda 10-15 minutos en crearse, más la espera de aprobación
+    # (que no cuenta: el trabajo no empieza hasta que se aprueba).
+    timeout-minutes: 60
+    environment: gcp
+    env:
+      OBJETO: ${{ needs.plan.outputs.objeto }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/preparar-gcp
+        with:
+          proyecto: ${{ vars.GCP_PROJECT_ID }}
+          proveedor: ${{ vars.GCP_WIF_PROVIDER }}
+          cuenta: ${{ vars.GCP_DEPLOYER_SA }}
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          terraform: ${{ env.TERRAFORM_VERSION }}
+          cuenta_facturacion: ${{ vars.CUENTA_FACTURACION }}
+
+      - name: Aplicar el plan revisado
+        run: |
+          gcloud storage cp "$OBJETO/infra.tfplan" "$RUNNER_TEMP/infra.tfplan"
+          gcloud storage cp "$OBJETO/.terraform.lock.hcl" deploy/gcp/terraform/.terraform.lock.hcl
+          deploy/gcp/desplegar-infra.sh --aplicar "$RUNNER_TEMP/infra.tfplan"
+
+      - name: Borrar el plan guardado
+        if: always()
+        run: gcloud storage rm --recursive "$OBJETO" || true
+
+      - name: Resumen
+        if: success()
+        run: deploy/gcp/resumen.sh >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retirar la llave SSH de OS Login
+        if: always()
+        run: |
+          # Caduca sola en una hora (lib.sh); esto la quita ya.
+          f=~/.ssh/google_compute_engine.pub
+          [[ ! -f $f ]] || gcloud compute os-login ssh-keys remove --key-file "$f" || true
+
+  # -------------------------------------------------------------------------
+  # Imágenes y despliegue en las VM. Un solo trabajo para que `todo` pida
+  # una aprobación y no dos, y para desplegar exactamente lo que se acaba
+  # de publicar.
+  # -------------------------------------------------------------------------
+  aplicacion:
+    name: Publicar y desplegar
+    needs: [plan, infra]
+    # Corre también cuando plan o infra se saltaron (acción publicar o
+    # desplegar, o plan sin cambios), pero no si alguno falló.
+    if: ${{ !cancelled() && !failure() && contains(fromJSON('["publicar","desplegar","todo"]'), inputs.accion) }}
+    runs-on: ubuntu-latest
+    # La imagen del worker (LibreOffice, JRE, FFmpeg) tarda sin caché.
+    timeout-minutes: 90
+    environment:
+      name: gcp
+      url: ${{ steps.resumen.outputs.url }}
+    env:
+      ACCION: ${{ inputs.accion }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Todo el historial: desplegar un commit o un tag anterior, y
+          # desplegar-vm.sh empaqueta deploy/ de ese commit con git archive.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/preparar-gcp
+        with:
+          proyecto: ${{ vars.GCP_PROJECT_ID }}
+          proveedor: ${{ vars.GCP_WIF_PROVIDER }}
+          cuenta: ${{ vars.GCP_DEPLOYER_SA }}
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          terraform: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Elegir la versión
+        env:
+          TAG_ENTRADA: ${{ inputs.tag }}
+        run: |
+          # Las imágenes se etiquetan con los 12 primeros caracteres del
+          # commit. Se publica siempre el commit de esta ejecución; desplegar
+          # admite otro ya publicado (un SHA o un tag como entrega-2).
+          commit="$GITHUB_SHA"
+          if [[ "$ACCION" == desplegar && -n "$TAG_ENTRADA" ]]; then
+            commit="$(git rev-parse --verify --quiet "$TAG_ENTRADA^{commit}")" \
+              || { echo "::error::'$TAG_ENTRADA' no es un commit ni un tag de este repositorio"; exit 1; }
+          fi
+          echo "MOOC_TAG=${commit:0:12}" >> "$GITHUB_ENV"
+
+      # Las imágenes se construyen aquí, fuera de las VM (en 2 GB el builder
+      # de Go y la imagen del worker no caben), con caché de capas de GitHub.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: env.ACCION != 'desplegar'
+
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+        if: env.ACCION != 'desplegar'
+
+      - name: Publicar las imágenes
+        if: env.ACCION != 'desplegar'
+        run: |
+          deploy/gcp/publicar.sh
+          {
+            echo "### Imágenes publicadas"
+            echo
+            echo "\`$(terraform -chdir=deploy/gcp/terraform output -raw registro)/{mooc-api,mooc-migrate,mooc-seed,mooc-worker}:$MOOC_TAG\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Los .env solo llevan nombres de secretos, IDs e IPs privadas; los
+      # valores los lee cada VM de Secret Manager al arrancar los contenedores.
+      - name: Generar la configuración de las VM
+        if: env.ACCION != 'publicar'
+        env:
+          TLS_EMAIL: ${{ vars.TLS_EMAIL }}
+          ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}
+          WORKER_CONCURRENCY: ${{ vars.WORKER_CONCURRENCY }}
+          AUTH_RATE_LIMIT_PER_MINUTE: ${{ vars.AUTH_RATE_LIMIT_PER_MINUTE }}
+        run: deploy/gcp/generar-env.sh -f
+
+      # Primero el Worker: la API conecta con Redis al arrancar.
+      - name: Desplegar el Worker Server
+        if: env.ACCION != 'publicar'
+        run: deploy/gcp/desplegar-vm.sh worker "$MOOC_TAG"
+
+      - name: Desplegar el Web Server
+        if: env.ACCION != 'publicar'
+        run: deploy/gcp/desplegar-vm.sh web "$MOOC_TAG"
+
+      - name: Migrar la base
+        if: env.ACCION != 'publicar'
+        run: deploy/gcp/migrar.sh
+
+      - name: Resumen
+        id: resumen
+        if: ${{ !cancelled() }}
+        run: |
+          # Enlace del entorno en la página de la ejecución.
+          echo "url=$(terraform -chdir=deploy/gcp/terraform output -raw url_publica 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          if [[ "$ACCION" != publicar ]]; then
+            deploy/gcp/resumen.sh >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Retirar la llave SSH de OS Login
+        if: always()
+        run: |
+          f=~/.ssh/google_compute_engine.pub
+          [[ ! -f $f ]] || gcloud compute os-login ssh-keys remove --key-file "$f" || true
+
+  # -------------------------------------------------------------------------
+  # Operación sobre lo ya desplegado.
+  # -------------------------------------------------------------------------
+  operar:
+    name: Operar (${{ inputs.accion }})
+    if: contains(fromJSON('["certificado","sembrar","encender","apagar"]'), inputs.accion)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: gcp
+    env:
+      ACCION: ${{ inputs.accion }}
+      CON_BD: ${{ inputs.con_bd }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/preparar-gcp
+        with:
+          proyecto: ${{ vars.GCP_PROJECT_ID }}
+          proveedor: ${{ vars.GCP_WIF_PROVIDER }}
+          cuenta: ${{ vars.GCP_DEPLOYER_SA }}
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          terraform: ${{ env.TERRAFORM_VERSION }}
+
+      # Let's Encrypt limita las emisiones por nombre (5 por semana): se
+      # pide una vez, no en cada despliegue. certbot renueva después.
+      - name: Certificado de Let's Encrypt
+        if: env.ACCION == 'certificado'
+        run: deploy/gcp/remoto.sh web 'sudo /opt/mooc/actual/deploy/web/certificado.sh letsencrypt'
+
+      - name: Sembrar los datos sintéticos
+        if: env.ACCION == 'sembrar'
+        run: |
+          deploy/gcp/remoto.sh web 'sudo /opt/mooc/actual/deploy/gcp/en-vm.sh sembrar'
+          # El escenario lleva sesiones válidas de los usuarios sintéticos: no
+          # se sube como artefacto (el repositorio es público).
+          {
+            echo "### Datos sintéticos"
+            echo
+            echo "Escenario en el Web Server, \`/opt/mooc/salida/escenario.json\`. Copiarlo a la máquina del generador de carga con:"
+            echo
+            echo "\`deploy/gcp/remoto.sh web 'sudo cat /opt/mooc/salida/escenario.json' > load/salida/escenario.json\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Encender o apagar
+        if: env.ACCION == 'encender' || env.ACCION == 'apagar'
+        run: |
+          opciones=()
+          [[ "$CON_BD" != true ]] || opciones=(--con-bd)
+          if [[ "$ACCION" == encender ]]; then orden=iniciar; else orden=detener; fi
+          deploy/gcp/energia.sh "$orden" "${opciones[@]}"
+          # Para la bitácora de horas de uso que pide la gestión de costos.
+          {
+            echo "### Bitácora de uso"
+            echo
+            echo "| Acción | Cloud SQL | Hora de Colombia | UTC | Quién |"
+            echo "|---|---|---|---|---|"
+            echo "| $ACCION | $([[ "$CON_BD" == true ]] && echo incluida || echo no) | $(TZ=America/Bogota date '+%Y-%m-%d %H:%M') | $(date -u '+%Y-%m-%d %H:%M') | $GITHUB_ACTOR |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resumen
+        if: ${{ !cancelled() }}
+        run: deploy/gcp/resumen.sh >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retirar la llave SSH de OS Login
+        if: always()
+        run: |
+          f=~/.ssh/google_compute_engine.pub
+          [[ ! -f $f ]] || gcloud compute os-login ssh-keys remove --key-file "$f" || true
+
+  estado:
+    name: Estado
+    if: inputs.accion == 'estado'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: gcp-rutina
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: ./.github/actions/preparar-gcp
+        with:
+          proyecto: ${{ vars.GCP_PROJECT_ID }}
+          proveedor: ${{ vars.GCP_WIF_PROVIDER }}
+          cuenta: ${{ vars.GCP_DEPLOYER_SA }}
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          terraform: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Resumen
+        run: |
+          deploy/gcp/energia.sh estado
+          deploy/gcp/resumen.sh >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retirar la llave SSH de OS Login
+        if: always()
+        run: |
+          f=~/.ssh/google_compute_engine.pub
+          [[ ! -f $f ]] || gcloud compute os-login ssh-keys remove --key-file "$f" || true

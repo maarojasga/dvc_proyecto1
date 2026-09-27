@@ -1,0 +1,105 @@
+# Apagado nocturno de las VM y de Cloud SQL, para no pagar horas que nadie
+# usa. Opcional: solo actúa si la variable del repositorio APAGADO_NOCTURNO
+# vale 'true'; sin ella el trabajo se salta y no consume nada.
+#
+# Detener no deja el costo en cero (discos, IP estática, almacenamiento y
+# backups de Cloud SQL, NAT si sigue habilitada): ver deploy/gcp/README.md,
+# "Costos". Para encender: acción `encender` de "Desplegar en GCP".
+#
+# GitHub solo ejecuta los programados desde la rama por defecto, y los
+# desactiva tras 60 días sin actividad en un repositorio público.
+
+name: Apagado nocturno
+
+on:
+  schedule:
+    # 23:07 en Colombia (UTC-5 todo el año, sin horario de verano) = 04:07
+    # UTC. No en punto: a esa hora GitHub acumula programados y los retrasa.
+    - cron: "7 4 * * *"
+  workflow_dispatch:
+
+# actions: read para consultar si hay un despliegue en curso.
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+# Grupo propio y no el de "Desplegar en GCP": GitHub guarda una sola
+# ejecución pendiente por grupo y cancela la anterior cuando llega otra, así
+# que un apagado en espera detrás de un despliegue se perdería si alguien
+# lanza otro. En su lugar, el primer paso espera a que no haya despliegues
+# en curso.
+concurrency:
+  group: gcp-apagado-${{ github.repository }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_IN_AUTOMATION: "1"
+  CLOUDSDK_CORE_DISABLE_PROMPTS: "1"
+  TERRAFORM_VERSION: "1.16.4"
+
+jobs:
+  apagar:
+    name: Apagar VM y Cloud SQL
+    if: vars.APAGADO_NOCTURNO == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # gcp-rutina y no gcp: si el equipo exige aprobación en gcp, un apagado
+    # programado se quedaría esperando a un revisor a medianoche.
+    environment: gcp-rutina
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Detener la VM a mitad de un despliegue la dejaría a medias. Se espera
+      # hasta 40 minutos a que termine el que esté corriendo; si sigue, el
+      # apagado de esta noche se omite (mejor una noche encendida que un
+      # despliegue roto) y el trabajo falla para que se note. Un despliegue
+      # que espera aprobación ("waiting") no cuenta: no toca nada hasta que
+      # se aprueba, y podría esperar horas. Si se aprueba justo durante el
+      # apagado, el despliegue fallará al no encontrar la VM encendida y
+      # basta con repetirlo.
+      - name: Esperar a que no haya un despliegue en curso
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 40); do
+            activos="$(gh run list -R "$GITHUB_REPOSITORY" --workflow desplegar-gcp.yml \
+                         --limit 20 --json status --jq '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending" or .status == "requested")] | length')"
+            [[ "$activos" == 0 ]] && exit 0
+            echo "despliegues en curso: $activos; espero (intento $i de 40)"
+            sleep 60
+          done
+          echo "::error::Sigue habiendo un despliegue en curso tras 40 minutos: se omite el apagado de esta noche."
+          exit 1
+
+      - uses: ./.github/actions/preparar-gcp
+        with:
+          proyecto: ${{ vars.GCP_PROJECT_ID }}
+          proveedor: ${{ vars.GCP_WIF_PROVIDER }}
+          cuenta: ${{ vars.GCP_DEPLOYER_SA }}
+          bucket: ${{ vars.TF_STATE_BUCKET }}
+          terraform: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Apagar
+        run: |
+          source deploy/gcp/lib.sh
+          # Tras destruir.sh no queda nada que apagar: no es un error.
+          if [[ -z "$(salida proyecto)" ]]; then
+            echo "### Apagado nocturno: sin infraestructura desplegada" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          deploy/gcp/energia.sh detener --con-bd
+          {
+            echo "### Bitácora de uso"
+            echo
+            echo "| Acción | Cloud SQL | Hora de Colombia | UTC | Quién |"
+            echo "|---|---|---|---|---|"
+            echo "| apagado nocturno | incluida | $(TZ=America/Bogota date '+%Y-%m-%d %H:%M') | $(date -u '+%Y-%m-%d %H:%M') | $GITHUB_EVENT_NAME |"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          deploy/gcp/energia.sh estado

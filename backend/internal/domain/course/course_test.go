@@ -14,9 +14,9 @@ func validResource() Resource {
 
 func validVersion() *Version {
 	return &Version{
-		Status:  VersionDraft,
-		Title:   "Curso de prueba",
-		Summary: "Un resumen",
+		Status:                       VersionDraft,
+		Title:                        "Curso de prueba",
+		Summary:                      "Un resumen",
 		ApprovalMinScore:             60,
 		ApprovalRequiredResourcesPct: 100,
 		Modules: []Module{

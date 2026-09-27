@@ -6,10 +6,20 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/admin"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/documento"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/enrollment"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/iframe"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/multimedia"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/quiz"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/subtitulo"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/domain/user"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
 )
 
@@ -23,6 +33,18 @@ type errorBody struct {
 	Code    string   `json:"code"`
 	Message string   `json:"message"`
 	Details []string `json:"details,omitempty"`
+}
+
+// writeJSONSinTipo escribe JSON respetando el Content-Type que el manejador ya
+// haya fijado. Lo necesita quien sirve JSON-LD, que tiene su propio tipo.
+func writeJSONSinTipo(w http.ResponseWriter, status int, v any) {
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(status)
+	if v != nil {
+		_ = json.NewEncoder(w).Encode(v)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -55,7 +77,12 @@ func classifyError(err error) (status int, code string, details []string) {
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		return http.StatusUnauthorized, "invalid_credentials", nil
 	case errors.Is(err, auth.ErrEmailInUse):
+		// Solo lo produce el alta de profesores por administración, donde el
+		// administrador es de confianza. El registro público nunca lo
+		// devuelve: allí revelaría qué correos existen.
 		return http.StatusConflict, "email_in_use", nil
+	case errors.Is(err, auth.ErrSessionNotFound):
+		return http.StatusNotFound, "session_not_found", nil
 	case errors.Is(err, auth.ErrInvalidOrExpiredToken):
 		return http.StatusBadRequest, "invalid_or_expired_token", nil
 	case errors.Is(err, user.ErrWeakPassword):
@@ -68,18 +95,83 @@ func classifyError(err error) (status int, code string, details []string) {
 		return http.StatusForbidden, "forbidden", nil
 	case errors.Is(err, courses.ErrVersionNotDraft):
 		return http.StatusConflict, "version_not_draft", nil
+	case errors.Is(err, courses.ErrCursoPublicado):
+		return http.StatusConflict, "course_published", nil
+	case errors.Is(err, courses.ErrCursoNoPublicado):
+		return http.StatusConflict, "course_not_published_yet", nil
 	case errors.Is(err, enrollment.ErrAlreadyEnrolled):
 		return http.StatusConflict, "already_enrolled", nil
 	case errors.Is(err, enrollment.ErrNotEnrolled):
 		return http.StatusNotFound, "not_enrolled", nil
+	case errors.Is(err, enrollments.ErrMediaNoLista):
+		return http.StatusConflict, "media_not_ready", nil
+	case errors.Is(err, enrollments.ErrPosicionInvalida):
+		return http.StatusUnprocessableEntity, "invalid_position", nil
 	case errors.Is(err, enrollment.ErrCourseNotPublished):
 		return http.StatusConflict, "course_not_published", nil
+	case errors.Is(err, quiz.ErrMaxAttemptsReached):
+		return http.StatusConflict, "max_attempts_reached", nil
+	case errors.Is(err, quiz.ErrAttemptExpired):
+		return http.StatusConflict, "attempt_expired", nil
+	case errors.Is(err, quiz.ErrAttemptNotOpen):
+		return http.StatusConflict, "attempt_not_open", nil
+	case errors.Is(err, quiz.ErrAlreadySubmitted):
+		return http.StatusConflict, "attempt_already_submitted", nil
+	case errors.Is(err, quizzes.ErrRespuestaInvalida):
+		return http.StatusUnprocessableEntity, "invalid_answer", nil
+	case errors.Is(err, quizzes.ErrIntentoAjeno):
+		// Se responde como inexistente y no como prohibido: confirmar que el
+		// intento existe ya seria filtrar informacion de otro estudiante.
+		return http.StatusNotFound, "not_found", nil
+	case errors.Is(err, progreso.ErrTipoDeEventoInvalido):
+		return http.StatusUnprocessableEntity, "invalid_event_type", nil
 	case errors.Is(err, ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", nil
 	case errors.Is(err, ErrForbidden):
 		return http.StatusForbidden, "forbidden", nil
 	case errors.Is(err, ErrBadRequest):
 		return http.StatusBadRequest, "bad_request", nil
+	case errors.Is(err, ErrCSRF):
+		return http.StatusForbidden, "csrf_token_mismatch", nil
+	case errors.Is(err, ErrIdempotencyInFlight):
+		return http.StatusConflict, "idempotency_in_flight", nil
+	case errors.Is(err, ErrColaNoDisponible):
+		return http.StatusServiceUnavailable, "queue_unavailable", nil
+	case errors.Is(err, ErrObjetoVacio):
+		return http.StatusUnprocessableEntity, "upload_missing", nil
+	case errors.Is(err, ErrChecksumNoCoincide):
+		return http.StatusUnprocessableEntity, "checksum_mismatch", nil
+	case errors.Is(err, ErrArchivoInfectado):
+		return http.StatusUnprocessableEntity, "malware_detected", nil
+	case errors.Is(err, ErrTipoNoCorresponde):
+		return http.StatusUnprocessableEntity, "mime_mismatch", nil
+	case errors.Is(err, ErrHiloBloqueado):
+		return http.StatusConflict, "thread_locked", nil
+	case errors.Is(err, ErrInsigniaRevocada):
+		return http.StatusConflict, "badge_revoked", nil
+	case errors.Is(err, ErrFirmaNoConfigurada):
+		return http.StatusServiceUnavailable, "credential_signing_unavailable", nil
+	case errors.Is(err, subtitulo.ErrNoEsWebVTT):
+		return http.StatusUnprocessableEntity, "not_webvtt", nil
+	case errors.Is(err, admin.ErrNoEsProfesor):
+		// Ni 404 ni un mensaje distinto según el motivo: separar "no existe"
+		// de "no es profesor" convertiría invitar a un colaborador en una
+		// forma de averiguar qué correos hay registrados.
+		return http.StatusUnprocessableEntity, "teacher_not_found", nil
+	case errors.Is(err, documento.ErrFormatoNoSoportado):
+		return http.StatusUnprocessableEntity, "presentation_format_unsupported", nil
+	case errors.Is(err, multimedia.ErrContenedorNoReconocible):
+		return http.StatusUnprocessableEntity, "media_container_unrecognized", nil
+	case errors.Is(err, iframe.ErrHostNoAutorizado):
+		return http.StatusUnprocessableEntity, "iframe_host_not_allowed", nil
+	case errors.Is(err, iframe.ErrEsquemaNoPermitido):
+		return http.StatusUnprocessableEntity, "iframe_scheme_not_allowed", nil
+	case errors.Is(err, iframe.ErrURLInvalida):
+		return http.StatusUnprocessableEntity, "iframe_invalid_url", nil
+	case errors.Is(err, antimalware.ErrEscanerNoDisponible):
+		// El objeto no se pudo escanear, así que no se acepta. Es 503 y no
+		// 422: el archivo puede estar bien, lo que falla es la plataforma.
+		return http.StatusServiceUnavailable, "scanner_unavailable", nil
 	default:
 		return http.StatusInternalServerError, "internal_error", nil
 	}

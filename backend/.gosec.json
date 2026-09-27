@@ -1,0 +1,17 @@
+{
+  "//": "Exclusiones del análisis de seguridad, con su motivo. Se enumeran una a una en vez de bajar el umbral global: un análisis que no encuentra nada porque se le ha subido el listón no dice nada. Cada entrada de aquí es una decisión revisada, y si el código cambia hay que volver a revisarla.",
+
+  "G104": "@justificado: los errores de cierre diferido (defer Close) se ignoran a propósito donde el fallo ya no puede corregirse ni informarse.",
+
+  "G124": "@justificado: la cookie de sesión lleva HttpOnly y SameSite=Lax; el atributo Secure sale de COOKIE_SECURE, que es true en cualquier despliegue con TLS y false solo en local, donde no hay TLS que exigir. La cookie CSRF es HttpOnly=false a propósito: el cliente tiene que poder leerla para repetirla en la cabecera, que es en lo que consiste la defensa de doble envío.",
+
+  "G204": "@justificado: ffmpeg y libreoffice se invocan con exec.CommandContext y argumentos separados, nunca a través de un shell, así que no hay interpretación de metacaracteres. Las rutas son temporales generadas por el worker y las calidades salen de una tabla fija del código; nada de eso viene del usuario.",
+
+  "G404": "@justificado: math/rand solo baraja el orden de las preguntas de un quiz. Adivinar ese orden no revela ninguna respuesta —la clave correcta no sale del servidor— así que no es una decisión de seguridad.",
+
+  "G115": "@justificado: la conversión a uint32 en el protocolo de clamd se hace sobre el número de bytes leídos en un búfer de tamaño constante y pequeño, que no puede desbordar un uint32.",
+
+  "G703": "@justificado: la ruta de salida de cmd/seed viene de SEED_OUT, una variable del entorno que fija quien ejecuta la herramienta. Es un comando de desarrollo que no se despliega: quien puede poner esa variable ya puede escribir donde quiera.",
+
+  "G705": "@justificado: lo que se escribe en la respuesta son bytes que produjo el propio servidor (un JWT que acaba de firmar, o un cuerpo que él mismo generó y guardó para responder de forma idempotente), nunca entrada del usuario. Además todas las respuestas salen con X-Content-Type-Options: nosniff y X-Frame-Options: DENY."
+}

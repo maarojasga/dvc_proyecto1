@@ -3,20 +3,93 @@ backend/bin/
 *.exe
 *.test
 *.out
+# Binarios que deja `go build ./cmd/...` en la raíz del módulo: toman el
+# nombre del paquete, así que no hay un patrón que los cubra por extensión.
+backend/api
+backend/worker
+backend/seed
 
 # Node / Next.js
 frontend/node_modules/
 frontend/.next/
 frontend/out/
-frontend/next-env.d.ts.bak
+frontend/build/
+frontend/coverage/
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+frontend/.pnp
+frontend/.pnp.*
+frontend/.yarn/*
+!frontend/.yarn/patches
+!frontend/.yarn/plugins
+!frontend/.yarn/releases
+!frontend/.yarn/versions
+frontend/.vercel
+# Resultados de Playwright: informes, trazas y vídeos de una corrida concreta.
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/.playwright/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
 # Entornos y secretos
 .env
 .env.local
 .env.*.local
+*.pem
+*.key
+*.crt
+# Volcados y respaldos de la base: contienen datos (y hashes de contraseñas).
+*.dump
+*.sql.gz
+deploy/**/secrets/
+# Despliegue en GCP: estado local de los scripts (último tag publicado, último
+# export) y copias locales de los exports de Cloud SQL.
+deploy/gcp/.estado/
+deploy/gcp/respaldos/
+# Terraform: el estado contiene en claro la contraseña de la base y los
+# secretos HMAC; las variables, el ID del proyecto y de la facturación.
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!*.tfvars.example
+crash.log
+# Backend local opcional en lugar del bucket (ver deploy/gcp/lib.sh).
+*_override.tf
+# Credenciales federadas que deja google-github-actions/auth en el
+# directorio de trabajo durante un despliegue desde GitHub Actions. No son
+# una llave, pero no pintan nada en el repositorio.
+gha-creds-*.json
 
 # Sistema operativo / editores
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# Material de apoyo, no entregable
+# Guiones y notas de preparación: ayudan a grabar y ensayar, pero no forman
+# parte del sistema ni de su documentación técnica.
+docs/video-sustentacion.md
+NOTAS.md
+notas/
+
+
+.cursor/
+.cursorrules
+.cursorignore
+.claude/
+CLAUDE.md
+AGENTS.md
+.aider*
+.specstory/
+.continue/
+.windsurfrules
+.github/copilot-instructions.md
+*.canvas.tsx
+prompts/
+.prompts/

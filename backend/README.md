@@ -17,9 +17,13 @@ migrations/              migraciones SQL, incrustadas en el binario
 
 ## Estado
 
-Implementado el alcance **5.1.1**: registro público de estudiantes con
-verificación de correo, sesiones revocables y recuperación de clave. Los demás
-paquetes de dominio son marcadores documentados.
+Ver la tabla de cobertura del README de la raíz. En resumen: el alcance mínimo
+de la sección 5.1 está cubierto de extremo a extremo —identidad y
+administración, autoría versionada, carga verificada, transcodificación a HLS,
+consumo, evaluación, progreso e insignias, y catálogo con filtros—. Lo que
+queda pertenece a las restricciones técnicas y a la demostración de
+aceptación: pruebas E2E, CI, observabilidad con OpenTelemetry, cursores y
+ETag.
 
 Las migraciones se aplican solas al arrancar la API, dentro de un
 `pg_advisory_lock` para que levantar varias instancias a la vez no las aplique
@@ -29,14 +33,27 @@ por duplicado.
 
 | Decisión | Por qué |
 |---|---|
-| Argon2id con parámetros dentro del hash | Permite recalibrar el costo sin migrar la base: cada hash se verifica con los suyos. |
+| bcrypt con coste 12 para las contraseñas | Derivación lenta y con sal por hash; el coste va dentro, así que subirlo no invalida los hashes existentes. |
 | Solo se guarda el hash del token | Ni la sesión ni los enlaces de correo son reconstruibles leyendo la base. |
 | Cookie de sesión `httpOnly` + `SameSite=Lax` | Un XSS no puede exfiltrar la sesión y un formulario ajeno no la envía. |
 | Doble envío de cookie anti-CSRF | La cookie `mooc_csrf` es legible por el frontend y debe repetirse en `X-CSRF-Token`; un sitio atacante no puede leerla. |
 | Respuestas idénticas exista o no la cuenta | Registro, reenvío y recuperación no sirven para enumerar correos. El login compara además contra un hash señuelo para igualar el tiempo de respuesta. |
-| PostgreSQL manda sobre la sesión | Redis solo cachea; revocar borra la entrada compartida, así que el efecto es inmediato en todas las instancias. |
+| La sesión se resuelve contra PostgreSQL en cada petición | No hay caché intermedia que quede obsoleta: revocar surte efecto en la petición siguiente, en cualquier instancia. |
+| El token de sesión no viaja en el cuerpo del login | Solo vive en la cookie `httpOnly`; devolverlo dejaría que cualquier script de la página lo leyera. |
+| La propiedad se comprueba dentro del `UPDATE` al revocar | No hay ventana entre comprobar y actuar, y una sesión ajena responde igual que una inexistente. |
 | Auditoría con disparador que rechaza `UPDATE` y `DELETE` | La bitácora es inmutable en la propia base, no por convención. |
 | Límite de tasa en Redis, no en memoria | El cupo es del servicio, así que escalar a N réplicas no multiplica por N el margen del atacante. |
+| Tomar un trabajo de transcodificación es un `UPDATE` condicional | Dos entregas del mismo trabajo se resuelven en la base: solo una transcodifica, así que una entrega duplicada no produce salidas repetidas. |
+| El arrendamiento del trabajo vence | Si el worker que lo tomó muere, otro lo recoge en vez de dejar el recurso atascado en `processing` para siempre. |
+| Toda carga se verifica al confirmarla, sea simple o multipart | El control no depende del camino que elija el cliente: antes bastaba con subir un archivo pequeño, que no pasaba por la multipart, para saltarse checksum, MIME y antimalware. |
+| El tipo del contenido se deduce de los bytes, no de lo declarado | `Content-Type` lo escribe quien sube. Lo que decide si un PDF es un PDF son sus primeros bytes. |
+| Un escáner que no responde rechaza la carga | Dar por limpio lo que no se pudo escanear convierte apagar el antivirus en una vía de entrada. |
+| El objeto rechazado se borra del almacén | Dejarlo conserva un archivo que no superó el control bajo una clave que el recurso ya conoce. |
+| Una insignia revocada no se emite como credencial | Una credencial firmada no se puede desdecir. Para el estado está la URL pública, que sigue respondiendo y dice que ya no vale. |
+| El sujeto de la credencial es su URL de verificación | La credencial se comparte; identificar al sujeto por su correo o su id expondría a la persona en un documento pensado para circular. |
+| La lista blanca decide, el sandbox contiene | `allow-scripts` junto a `allow-same-origin` deja que un marco se quite el propio sandbox, así que la contención no es una frontera: la frontera es la lista. |
+| El foro exige acceso al curso | Un curso no es un tablón público: se lee y se escribe con inscripción, autoría o administración. |
+| El título del curso se escapa al dibujar la insignia | La imagen es un SVG que sirve el almacén y abre el navegador: sin escapar, un título con etiquetas sería un XSS servido por la plataforma. |
 
 ## Puesta en marcha
 
@@ -46,13 +63,15 @@ trabajar solo sobre el backend:
 ```bash
 export DATABASE_URL="postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable"
 export REDIS_ADDR=localhost:6379
-export SMTP_ADDR=            # vacío: los enlaces se registran en el log
 go run ./cmd/api
 ```
 
-`SMTP_ADDR` vacío es un valor deliberado y significa «sin servidor de correo»:
-la API escribe los enlaces en el log en lugar de enviarlos. Nunca los devuelve
-en la respuesta HTTP, que permitiría activar cuentas ajenas.
+La API necesita además PostgreSQL, Redis y el almacenamiento de objetos
+levantados: comprueba el bucket al arrancar y falla rápido si no responde.
+
+Los enlaces de verificación y recuperación se envían por SMTP (Mailpit en
+local) y nunca se devuelven en la respuesta HTTP: hacerlo permitiría activar
+cuentas ajenas.
 
 ## Pruebas
 
@@ -69,6 +88,18 @@ de tokens, revocación inmediata, límites de tasa, inmutabilidad de la
 auditoría— vive precisamente en esos adaptadores. Sin las dos variables se
 omiten en lugar de fallar.
 
+El almacenamiento de objetos sí se sustituye por un doble en memoria
+(`almacen_falso_test.go`): lo que verifican las pruebas de carga —integridad,
+MIME real, antimalware y reanudación— es lógica de la API, y atarlas a MinIO
+las dejaría sin ejecutar en la práctica. La firma SigV4, que sí es del
+proveedor, se prueba aparte sobre el cliente real en
+`internal/platform/storage/firma_test.go`.
+
+Este paquete y el de `postgres` comparten la base de integración y empiezan
+vaciando las mismas tablas, así que se serializan entre sí con un cerrojo
+consultivo (`internal/platform/postgres/pgtest`). Sin él, `go test ./...` los
+ejecuta en paralelo y la suite falla de forma intermitente.
+
 ## Variables de entorno
 
 | Variable | Por defecto | Para qué |
@@ -76,9 +107,15 @@ omiten en lugar de fallar.
 | `APP_ENV` | `development` | Entorno; fuera de desarrollo la cookie exige `Secure`. |
 | `API_PORT` | `8080` | Puerto de escucha. |
 | `DATABASE_URL` | `postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable` | Fuente de verdad transaccional. |
-| `REDIS_ADDR` | `localhost:6379` | Sesiones, caché, límites e idempotencia. |
-| `S3_ENDPOINT`, `S3_BUCKET` | `localhost:9000`, `mooc` | Almacenamiento de objetos (aún sin uso). |
-| `FRONTEND_URL` | `http://localhost:3000` | Base de los enlaces de los correos. |
-| `SMTP_ADDR` | `localhost:1025` | Servidor SMTP; vacío desactiva el envío. |
-| `SMTP_FROM`, `SMTP_USER`, `SMTP_PASSWORD` | — | Remitente y credenciales. |
-| `COOKIE_SECURE` | según `APP_ENV` | Fuerza o desactiva `Secure` en las cookies. |
+| `REDIS_ADDR` | `localhost:6379` | Límites de tasa, idempotencia y cola asynq. |
+| `S3_ENDPOINT`, `S3_BUCKET` | `localhost:9000`, `mooc` | Almacenamiento de objetos. |
+| `S3_PUBLIC_URL` | — | Base pública (CDN) desde la que se sirven los objetos. Vacío: se firman uno a uno. |
+| `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_USE_SSL` | — | Credenciales del almacenamiento. |
+| `PUBLIC_BASE_URL` | `http://localhost:3000` | Base de los enlaces de los correos y origen permitido por CORS. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | `localhost`, `1025`, `no-reply@mooc.local` | Servidor de correo saliente. |
+| `BADGE_SIGNING_KEY` | — | Clave Ed25519 en base64 para firmar las credenciales Open Badges 3.0. Vacía: la insignia sigue siendo verificable por su URL pública, sin credencial portátil. |
+| `BADGE_KEY_ID` | `mooc-badges-1` | Identifica la clave en el JWKS, para rotarla sin invalidar lo firmado antes. |
+| `ISSUER_NAME` | `Plataforma MOOC` | Organización que figura como emisora. |
+| `CLAMAV_ADDR` | — | Dirección de clamd (`host:puerto`). Vacío: escáner integrado, sin firmas. Configurado y sin respuesta: la carga se rechaza. |
+| `SESSION_TTL` | `720h` | Vigencia de la sesión. |
+| `COOKIE_SECURE` | `false` | Marca `Secure` en las cookies; actívalo con TLS delante. |

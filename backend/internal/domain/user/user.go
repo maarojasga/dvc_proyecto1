@@ -37,10 +37,10 @@ const (
 )
 
 var (
-	ErrInvalidEmail        = errors.New("user: email inválido")
-	ErrWeakPassword        = errors.New("user: la contraseña no cumple la política mínima")
-	ErrAccountNotActive    = errors.New("user: la cuenta no está activa")
-	ErrLastAdminProtected  = errors.New("user: no se puede degradar, suspender o eliminar al último administrador activo")
+	ErrInvalidEmail         = errors.New("user: email inválido")
+	ErrWeakPassword         = errors.New("user: la contraseña no cumple la política mínima")
+	ErrAccountNotActive     = errors.New("user: la cuenta no está activa")
+	ErrLastAdminProtected   = errors.New("user: no se puede degradar, suspender o eliminar al último administrador activo")
 	ErrEmailAlreadyVerified = errors.New("user: el correo ya está verificado")
 )
 

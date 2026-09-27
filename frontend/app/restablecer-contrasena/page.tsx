@@ -4,8 +4,10 @@ import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 function RequestResetForm() {
+  const { t } = useI18n();
   const [email, setEmail] = useState("");
   const [done, setDone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -20,27 +22,25 @@ function RequestResetForm() {
 
   if (done) {
     return (
-      <p className="success-banner">
-        Si el correo existe, enviamos un enlace para restablecer la contraseña. Revisa Mailpit en desarrollo
-        (http://localhost:8025).
-      </p>
+      <p className="success-banner">{t("auth.reset.enviado")}</p>
     );
   }
 
   return (
     <form onSubmit={handleSubmit} className="stack">
       <div className="form-field">
-        <label htmlFor="email">Correo electrónico</label>
+        <label htmlFor="email">{t("auth.correo")}</label>
         <input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
       </div>
       <button type="submit" disabled={submitting}>
-        {submitting ? "Enviando…" : "Enviar enlace"}
+        {submitting ? t("auth.reset.enviando") : t("auth.reset.enviar")}
       </button>
     </form>
   );
 }
 
 function ConfirmResetForm({ token }: { token: string }) {
+  const { t } = useI18n();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
@@ -54,7 +54,7 @@ function ConfirmResetForm({ token }: { token: string }) {
       await api.confirmPasswordReset(token, password);
       setDone(true);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "No se pudo restablecer la contraseña");
+      setError(e instanceof ApiError ? e.message : t("auth.reset.error"));
     } finally {
       setSubmitting(false);
     }
@@ -63,8 +63,8 @@ function ConfirmResetForm({ token }: { token: string }) {
   if (done) {
     return (
       <>
-        <p className="success-banner">Tu contraseña fue actualizada. Todas tus sesiones anteriores fueron cerradas.</p>
-        <Link href="/login">Ir a iniciar sesión</Link>
+        <p className="success-banner">{t("auth.reset.actualizada")}</p>
+        <Link href="/login">{t("auth.irALogin")}</Link>
       </>
     );
   }
@@ -77,7 +77,7 @@ function ConfirmResetForm({ token }: { token: string }) {
         </p>
       )}
       <div className="form-field">
-        <label htmlFor="password">Nueva contraseña</label>
+        <label htmlFor="password">{t("auth.reset.nueva")}</label>
         <input
           id="password"
           type="password"
@@ -88,19 +88,20 @@ function ConfirmResetForm({ token }: { token: string }) {
         />
       </div>
       <button type="submit" disabled={submitting}>
-        {submitting ? "Guardando…" : "Restablecer contraseña"}
+        {submitting ? t("comun.guardando") : t("auth.reset.titulo")}
       </button>
     </form>
   );
 }
 
 function ResetPasswordInner() {
+  const { t } = useI18n();
   const params = useSearchParams();
   const token = params.get("token");
 
   return (
-    <div style={{ maxWidth: 420 }}>
-      <h1>Restablecer contraseña</h1>
+    <div className="columna-estrecha">
+      <h1>{t("auth.reset.titulo")}</h1>
       {token ? <ConfirmResetForm token={token} /> : <RequestResetForm />}
     </div>
   );
@@ -108,8 +109,13 @@ function ResetPasswordInner() {
 
 export default function ResetPasswordPage() {
   return (
-    <Suspense fallback={<p>Cargando…</p>}>
+    <Suspense fallback={<Cargando />}>
       <ResetPasswordInner />
     </Suspense>
   );
+}
+
+function Cargando() {
+  const { t } = useI18n();
+  return <p>{t("comun.cargando")}</p>;
 }

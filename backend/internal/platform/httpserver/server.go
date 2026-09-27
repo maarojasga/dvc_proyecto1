@@ -4,6 +4,7 @@
 package httpserver
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -14,8 +15,11 @@ import (
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/auth"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/courses"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/enrollments"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/progreso"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/app/quizzes"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/antimalware"
 	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/postgres"
-	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/storage"
+	"github.com/DES-SOLUCIONES-CLOUD/proyecto-1/backend/internal/platform/queue"
 )
 
 type Deps struct {
@@ -23,12 +27,49 @@ type Deps struct {
 	Admin       *admin.Service
 	Courses     *courses.Service
 	Enrollments *enrollments.Service
+	Quizzes     *quizzes.Service
+	Progreso    *progreso.Service
 	Media       *postgres.MediaRepo
-	Storage     *storage.Client
-	Redis       *redis.Client
-	Queue       *asynq.Client
-	CORSOrigin  string
+	// Storage conduce las cargas de autoría. Es una interfaz estrecha para
+	// que los manejadores no dependan del SDK del proveedor cloud.
+	Storage AlmacenDeObjetos
+	// Antimalware escanea cada objeto antes de aceptarlo. Vacío significa el
+	// escáner integrado.
+	Antimalware antimalware.Escaner
+	// Iframes administra la lista blanca de destinos incrustables.
+	Iframes ListaBlancaDeIframes
+	// Metricas alimenta el panel administrativo y los informes de evaluación.
+	Metricas Metricas
+	// Revisiones guarda el historial de contenido de los recursos de texto.
+	Revisiones Revisiones
+	// Colaboradores gestiona la coautoría de un curso.
+	Colaboradores Colaboradores
+	// Exportacion reúne los datos personales de una cuenta.
+	Exportacion Exportacion
+	// Subtitulos guarda las pistas y sus transcripciones.
+	Subtitulos Subtitulos
+	// Foros es el foro asíncrono de cada curso.
+	Foros Foros
+	// Credenciales firma las credenciales Open Badges 3.0. Sin clave, la
+	// plataforma sigue emitiendo insignias verificables por su URL pública.
+	Credenciales EmisorDeCredenciales
+	// Auditor deja constancia en la bitácora inmutable de las acciones que no
+	// pasan por un servicio de aplicación.
+	Auditor Auditor
+	// Entrega resuelve las URL de lectura. En producción es el mismo cliente
+	// de Storage; se declara aparte porque la reproducción solo necesita eso.
+	Entrega EntregaDeObjetos
+	Redis   *redis.Client
+	// Queue publica los trabajos asíncronos. Es una interfaz para que los
+	// manejadores no dependan del SDK de la cola y una prueba pueda comprobar
+	// qué se encoló sin Redis de por medio.
+	Queue        queue.Encolador
+	Inspector    *asynq.Inspector
+	CORSOrigin   string
 	CookieSecure bool
+	// AuthRateLimitPerMinute acota los intentos de autenticación por IP. Cero
+	// deja el valor por defecto seguro.
+	AuthRateLimitPerMinute int
 }
 
 func NewRouter(d Deps) http.Handler {
@@ -40,6 +81,18 @@ func NewRouter(d Deps) http.Handler {
 	h.registerAdmin(mux)
 	h.registerCourses(mux)
 	h.registerEnrollments(mux)
+	h.registerQuizzes(mux)
+	h.registerProgress(mux)
+	h.registerMedia(mux)
+	h.registerIframes(mux)
+	h.registerMetricas(mux)
+	h.registerRevisiones(mux)
+	h.registerColaboradores(mux)
+	h.registerExportacion(mux)
+	h.registerSubtitulos(mux)
+	h.registerForos(mux)
+	h.registerOpenBadges(mux)
+	h.registerOperacion(mux)
 
 	return Chain(mux,
 		RequestID,
@@ -47,7 +100,14 @@ func NewRouter(d Deps) http.Handler {
 		Logging,
 		SecurityHeaders,
 		CORS(d.CORSOrigin),
+		CSRF,
+		Idempotency(d.Redis),
 	)
+}
+
+// Auditor es la bitácora inmutable vista desde la capa HTTP.
+type Auditor interface {
+	InsertAudit(ctx context.Context, e postgres.AuditEntry) error
 }
 
 type handlers struct {
@@ -58,6 +118,15 @@ func (h *handlers) auth() func(http.Handler) http.Handler {
 	return RequireAuth(h.deps.Auth)
 }
 
-func loginRateLimit(rdb *redis.Client) func(http.Handler) http.Handler {
-	return RateLimit(rdb, "auth", 10, time.Minute)
+// limiteDeAutenticacionPorDefecto es lo que aplica si el despliegue no dice
+// otra cosa. Diez intentos por minuto y por IP frenan la fuerza bruta sin
+// estorbar a una persona que se equivoca de contraseña.
+const limiteDeAutenticacionPorDefecto = 10
+
+func (h *handlers) loginRateLimit() func(http.Handler) http.Handler {
+	limite := h.deps.AuthRateLimitPerMinute
+	if limite <= 0 {
+		limite = limiteDeAutenticacionPorDefecto
+	}
+	return RateLimit(h.deps.Redis, "auth", limite, time.Minute)
 }
