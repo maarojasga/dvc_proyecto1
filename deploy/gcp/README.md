@@ -79,7 +79,7 @@ el enunciado los excluye o no los pide en esta etapa.
 
 ## Paso a paso desde un portátil
 
-Requisitos locales: `gcloud`, `terraform` >= 1.6, `docker` con buildx, `git`,
+Requisitos locales: `gcloud`, `terraform` >= 1.7, `docker` con buildx, `git`,
 `openssl`. En Windows, desde WSL.
 
 1. **Proyecto y facturación.** Crear el proyecto y vincularlo a la cuenta de
@@ -134,6 +134,10 @@ Requisitos locales: `gcloud`, `terraform` >= 1.6, `docker` con buildx, `git`,
    deploy/gcp/remoto.sh web 'sudo /opt/mooc/actual/deploy/gcp/en-vm.sh sembrar'
    deploy/gcp/remoto.sh web 'sudo cat /opt/mooc/salida/escenario.json' > load/salida/escenario.json
    ```
+   **Las cuentas sintéticas tienen contraseña pública** (está en
+   `backend/cmd/seed/main.go`, a propósito) y la URL del entorno también lo
+   es. Tras las pruebas hay que neutralizarlas: ver [Cuentas
+   sintéticas](#cuentas-sintéticas-después-de-las-pruebas).
 8. **Certificado real** (sustituye al autofirmado provisional):
    ```bash
    deploy/gcp/remoto.sh web 'sudo /opt/mooc/actual/deploy/web/certificado.sh letsencrypt'
@@ -178,7 +182,16 @@ repositorio (y ser revisor del entorno `gcp` si se exige aprobación).
 Para entrar a las VM desde su portátil: `roles/iap.tunnelResourceAccessor`
 (túnel), `roles/compute.osAdminLogin` (entrar con sudo por OS Login) y
 `roles/iam.serviceAccountUser` sobre las dos cuentas de servicio de las VM
-(OS Login lo exige cuando la VM corre con una). Los scripts leen además las
+(OS Login lo exige cuando la VM corre con una), no sobre el proyecto:
+
+```bash
+for c in mooc-web mooc-worker; do
+  gcloud iam service-accounts add-iam-policy-binding "$c@<proyecto>.iam.gserviceaccount.com" \
+    --member user:<correo> --role roles/iam.serviceAccountUser
+done
+```
+
+Los scripts leen además las
 salidas del estado de Terraform, y el bucket del estado solo lo leen los
 dueños del proyecto y la cuenta de CI, porque contiene secretos en claro.
 Para desplegar desde un portátil hace falta, además, lo que tiene la cuenta
@@ -211,8 +224,11 @@ credenciales de 1 hora de mooc-deployer --> Terraform (estado en gs://<proyecto>
    Confirmar antes el ID real del proyecto (`gcloud projects list`); el
    nombre visible no sirve. El script es idempotente: repetirlo deja todo
    como lo describe. Habilita las APIs, crea el bucket del estado, la cuenta
-   `mooc-deployer` con sus roles, el pool y el proveedor de Workload
-   Identity, y la clave de firma de insignias; al final imprime las
+   `mooc-deployer` con sus roles, las cuentas de las VM (`mooc-web`,
+   `mooc-worker`: Terraform ya no las crea, solo las lee), el pool y el
+   proveedor de Workload Identity y la clave de firma de insignias, y
+   deshabilita la cuenta por defecto de Compute Engine (ver
+   [Permisos](#permisos-de-mooc-deployer)); al final imprime las
    variables del paso 2 (y los `gh variable set` equivalentes).
 
    Si el estado ya existía en un portátil, migrarlo ahora, antes de la
@@ -234,7 +250,8 @@ credenciales de 1 hora de mooc-deployer --> Terraform (estado en gs://<proyecto>
    | `CUENTA_FACTURACION` | no | `XXXXXX-XXXXXX-XXXXXX` | presupuesto (solo si el bootstrap pudo dar `billing.costsManager`) |
    | `PRESUPUESTO_MONTO`, `PRESUPUESTO_MONEDA` | no | `50`, `USD` | presupuesto |
    | `TIPO_MAQUINA`, `BD_TIER` | no | `e2-small`, `db-custom-1-3840` | configuración de la corrida |
-   | `HABILITAR_NAT`, `CREAR_BD` | no | `true` / `false` | NAT del Worker; `false` tras `bd.sh eliminar` |
+   | `CREAR_BD` | **sí** | `true` | `false` tras `bd.sh eliminar`; sin valor el plan falla a propósito |
+   | `HABILITAR_NAT` | no | `true` / `false` | NAT del Worker |
    | `DOMINIO_WEB` | no | vacío (sslip.io) | nombre del certificado |
    | `WORKER_CONCURRENCY`, `AUTH_RATE_LIMIT_PER_MINUTE` | no | `2`, vacío | parámetros del experimento |
    | `ADMIN_EMAIL` | no | correo | administrador inicial; quitarla tras el primer despliegue |
@@ -244,7 +261,13 @@ credenciales de 1 hora de mooc-deployer --> Terraform (estado en gs://<proyecto>
    un `terraform.tfvars` distinto en un portátil haría que un apply local
    deshiciera lo que aplicó CI, y al revés. Lo mismo `bd.auto.tfvars`, que
    `bd.sh` escribe solo en el portátil: tras `bd.sh eliminar`, fijar
-   `CREAR_BD=false` aquí.
+   `CREAR_BD=false` aquí. Por eso `CREAR_BD` no tiene valor por defecto en
+   CI: si faltara y CI asumiera `true`, un `infra` recrearía vacía una base
+   que se eliminó a propósito.
+
+   `CUENTA_FACTURACION` no es una credencial, pero el repositorio es
+   público: el workflow la enmascara en los registros (`::add-mask::`) y la
+   quita del plan que va al resumen.
 
 3. **Entornos** (Settings > Environments > New environment): `gcp` y
    `gcp-rutina`. El proveedor de Workload Identity solo acepta tokens de
@@ -252,18 +275,28 @@ credenciales de 1 hora de mooc-deployer --> Terraform (estado en gs://<proyecto>
    credenciales. Si no se crean, GitHub los crea sin protección en la
    primera ejecución.
    - `gcp` (infra, publicar, desplegar, certificado, sembrar, encender,
-     apagar): **Deployment branches** limitado a `main` y, si el equipo lo
-     quiere, **Required reviewers**: el apply espera la aprobación después
-     de publicar el plan en el resumen de la ejecución.
-   - `gcp-rutina` (plan, estado, apagado nocturno): solo `main` en
-     Deployment branches y **sin** revisores, o el apagado nocturno se
-     quedaría esperando.
+     apagar): **Deployment branches and tags** > *Selected branches* >
+     `main` y, si el equipo lo quiere, **Required reviewers**: el apply
+     espera la aprobación después de publicar el plan en el resumen de la
+     ejecución.
+   - `gcp-rutina` (plan, estado, apagado nocturno): también solo `main`, y
+     **sin** revisores, o el apagado nocturno se quedaría esperando.
 
-   Las reglas de ramas del entorno son las que impiden que alguien con
-   permiso de escritura despliegue desde una rama propia con un workflow
-   modificado. Para exigirlo también en GCP, repetir el bootstrap con
-   `--solo-rama main`, que añade `assertion.ref == 'refs/heads/main'` a la
-   condición (a cambio, ya no se puede probar desde otra rama).
+   Y proteger `main` (Settings > Branches o Rules > *Rulesets*): exigir PR
+   con revisión y prohibir el push forzado y el borrado. Con eso, llegar a
+   GCP exige pasar por una revisión en tres sitios: la condición de Google
+   (el bootstrap exige por defecto `assertion.ref == 'refs/heads/main'`, así
+   que otra rama no obtiene credenciales aunque su workflow declare el
+   entorno), las reglas de ramas de cada entorno y la protección de `main`.
+   Para probar desde otra rama, repetir el bootstrap con `--cualquier-rama`
+   y añadir la rama a los entornos; deshacerlo después.
+
+   **Una sola identidad para los dos entornos.** Separar una cuenta
+   "operador" para `gcp-rutina` (plan, estado, apagar) sería posible, pero
+   hoy aporta poco: el plan y el refresh de Terraform leen el estado y los
+   valores de Secret Manager, que incluyen todos los secretos, así que esa
+   cuenta ya vería lo más sensible. Tendría sentido si el plan dejara de
+   correr en `gcp-rutina`.
 
 4. **Llevar el workflow a `main`.** GitHub solo muestra el botón *Run
    workflow* si el archivo está en la rama por defecto, y la API y `gh`
@@ -317,15 +350,21 @@ desplegar.
   obsoleto y hay que repetir.
 - **Datos sintéticos:** `sembrar`. El escenario (sesiones válidas de los
   usuarios sintéticos) se queda en la VM, no se sube como artefacto; se trae
-  con `remoto.sh` (ver el resumen de la ejecución).
+  con `remoto.sh` (ver el resumen de la ejecución). Las cuentas tienen
+  contraseña pública: neutralizarlas al terminar ([Cuentas
+  sintéticas](#cuentas-sintéticas-después-de-las-pruebas)).
 - **Encender y apagar:** `encender` / `apagar` (`con_bd` incluye Cloud SQL).
   Escriben en el resumen la hora de Colombia, la UTC y quién lo hizo: es la
   bitácora de horas de uso para el informe de costos.
 - **Apagado nocturno:** con `APAGADO_NOCTURNO=true`,
   [`apagado-nocturno.yml`](../../.github/workflows/apagado-nocturno.yml)
-  detiene VM y Cloud SQL a las 23:07 hora de Colombia (04:07 UTC). Comparte
-  grupo de concurrencia con los despliegues: si hay uno en curso, espera a
-  que termine. GitHub desactiva los programados de un repositorio público
+  detiene VM y Cloud SQL a las 23:07 hora de Colombia (04:07 UTC). No
+  comparte grupo de concurrencia con los despliegues (GitHub solo guarda
+  una ejecución pendiente por grupo y cancela la anterior, así que el
+  apagado en espera se perdería): consulta con la API de GitHub si hay un
+  despliegue en curso y espera hasta 40 minutos; si sigue, omite el apagado
+  esa noche y falla para que se note. Un despliegue que espera aprobación
+  no lo retiene. GitHub desactiva los programados de un repositorio público
   tras 60 días sin actividad.
 - **Evidencia:** cada ejecución que despliega termina con
   [`resumen.sh`](resumen.sh): URL, salud de la API (y si el certificado es
@@ -383,21 +422,43 @@ Justificados uno a uno en `bootstrap-ci.sh`. Ni `roles/owner` ni
 | `storage.hmacKeyAdmin` | claves HMAC de las cuentas de las VM |
 | `secretmanager.admin` | secretos, versiones e IAM por secreto; clave de insignias |
 | `artifactregistry.admin` | repositorio, limpieza, IAM y `docker push` |
-| `iam.serviceAccountAdmin` | crear y borrar `mooc-web` y `mooc-worker` |
-| `iam.serviceAccountUser` | crear VM con esas cuentas y entrar por OS Login (a nivel de proyecto: ver el comentario del script) |
 | `resourcemanager.projectIamAdmin` **con condición** | solo puede conceder o quitar `logging.logWriter` y `monitoring.metricWriter` (`identidades.tf`); sin la condición podría darse `owner` |
 | `serviceusage.serviceUsageConsumer` | `user_project_override` del provider; listar APIs. No puede habilitarlas: lo hace el bootstrap |
 | `iap.tunnelResourceAccessor` | túnel de IAP al puerto 22 |
 | `compute.osAdminLogin` | OS Login con sudo (`en-vm.sh` corre como root) |
 | `billing.costsManager` (en la cuenta de facturación, opcional) | presupuesto (`costos.tf`); solo si quien corre el bootstrap administra la cuenta |
 
-Más `storage.objectAdmin` sobre el bucket del estado y, para el pool,
-`iam.workloadIdentityUser` sobre la cuenta concedido al `principalSet` del
-repositorio. `serviceAccountAdmin` e `iam.serviceAccountUser` hacen de esta
-cuenta, en la práctica, capaz de actuar como cualquier cuenta de servicio
-del proyecto: es lo que cuesta que Terraform cree cuentas de servicio y VM.
-Lo que la limita es quién puede obtener sus credenciales (la condición del
-proveedor y las reglas de los entornos).
+Sobre recursos concretos:
+
+| Rol | Dónde | Por qué |
+|---|---|---|
+| `iam.serviceAccountUser` | solo `mooc-web` y `mooc-worker` | actAs: crear las VM con esas cuentas y entrar por OS Login |
+| `storage.objectAdmin` | bucket del estado | estado y planes guardados |
+| `iam.workloadIdentityUser` | `mooc-deployer`, concedido al `principalSet` del repositorio | el cambio de token de GitHub |
+
+**Lo que no tiene, a propósito:**
+
+- `iam.serviceAccountAdmin`: daría `setIamPolicy` sobre todas las cuentas
+  del proyecto, incluida ella misma. Podría darse `serviceAccountTokenCreator`
+  o dárselo a un usuario externo y conservar acceso fuera de GitHub. Por eso
+  las cuentas de las VM las crea el bootstrap y Terraform solo las lee
+  (`data "google_service_account"`, con bloques `removed` que las sacan sin
+  borrarlas de un estado anterior). Nada más en `terraform/` cambia el IAM
+  de una cuenta de servicio, y las claves HMAC solo necesitan
+  `storage.hmacKeyAdmin`.
+- `iam.serviceAccountUser` de proyecto: permitiría crear una VM con
+  cualquier cuenta del proyecto. La más peligrosa es la cuenta por defecto
+  de Compute Engine (`<número>-compute@developer.gserviceaccount.com`), que
+  en un proyecto sin organización nace con `roles/editor`. El bootstrap le
+  quita `roles/editor` y la deshabilita, salvo que alguna VM la use (o con
+  `--conservar-sa-compute`). Nada de este despliegue la necesita: las VM
+  usan sus propias cuentas y Cloud SQL, Artifact Registry y Service
+  Networking trabajan con sus agentes de servicio (`service-<número>@...`).
+- Si un bootstrap anterior dio esos dos roles de proyecto, repetirlo los
+  retira.
+
+`destruir.sh` ya no borra `mooc-web` ni `mooc-worker` (no cuestan nada). Se
+reutilizan al recrear.
 
 ### Alternativas descartadas
 
@@ -416,6 +477,36 @@ proveedor y las reglas de los entornos).
   en CI, y la caché `type=gha` se le da con `ghaction-github-runtime`.
 - **`gcloud builds submit` (Cloud Build):** otro servicio y otra cuenta de
   servicio con permisos; el runner ya tiene Docker y basta.
+
+### Cuentas sintéticas después de las pruebas
+
+El sembrador crea `profesor@carga.mooc.local`, `sonda@carga.mooc.local` y
+`estudiante-NNNN@carga.mooc.local`, todas con la misma contraseña, que está
+en el código. Al terminar las pruebas, suspenderlas y revocar sus sesiones.
+No se borran: el curso de carga las referencia (`teacher_id` es `ON DELETE
+RESTRICT`) y sus intentos y progreso son parte de la evidencia. Suspender es
+lo mismo que hace la API de administración (la cuenta no puede iniciar
+sesión y sus sesiones quedan revocadas). Desde el Web Server, con la
+contraseña de la base de Secret Manager:
+
+```bash
+deploy/gcp/remoto.sh web
+# En la VM. La contraseña la lee la cuenta del Web; -e PGPASSWORD pasa la
+# variable por nombre, sin que el valor aparezca en la línea de órdenes.
+export PGPASSWORD="$(gcloud secrets versions access latest --secret mooc-bd-password)"
+sudo -E docker run --rm -i -e PGPASSWORD \
+  postgres:16-alpine psql "host=<DB_HOST> user=mooc dbname=mooc sslmode=require" <<'SQL'
+UPDATE sessions SET revoked_at = now()
+ WHERE revoked_at IS NULL
+   AND user_id IN (SELECT id FROM users WHERE email LIKE '%@carga.mooc.local');
+UPDATE users SET status = 'suspended', updated_at = now()
+ WHERE email LIKE '%@carga.mooc.local';
+SQL
+```
+
+Para otra corrida, `status = 'active'` con el mismo filtro y volver a
+sembrar (el sembrador reutiliza las cuentas existentes y abre sesiones
+nuevas).
 
 ## Migrar los datos de la entrega anterior
 

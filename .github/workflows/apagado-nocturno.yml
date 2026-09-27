@@ -18,14 +18,19 @@ on:
     - cron: "7 4 * * *"
   workflow_dispatch:
 
+# actions: read para consultar si hay un despliegue en curso.
 permissions:
   contents: read
   id-token: write
+  actions: read
 
-# El mismo grupo que "Desplegar en GCP": si hay un despliegue en curso, el
-# apagado espera a que termine en lugar de detener la VM a medias.
+# Grupo propio y no el de "Desplegar en GCP": GitHub guarda una sola
+# ejecución pendiente por grupo y cancela la anterior cuando llega otra, así
+# que un apagado en espera detrás de un despliegue se perdería si alguien
+# lanza otro. En su lugar, el primer paso espera a que no haya despliegues
+# en curso.
 concurrency:
-  group: gcp-${{ github.repository }}
+  group: gcp-apagado-${{ github.repository }}
   cancel-in-progress: false
 
 defaults:
@@ -43,11 +48,34 @@ jobs:
     name: Apagar VM y Cloud SQL
     if: vars.APAGADO_NOCTURNO == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     # gcp-rutina y no gcp: si el equipo exige aprobación en gcp, un apagado
     # programado se quedaría esperando a un revisor a medianoche.
     environment: gcp-rutina
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Detener la VM a mitad de un despliegue la dejaría a medias. Se espera
+      # hasta 40 minutos a que termine el que esté corriendo; si sigue, el
+      # apagado de esta noche se omite (mejor una noche encendida que un
+      # despliegue roto) y el trabajo falla para que se note. Un despliegue
+      # que espera aprobación ("waiting") no cuenta: no toca nada hasta que
+      # se aprueba, y podría esperar horas. Si se aprueba justo durante el
+      # apagado, el despliegue fallará al no encontrar la VM encendida y
+      # basta con repetirlo.
+      - name: Esperar a que no haya un despliegue en curso
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 40); do
+            activos="$(gh run list -R "$GITHUB_REPOSITORY" --workflow desplegar-gcp.yml \
+                         --limit 20 --json status --jq '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending" or .status == "requested")] | length')"
+            [[ "$activos" == 0 ]] && exit 0
+            echo "despliegues en curso: $activos; espero (intento $i de 40)"
+            sleep 60
+          done
+          echo "::error::Sigue habiendo un despliegue en curso tras 40 minutos: se omite el apagado de esta noche."
+          exit 1
 
       - uses: ./.github/actions/preparar-gcp
         with:

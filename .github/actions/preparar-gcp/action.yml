@@ -25,10 +25,24 @@ inputs:
   terraform:
     description: Versión exacta de Terraform (el plan y su apply deben usar la misma)
     required: true
+  cuenta_facturacion:
+    description: vars.CUENTA_FACTURACION, solo para enmascararla en el registro
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
+    # El repositorio es público y el plan y el apply imprimen el ID de la
+    # cuenta de facturación (presupuesto). No es una credencial, pero no
+    # tiene por qué quedar a la vista.
+    - name: Enmascarar la cuenta de facturación
+      if: inputs.cuenta_facturacion != ''
+      shell: bash
+      env:
+        CUENTA: ${{ inputs.cuenta_facturacion }}
+      run: echo "::add-mask::$CUENTA"
+
     - name: Comprobar las variables del repositorio
       shell: bash
       env:

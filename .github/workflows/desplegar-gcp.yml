@@ -58,12 +58,16 @@ permissions:
   contents: read
   id-token: write
 
-# Un despliegue a la vez sobre el mismo entorno, compartido con el apagado
-# nocturno: dos applies simultáneos se pelearían por el bloqueo del estado, y
-# un apagado a mitad de despliegue dejaría la VM a medias. Los que llegan
-# esperan en lugar de cancelar al que corre.
+# Un despliegue a la vez: dos applies simultáneos se pelearían por el
+# bloqueo del estado. El que llega espera en lugar de cancelar al que corre;
+# GitHub solo guarda una ejecución pendiente por grupo, así que si llega una
+# tercera, la pendiente anterior se cancela (se relanza a mano).
+#
+# El grupo NO se comparte con el apagado nocturno: por esa misma regla, un
+# apagado en espera se perdería al llegar un despliegue. El apagado espera
+# por su cuenta a que termine el despliegue en curso (apagado-nocturno.yml).
 concurrency:
-  group: gcp-${{ github.repository }}
+  group: gcp-despliegue-${{ github.repository }}
   cancel-in-progress: false
 
 # `shell: bash` explícito para que los run lleven -o pipefail: el valor por
@@ -89,6 +93,7 @@ jobs:
     name: Plan de Terraform
     if: contains(fromJSON('["plan","infra","todo"]'), inputs.accion)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: gcp-rutina
     outputs:
       cambios: ${{ steps.plan.outputs.cambios }}
@@ -103,6 +108,7 @@ jobs:
           cuenta: ${{ vars.GCP_DEPLOYER_SA }}
           bucket: ${{ vars.TF_STATE_BUCKET }}
           terraform: ${{ env.TERRAFORM_VERSION }}
+          cuenta_facturacion: ${{ vars.CUENTA_FACTURACION }}
 
       - name: Variables de Terraform
         env:
@@ -121,6 +127,8 @@ jobs:
 
       - name: Planificar
         id: plan
+        env:
+          CUENTA_FACTURACION: ${{ vars.CUENTA_FACTURACION }}
         run: |
           plan="$RUNNER_TEMP/infra.tfplan"
           rc=0
@@ -146,6 +154,10 @@ jobs:
             fi
             # El texto sí enmascara los sensibles ("(sensitive value)").
             tf show -no-color "$plan" > "$RUNNER_TEMP/plan.txt"
+            # add-mask cubre el registro; el resumen se limpia aparte.
+            if [[ -n "$CUENTA_FACTURACION" ]]; then
+              sed -i "s/$CUENTA_FACTURACION/(cuenta de facturación)/g" "$RUNNER_TEMP/plan.txt"
+            fi
             echo
             echo "<details><summary>Plan completo</summary>"
             echo
@@ -180,6 +192,9 @@ jobs:
     needs: plan
     if: contains(fromJSON('["infra","todo"]'), inputs.accion) && needs.plan.outputs.cambios == 'true'
     runs-on: ubuntu-latest
+    # Cloud SQL tarda 10-15 minutos en crearse, más la espera de aprobación
+    # (que no cuenta: el trabajo no empieza hasta que se aprueba).
+    timeout-minutes: 60
     environment: gcp
     env:
       OBJETO: ${{ needs.plan.outputs.objeto }}
@@ -193,6 +208,7 @@ jobs:
           cuenta: ${{ vars.GCP_DEPLOYER_SA }}
           bucket: ${{ vars.TF_STATE_BUCKET }}
           terraform: ${{ env.TERRAFORM_VERSION }}
+          cuenta_facturacion: ${{ vars.CUENTA_FACTURACION }}
 
       - name: Aplicar el plan revisado
         run: |
@@ -227,6 +243,8 @@ jobs:
     # desplegar, o plan sin cambios), pero no si alguno falló.
     if: ${{ !cancelled() && !failure() && contains(fromJSON('["publicar","desplegar","todo"]'), inputs.accion) }}
     runs-on: ubuntu-latest
+    # La imagen del worker (LibreOffice, JRE, FFmpeg) tarda sin caché.
+    timeout-minutes: 90
     environment:
       name: gcp
       url: ${{ steps.resumen.outputs.url }}
@@ -327,6 +345,7 @@ jobs:
     name: Operar (${{ inputs.accion }})
     if: contains(fromJSON('["certificado","sembrar","encender","apagar"]'), inputs.accion)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: gcp
     env:
       ACCION: ${{ inputs.accion }}
@@ -394,6 +413,7 @@ jobs:
     name: Estado
     if: inputs.accion == 'estado'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: gcp-rutina
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
