@@ -8,13 +8,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/worker ./cmd/worker
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/seed ./cmd/seed
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/migrate ./cmd/migrate
 
-FROM alpine:3.20 AS api
+FROM alpine:3.24 AS api
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/api /usr/local/bin/api
 EXPOSE 8080
 ENTRYPOINT ["api"]
 
-FROM alpine:3.20 AS worker
+FROM alpine:3.24 AS worker
 # ffmpeg transcodifica a HLS; libreoffice convierte las presentaciones a PDF.
 #
 # Se instala solo el modulo de presentaciones (libreoffice-impress) y no la
@@ -42,7 +42,7 @@ ENTRYPOINT ["worker"]
 # Sembrador de datos sintéticos. Va en su propia imagen y no dentro de la API
 # porque no debe poder ejecutarse por accidente en un entorno real: para
 # correrlo hay que levantarlo a propósito, con el perfil "carga".
-FROM alpine:3.20 AS seed
+FROM alpine:3.24 AS seed
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/seed /usr/local/bin/seed
 ENTRYPOINT ["seed"]
@@ -50,7 +50,7 @@ ENTRYPOINT ["seed"]
 # Migraciones como paso separado del despliegue (deploy/gcp/migrar.sh).
 # La API también migra al arrancar; esta imagen existe para que un fallo de
 # migración se vea en un código de salida y no enterrado en el arranque.
-FROM alpine:3.20 AS migrate
+FROM alpine:3.24 AS migrate
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/migrate /usr/local/bin/migrate
 ENTRYPOINT ["migrate"]
