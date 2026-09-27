@@ -1,17 +1,20 @@
-# Web Server (EC2 t3.small, subred pública): proxy TLS, API y Mailpit.
+# Web Server (GCE e2-small, subred web con IP estática): proxy TLS, API y
+# Mailpit.
 #
-#   cd /opt/mooc && deploy/aws/en-vm.sh web
+#   sudo /opt/mooc/actual/deploy/gcp/en-vm.sh web
 #
-# No se lanza a mano con `docker compose up`: DB_PASSWORD no está en ningún
-# archivo, la lee en-vm.sh de SSM Parameter Store y la exporta solo para esa
-# invocación (y en-vm.sh se niega a seguir si llega vacía). Aquí no se marca
-# como obligatoria porque Compose interpola el archivo entero, también los
-# servicios de otros perfiles, y eso obligaría a tener la contraseña a mano
-# hasta para pedir un certificado.
+# No se lanza a mano con `docker compose up`: DB_PASSWORD y S3_SECRET_KEY no
+# están en ningún archivo, las lee en-vm.sh de Secret Manager con la cuenta
+# de servicio de la VM y las exporta solo para esa invocación (y se niega a
+# seguir si llegan vacías). Aquí no se marcan como obligatorias porque
+# Compose interpola el archivo entero, también los servicios de otros
+# perfiles, y eso obligaría a tenerlas a mano hasta para pedir un
+# certificado. Por lo mismo las imágenes tienen un valor por defecto
+# inservible en lugar de :?: en-vm.sh fija las del commit desplegado.
 #
-# Presupuesto de memoria (2 GiB, ~1,6 disponibles tras el sistema y los
-# agentes): api 768 MiB, nginx 128, mailpit 96, frontend opcional 384. Los
-# límites existen para que un pico de uno termine en un reinicio de ese
+# Presupuesto de memoria (2 GB, ~1,6 disponibles tras el sistema, Docker y
+# el Ops Agent): api 768 MiB, nginx 128, mailpit 96, frontend opcional 384.
+# Los límites existen para que un pico de uno termine en un reinicio de ese
 # contenedor y no en el OOM killer eligiendo víctima entre todos.
 
 name: mooc-web
@@ -26,37 +29,51 @@ x-registro: &registro
 services:
   api:
     <<: *registro
-    # Si la imagen ya está cargada (deploy/aws/construir-imagenes.sh) se usa
-    # tal cual y no se compila aquí; `build` queda como plan B.
-    image: ${IMAGEN_API:-mooc-api:local}
-    build:
-      context: ../../backend
-      target: api
+    # De Artifact Registry (deploy/gcp/publicar.sh). Sin `build`: compilar en
+    # una e2-small agota la memoria y la ráfaga de CPU.
+    image: ${IMAGEN_API:-sin-publicar/mooc-api}
     restart: unless-stopped
     mem_limit: 768m
     environment:
       APP_ENV: production
       API_PORT: 8080
-      # sslmode=require: RDS PostgreSQL 16 ya exige TLS (rds.force_ssl=1 por
-      # defecto), y declararlo aquí evita que un cambio en el grupo de
-      # parámetros degrade la conexión en silencio.
+      # IP privada de Cloud SQL. sslmode=require: la instancia tiene
+      # ssl_mode=ENCRYPTED_ONLY y rechaza conexiones sin TLS; declararlo aquí
+      # hace que el fallo sea del cliente y explícito si alguien lo cambia.
+      # No verifica la CA del servidor (verify-ca exigiría distribuir su
+      # certificado); la red es privada y el peering, de Google.
       DATABASE_URL: postgres://${DB_USER:?falta DB_USER}:${DB_PASSWORD:-}@${DB_HOST:?falta DB_HOST}:5432/${DB_NAME:?falta DB_NAME}?sslmode=require
-      # IP privada del Worker Server. Redis no tiene contraseña: lo protege el
-      # security group, que solo admite esta máquina (ver deploy/worker).
-      REDIS_ADDR: ${REDIS_ADDR:?falta REDIS_ADDR (IP privada del worker):6379}
-      S3_ENDPOINT: ${S3_ENDPOINT:?falta S3_ENDPOINT}
-      S3_REGION: ${S3_REGION:?falta S3_REGION}
+      # Pool de la API. Sumado al del worker tiene que caber en el
+      # max_connections de Cloud SQL (ver deploy/gcp/README.md).
+      DB_MAX_CONNS: ${DB_MAX_CONNS:-20}
+      # IP interna fija del Worker Server. Redis no tiene contraseña: lo
+      # protege el firewall, que solo admite la cuenta de servicio del Web
+      # (ver deploy/worker).
+      REDIS_ADDR: ${REDIS_ADDR:?falta REDIS_ADDR (IP interna del worker):6379}
+      # API XML de Cloud Storage. Exactamente este host: minio-go solo
+      # reconoce GCS por él (y ajusta la subida de objetos a lo que GCS
+      # admite); un endpoint regional o private.googleapis.com se trataría
+      # como un S3 genérico.
+      S3_ENDPOINT: storage.googleapis.com
+      S3_PUBLIC_ENDPOINT: storage.googleapis.com
+      # Región del ámbito de la firma SigV4 que espera GCS.
+      S3_REGION: auto
       S3_BUCKET: ${S3_BUCKET:?falta S3_BUCKET}
-      # Vacías a propósito: la API toma credenciales del instance profile.
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      # Los derivados hls/* van a un bucket aparte legible por cualquiera:
+      # el reproductor pide variantes y segmentos sin firma.
+      S3_BUCKET_HLS: ${S3_BUCKET_HLS:?falta S3_BUCKET_HLS}
+      # Clave HMAC de la cuenta de servicio de la API. El identificador está
+      # en el .env; el secreto lo trae en-vm.sh de Secret Manager.
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?falta S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-}
-      S3_SESSION_TOKEN: ${S3_SESSION_TOKEN:-}
       S3_USE_SSL: "true"
-      S3_CREATE_BUCKET: "false"
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       S3_PUBLIC_USE_SSL: "true"
-      # Vacía: sin CDN en esta entrega, las descargas se firman una a una y el
-      # HLS se lee por la política pública de hls/*.
+      # Los buckets los crea Terraform; un nombre mal escrito tiene que
+      # fallar, no crear un bucket sin CORS ni prevención de acceso público.
+      S3_CREATE_BUCKET: "false"
+      # Vacía a propósito: sin CDN en esta entrega todo se firma uno a uno.
+      # Rellenarla quitaría la firma de TODAS las claves, originales
+      # incluidos, no solo las de HLS.
       S3_PUBLIC_URL: ""
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?falta PUBLIC_BASE_URL (https://...)}
       COOKIE_SECURE: "true"
@@ -103,12 +120,12 @@ services:
         condition: service_started
 
   # SMTP de pruebas. Sin él el registro responde 500: la API devuelve el error
-  # del envío del correo de verificación. No hay SMTP real en esta entrega; los
-  # correos quedan aquí y la interfaz se consulta por túnel:
-  #   aws ssm start-session --target <web> --document-name AWS-StartPortForwardingSession \
-  #     --parameters portNumber=8025,localPortNumber=8025
-  # Publicado solo en 127.0.0.1: el SG no lo expone, pero tampoco se confía
-  # solo en él.
+  # del envío del correo de verificación. No hay SMTP real en esta entrega (y
+  # GCE bloquea el puerto 25 saliente); los correos quedan aquí y la interfaz
+  # se consulta por túnel SSH sobre IAP:
+  #   deploy/gcp/remoto.sh web -- -L 8025:127.0.0.1:8025 -N
+  # Publicado solo en 127.0.0.1: el firewall no lo expone, pero tampoco se
+  # confía solo en él.
   mailpit:
     <<: *registro
     image: axllent/mailpit:v1.22
@@ -118,12 +135,9 @@ services:
       - "127.0.0.1:8025:8025"
     expose: ["1025"]
 
-  # Migraciones como paso explícito: `deploy/aws/en-vm.sh migrar`.
+  # Migraciones como paso explícito: `deploy/gcp/migrar.sh`.
   migrate:
-    image: ${IMAGEN_MIGRATE:-mooc-migrate:local}
-    build:
-      context: ../../backend
-      target: migrate
+    image: ${IMAGEN_MIGRATE:-sin-publicar/mooc-migrate}
     profiles: ["operacion"]
     environment:
       DATABASE_URL: postgres://${DB_USER:?falta DB_USER}:${DB_PASSWORD:-}@${DB_HOST:?falta DB_HOST}:5432/${DB_NAME:?falta DB_NAME}?sslmode=require
@@ -136,16 +150,13 @@ services:
       - certificados:/etc/letsencrypt
       - acme:/var/www/certbot
 
-  # Frontend existente, opcional: `COMPOSE_PROFILES=frontend`. Se sirve por el
-  # mismo origen que la API, así que no necesita CORS contra ella.
+  # Frontend existente, opcional: `COMPOSE_PROFILES=frontend` en el .env y
+  # `deploy/gcp/publicar.sh --frontend`, que compila con NEXT_PUBLIC_API_URL
+  # (Next la incrusta al compilar, no al arrancar). Se sirve por el mismo
+  # origen que la API, así que no necesita CORS contra ella.
   frontend:
     <<: *registro
-    image: ${IMAGEN_FRONTEND:-mooc-frontend:local}
-    build:
-      context: ../../frontend
-      args:
-        # Next incrusta las NEXT_PUBLIC_* al compilar, no al arrancar.
-        NEXT_PUBLIC_API_URL: ${PUBLIC_BASE_URL:-}
+    image: ${IMAGEN_FRONTEND:-sin-publicar/mooc-frontend}
     profiles: ["frontend"]
     restart: unless-stopped
     mem_limit: 384m

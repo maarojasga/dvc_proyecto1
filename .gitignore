@@ -46,10 +46,18 @@ yarn-error.log*
 *.dump
 *.sql.gz
 deploy/**/secrets/
-# Despliegue en AWS: parámetros de la cuenta y estado local de los scripts
-# (último tag publicado, último snapshot).
-deploy/aws/parametros.env
-deploy/aws/.estado/
+# Despliegue en GCP: estado local de los scripts (último tag publicado, último
+# export) y copias locales de los exports de Cloud SQL.
+deploy/gcp/.estado/
+deploy/gcp/respaldos/
+# Terraform: el estado contiene en claro la contraseña de la base y los
+# secretos HMAC; las variables, el ID del proyecto y de la facturación.
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!*.tfvars.example
+crash.log
 
 # Sistema operativo / editores
 .DS_Store

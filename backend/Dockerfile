@@ -47,7 +47,7 @@ RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/seed /usr/local/bin/seed
 ENTRYPOINT ["seed"]
 
-# Migraciones como paso separado del despliegue (deploy/aws/en-vm.sh migrar).
+# Migraciones como paso separado del despliegue (deploy/gcp/migrar.sh).
 # La API también migra al arrancar; esta imagen existe para que un fallo de
 # migración se vea en un código de salida y no enterrado en el arranque.
 FROM alpine:3.20 AS migrate
