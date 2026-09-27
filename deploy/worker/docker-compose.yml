@@ -1,0 +1,89 @@
+# Worker Server (EC2 t3.small, subred privada): workers asynq y Redis.
+#
+#   cd /opt/mooc && deploy/aws/en-vm.sh worker
+#
+# Presupuesto de memoria (2 GiB, ~1,6 disponibles tras el sistema y los
+# agentes): redis 256 MiB, worker 1280 MiB. El worker es el que importa: cada
+# trabajo concurrente puede ser un FFmpeg (transcodificación a varias
+# rendiciones) o un LibreOffice con su JVM, y ambos pasan con facilidad de
+# 300-500 MiB. Con WORKER_CONCURRENCY=5, el valor local, bastan dos vídeos
+# 1080p simultáneos para que el kernel mate procesos a mitad de trabajo. Por
+# eso en AWS va a 2 (ver .env.example) y el límite de memoria del contenedor
+# hace que, si aun así se desborda, el que caiga sea el worker —asynq
+# reintenta el trabajo— y no Redis con la cola dentro.
+
+name: mooc-worker
+
+x-registro: &registro
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  redis:
+    <<: *registro
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    # Sin contraseña: la API y el worker leen solo REDIS_ADDR (host:puerto) y
+    # construyen el cliente sin credenciales (asynq.RedisClientOpt{Addr} y
+    # redis.Options{Addr}). Añadir requirepass exige cambiar ese código, fuera
+    # del alcance de esta entrega. El control de acceso es de red: el puerto
+    # se publica solo en la IP privada de la máquina y el SG del Worker admite
+    # 6379 únicamente desde el SG del Web Server.
+    #
+    # appendonly: la cola vive aquí, y sin persistencia un reinicio de la
+    # máquina perdería los trabajos aceptados que aún no se procesaron.
+    # noeviction: asynq guarda trabajos, no caché; que Redis expulse claves
+    # bajo presión de memoria corrompería la cola en silencio. Mejor que
+    # rechace escrituras y el error se vea en la API.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 192mb
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "${REDIS_BIND_IP:?falta REDIS_BIND_IP (IP privada de esta máquina)}:6379:6379"
+    volumes:
+      - redis_datos:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    <<: *registro
+    image: ${IMAGEN_WORKER:-mooc-worker:local}
+    build:
+      context: ../../backend
+      target: worker
+    restart: unless-stopped
+    mem_limit: 1280m
+    # FFmpeg y LibreOffice escriben temporales grandes; en /tmp del
+    # contenedor (disco de la VM), no en tmpfs, que restaría de la RAM.
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgres://${DB_USER:?falta DB_USER}:${DB_PASSWORD:-}@${DB_HOST:?falta DB_HOST}:5432/${DB_NAME:?falta DB_NAME}?sslmode=require
+      # Por la red del compose, no por la IP publicada: no sale de la máquina.
+      REDIS_ADDR: redis:6379
+      S3_ENDPOINT: ${S3_ENDPOINT:?falta S3_ENDPOINT}
+      S3_REGION: ${S3_REGION:?falta S3_REGION}
+      S3_BUCKET: ${S3_BUCKET:?falta S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      S3_SESSION_TOKEN: ${S3_SESSION_TOKEN:-}
+      S3_USE_SSL: "true"
+      S3_CREATE_BUCKET: "false"
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis_datos:

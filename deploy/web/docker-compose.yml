@@ -1,0 +1,156 @@
+# Web Server (EC2 t3.small, subred pública): proxy TLS, API y Mailpit.
+#
+#   cd /opt/mooc && deploy/aws/en-vm.sh web
+#
+# No se lanza a mano con `docker compose up`: DB_PASSWORD no está en ningún
+# archivo, la lee en-vm.sh de SSM Parameter Store y la exporta solo para esa
+# invocación (y en-vm.sh se niega a seguir si llega vacía). Aquí no se marca
+# como obligatoria porque Compose interpola el archivo entero, también los
+# servicios de otros perfiles, y eso obligaría a tener la contraseña a mano
+# hasta para pedir un certificado.
+#
+# Presupuesto de memoria (2 GiB, ~1,6 disponibles tras el sistema y los
+# agentes): api 768 MiB, nginx 128, mailpit 96, frontend opcional 384. Los
+# límites existen para que un pico de uno termine en un reinicio de ese
+# contenedor y no en el OOM killer eligiendo víctima entre todos.
+
+name: mooc-web
+
+x-registro: &registro
+  # Rotación de logs: con el driver por defecto crecen sin límite y un disco de
+  # 30 GiB se llena en una prueba de estrés larga.
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  api:
+    <<: *registro
+    # Si la imagen ya está cargada (deploy/aws/construir-imagenes.sh) se usa
+    # tal cual y no se compila aquí; `build` queda como plan B.
+    image: ${IMAGEN_API:-mooc-api:local}
+    build:
+      context: ../../backend
+      target: api
+    restart: unless-stopped
+    mem_limit: 768m
+    environment:
+      APP_ENV: production
+      API_PORT: 8080
+      # sslmode=require: RDS PostgreSQL 16 ya exige TLS (rds.force_ssl=1 por
+      # defecto), y declararlo aquí evita que un cambio en el grupo de
+      # parámetros degrade la conexión en silencio.
+      DATABASE_URL: postgres://${DB_USER:?falta DB_USER}:${DB_PASSWORD:-}@${DB_HOST:?falta DB_HOST}:5432/${DB_NAME:?falta DB_NAME}?sslmode=require
+      # IP privada del Worker Server. Redis no tiene contraseña: lo protege el
+      # security group, que solo admite esta máquina (ver deploy/worker).
+      REDIS_ADDR: ${REDIS_ADDR:?falta REDIS_ADDR (IP privada del worker):6379}
+      S3_ENDPOINT: ${S3_ENDPOINT:?falta S3_ENDPOINT}
+      S3_REGION: ${S3_REGION:?falta S3_REGION}
+      S3_BUCKET: ${S3_BUCKET:?falta S3_BUCKET}
+      # Vacías a propósito: la API toma credenciales del instance profile.
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      S3_SESSION_TOKEN: ${S3_SESSION_TOKEN:-}
+      S3_USE_SSL: "true"
+      S3_CREATE_BUCKET: "false"
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      S3_PUBLIC_USE_SSL: "true"
+      # Vacía: sin CDN en esta entrega, las descargas se firman una a una y el
+      # HLS se lee por la política pública de hls/*.
+      S3_PUBLIC_URL: ""
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?falta PUBLIC_BASE_URL (https://...)}
+      COOKIE_SECURE: "true"
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: ${SMTP_FROM:-no-reply@mooc.local}
+      CLAMAV_ADDR: ""
+      AUTH_RATE_LIMIT_PER_MINUTE: ${AUTH_RATE_LIMIT_PER_MINUTE:-}
+      BADGE_SIGNING_KEY: ${BADGE_SIGNING_KEY:-}
+      BADGE_KEY_ID: ${BADGE_KEY_ID:-mooc-badges-1}
+      ISSUER_NAME: ${ISSUER_NAME:-Plataforma MOOC}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    expose: ["8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      mailpit:
+        condition: service_started
+
+  nginx:
+    <<: *registro
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../nginx/web-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - certificados:/etc/letsencrypt:ro
+      - acme:/var/www/certbot:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz-proxy"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      api:
+        condition: service_started
+
+  # SMTP de pruebas. Sin él el registro responde 500: la API devuelve el error
+  # del envío del correo de verificación. No hay SMTP real en esta entrega; los
+  # correos quedan aquí y la interfaz se consulta por túnel:
+  #   aws ssm start-session --target <web> --document-name AWS-StartPortForwardingSession \
+  #     --parameters portNumber=8025,localPortNumber=8025
+  # Publicado solo en 127.0.0.1: el SG no lo expone, pero tampoco se confía
+  # solo en él.
+  mailpit:
+    <<: *registro
+    image: axllent/mailpit:v1.22
+    restart: unless-stopped
+    mem_limit: 96m
+    ports:
+      - "127.0.0.1:8025:8025"
+    expose: ["1025"]
+
+  # Migraciones como paso explícito: `deploy/aws/en-vm.sh migrar`.
+  migrate:
+    image: ${IMAGEN_MIGRATE:-mooc-migrate:local}
+    build:
+      context: ../../backend
+      target: migrate
+    profiles: ["operacion"]
+    environment:
+      DATABASE_URL: postgres://${DB_USER:?falta DB_USER}:${DB_PASSWORD:-}@${DB_HOST:?falta DB_HOST}:5432/${DB_NAME:?falta DB_NAME}?sslmode=require
+
+  # Emisión y renovación de certificados: deploy/web/certificado.sh.
+  certbot:
+    image: certbot/certbot:v2.11.0
+    profiles: ["operacion"]
+    volumes:
+      - certificados:/etc/letsencrypt
+      - acme:/var/www/certbot
+
+  # Frontend existente, opcional: `COMPOSE_PROFILES=frontend`. Se sirve por el
+  # mismo origen que la API, así que no necesita CORS contra ella.
+  frontend:
+    <<: *registro
+    image: ${IMAGEN_FRONTEND:-mooc-frontend:local}
+    build:
+      context: ../../frontend
+      args:
+        # Next incrusta las NEXT_PUBLIC_* al compilar, no al arrancar.
+        NEXT_PUBLIC_API_URL: ${PUBLIC_BASE_URL:-}
+    profiles: ["frontend"]
+    restart: unless-stopped
+    mem_limit: 384m
+    expose: ["3000"]
+
+volumes:
+  certificados:
+  acme:

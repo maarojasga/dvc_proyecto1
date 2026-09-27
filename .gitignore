@@ -40,6 +40,16 @@ yarn-error.log*
 .env.local
 .env.*.local
 *.pem
+*.key
+*.crt
+# Volcados y respaldos de la base: contienen datos (y hashes de contraseñas).
+*.dump
+*.sql.gz
+deploy/**/secrets/
+# Despliegue en AWS: parámetros de la cuenta y estado local de los scripts
+# (último tag publicado, último snapshot).
+deploy/aws/parametros.env
+deploy/aws/.estado/
 
 # Sistema operativo / editores
 .DS_Store

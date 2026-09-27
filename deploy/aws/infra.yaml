@@ -1,0 +1,962 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Plataforma MOOC, Entrega 2: despliegue básico en IaaS. VPC con subred
+  pública (Web Server) y privadas (Worker Server y RDS), dos EC2 t3.small,
+  RDS PostgreSQL 16 Single-AZ y un bucket S3 para originales y derivados.
+
+# Una sola pila y no varias: el entorno se crea, se prueba y se destruye
+# entero, y partirlo obligaría a exportar e importar valores entre pilas sin
+# que ninguna tenga un ciclo de vida propio. La única pieza que sí vive y muere
+# por separado, la base de datos, se controla con CrearBaseDeDatos.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "Proyecto y cuenta" }
+        Parameters: [Proyecto, PerfilInstanciaExistente, CrearRolesPropios]
+      - Label: { default: "Red y acceso administrativo" }
+        Parameters: [CidrVpc, HabilitarNatGateway, NombreLlaveSsh, CidrAdministracion]
+      - Label: { default: "Máquinas virtuales" }
+        Parameters: [TipoInstancia, AmiId, TamanoDiscoGiB]
+      - Label: { default: "Base de datos" }
+        Parameters:
+          - CrearBaseDeDatos
+          - SnapshotParaRestaurar
+          - VersionMotorBD
+          - ClaseInstanciaBD
+          - AlmacenamientoBDGiB
+          - UsuarioMaestroBD
+          - NombreBD
+          - ParametroPasswordBD
+          - RetencionBackupsDias
+      - Label: { default: "Frontend, CORS y costos" }
+        Parameters: [DominioWeb, CorreoAlertasPresupuesto, PresupuestoMensualUSD]
+
+Parameters:
+  Proyecto:
+    Type: String
+    Default: mooc
+    AllowedPattern: "^[a-z][a-z0-9-]{1,20}$"
+    Description: Prefijo de nombres. Minúsculas, porque entra en el nombre del bucket.
+
+  PerfilInstanciaExistente:
+    Type: String
+    Default: LabInstanceProfile
+    Description: >-
+      Instance profile ya existente que se asocia a las dos EC2 cuando
+      CrearRolesPropios=false. En AWS Academy Learner Lab es LabInstanceProfile
+      (rol LabRole), porque allí no se pueden crear roles.
+
+  CrearRolesPropios:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      true crea un rol por componente (API y Worker) con permisos S3 mínimos y
+      diferenciados. Solo en cuentas con permiso iam:CreateRole.
+
+  CidrVpc:
+    Type: String
+    Default: 10.20.0.0/16
+    AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/16$"
+    Description: Bloque de la VPC (/16). Las subredes son sus tres primeros /24.
+
+  HabilitarNatGateway:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Salida a Internet de la subred privada. Se necesita para instalar Docker
+      en el Worker, descargar imágenes y usar SSM; S3 no la necesita (va por el
+      endpoint de gateway). false la elimina y ahorra ~0,045 USD/h.
+
+  NombreLlaveSsh:
+    Type: String
+    Default: ""
+    Description: >-
+      Key pair EC2 existente (en Learner Lab, "vockey"). Vacío: sin SSH, la
+      administración va solo por SSM Session Manager.
+
+  CidrAdministracion:
+    Type: String
+    Default: ""
+    Description: >-
+      CIDR desde el que se permite SSH al Web Server (p. ej. 190.1.2.3/32).
+      Vacío: el puerto 22 no se abre a nadie.
+
+  TipoInstancia:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.small, t3a.small, t3.medium]
+    Description: >-
+      t3.small es el único tipo x86 de uso general con exactamente 2 vCPU y
+      2 GiB. Cambiarlo es otra configuración y exige rotular las corridas.
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: >-
+      Parámetro público de SSM con la última Amazon Linux 2023. Trae el agente
+      de SSM y la AWS CLI; con una AMI fija dejaría de recibir parches.
+
+  TamanoDiscoGiB:
+    Type: Number
+    Default: 30
+    MinValue: 30
+    MaxValue: 100
+
+  CrearBaseDeDatos:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      false elimina la instancia RDS dejando un snapshot final (DeletionPolicy
+      Snapshot). Ver deploy/aws/rds.sh.
+
+  SnapshotParaRestaurar:
+    Type: String
+    Default: ""
+    Description: >-
+      Identificador o ARN de un snapshot desde el que recrear la base. Una vez
+      usado, debe conservarse en todas las actualizaciones: cambiarlo o
+      vaciarlo hace que CloudFormation cree OTRA instancia vacía.
+
+  VersionMotorBD:
+    Type: String
+    Default: "16"
+    AllowedPattern: "^16(\\.\\d+)?$"
+    Description: >-
+      Solo la mayor por defecto: RDS elige la menor vigente y las menores
+      caducan con el tiempo, así que fijar una hoy rompería la plantilla en
+      unos meses. Si la cuenta rechaza "16", fijar la menor que liste
+      `aws rds describe-db-engine-versions --engine postgres`.
+
+  ClaseInstanciaBD:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t4g.micro, db.t3.small, db.t4g.small]
+
+  AlmacenamientoBDGiB:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+
+  UsuarioMaestroBD:
+    Type: String
+    Default: mooc
+    AllowedPattern: "^[a-z][a-z0-9_]{1,15}$"
+
+  NombreBD:
+    Type: String
+    Default: mooc
+    AllowedPattern: "^[a-z][a-z0-9_]{1,30}$"
+
+  ParametroPasswordBD:
+    Type: String
+    Default: /mooc/db/master-password
+    AllowedPattern: "^/[A-Za-z0-9/_.-]+$"
+    Description: >-
+      Nombre del parámetro SecureString de SSM con la contraseña maestra. Lo
+      crea deploy/aws/desplegar-infra.sh antes de la pila; la contraseña nunca
+      pasa por la plantilla, los parámetros ni el UserData.
+
+  RetencionBackupsDias:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 7
+    Description: Backups automáticos activos pero cortos; el respaldo que importa es el snapshot manual.
+
+  DominioWeb:
+    Type: String
+    Default: ""
+    Description: >-
+      Dominio propio del Web Server (p. ej. mooc.ejemplo.com). Vacío: se usa
+      <IP elástica>.sslip.io, un DNS comodín público que resuelve a la IP que
+      lleva en el nombre y que admite certificados de Let's Encrypt.
+
+  CorreoAlertasPresupuesto:
+    Type: String
+    Default: ""
+    Description: >-
+      Correo para las alertas de AWS Budgets. Vacío: no se crea presupuesto
+      (Learner Lab no permite Budgets; su panel ya muestra el gasto).
+
+  PresupuestoMensualUSD:
+    Type: Number
+    Default: 40
+    MinValue: 1
+
+Mappings:
+  # Script de primer arranque, común a las dos máquinas. Vive en un Mapping
+  # para no duplicarlo en cada plantilla de lanzamiento (CloudFormation no
+  # admite anclas YAML). No usa !Sub: nada de aquí depende de la pila.
+  Arranque:
+    Script:
+      Contenido: |
+        #!/bin/bash
+        # Primer arranque: Docker, compose, swap y agente de CloudWatch.
+        # Registro en /var/log/mooc-arranque.log. Es idempotente: si falló
+        # (p. ej. el Worker arrancó con la NAT apagada) se puede relanzar con
+        #   sudo bash /var/lib/cloud/instance/user-data.txt
+        set -euxo pipefail
+        exec > >(tee -a /var/log/mooc-arranque.log) 2>&1
+
+        # La salida a Internet puede tardar en existir (IP elástica o NAT aún
+        # creándose): se reintenta en vez de fallar al primer intento.
+        reintentar() { for _ in $(seq 1 30); do "$@" && return 0; sleep 10; done; return 1; }
+
+        reintentar dnf install -y docker git amazon-cloudwatch-agent
+        systemctl enable --now docker
+        usermod -aG docker ec2-user
+
+        # Compose y buildx no vienen en el paquete de Amazon Linux. Versiones
+        # fijas: dos máquinas creadas en días distintos deben ser iguales.
+        COMPOSE_VERSION=v2.29.7
+        BUILDX_VERSION=v0.17.1
+        case "$(uname -m)" in
+          x86_64) ARCH_C=x86_64; ARCH_B=amd64 ;;
+          aarch64) ARCH_C=aarch64; ARCH_B=arm64 ;;
+        esac
+        PLUGINS=/usr/local/lib/docker/cli-plugins
+        mkdir -p "$PLUGINS"
+        reintentar curl -fsSL -o "$PLUGINS/docker-compose" \
+          "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-$ARCH_C"
+        reintentar curl -fsSL -o "$PLUGINS/docker-buildx" \
+          "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-$ARCH_B"
+        chmod +x "$PLUGINS/docker-compose" "$PLUGINS/docker-buildx"
+
+        # 2 GiB de swap: no para operar con ella, sino para que un pico (un
+        # docker load, un FFmpeg de más) no active el OOM killer. Con
+        # swappiness baja solo se usa ante presión real; el agente de abajo
+        # registra swap_used_percent, que es la señal de que la corrida de
+        # carga ya no mide la configuración declarada.
+        if [ ! -f /swapfile ]; then
+          dd if=/dev/zero of=/swapfile bs=1M count=2048
+          chmod 600 /swapfile
+          mkswap /swapfile
+          echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+        fi
+        swapon /swapfile || true
+        # overcommit_memory=1 es la recomendación de Redis: sin ella el fork
+        # del guardado en segundo plano puede fallar con memoria libre de sobra.
+        cat > /etc/sysctl.d/90-mooc.conf <<'SYSCTL'
+        vm.swappiness = 10
+        vm.overcommit_memory = 1
+        SYSCTL
+        sysctl --system
+
+        mkdir -p /opt/mooc
+        chown ec2-user:ec2-user /opt/mooc
+
+        # Memoria y disco no están en las métricas por defecto de EC2 y el
+        # análisis de capacidad los exige. Si el rol no permite publicar en
+        # CloudWatch, la máquina sigue funcionando: no es un fallo de arranque.
+        cat > /opt/aws/amazon-cloudwatch-agent/etc/mooc.json <<'CWA'
+        {
+          "metrics": {
+            "namespace": "MOOC/VM",
+            "append_dimensions": { "InstanceId": "${aws:InstanceId}" },
+            "metrics_collected": {
+              "mem": { "measurement": ["mem_used_percent", "mem_available"], "metrics_collection_interval": 30 },
+              "swap": { "measurement": ["swap_used_percent"], "metrics_collection_interval": 30 },
+              "disk": { "measurement": ["used_percent"], "resources": ["/"], "metrics_collection_interval": 60 },
+              "diskio": { "measurement": ["io_time", "read_bytes", "write_bytes"], "metrics_collection_interval": 30 }
+            }
+          }
+        }
+        CWA
+        /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+          -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/mooc.json || true
+
+        touch /var/lib/mooc-arranque-ok
+
+Conditions:
+  CrearRoles: !Equals [!Ref CrearRolesPropios, "true"]
+  UsarLlave: !Not [!Equals [!Ref NombreLlaveSsh, ""]]
+  PermitirSsh: !And
+    - !Condition UsarLlave
+    - !Not [!Equals [!Ref CidrAdministracion, ""]]
+  UsarNat: !Equals [!Ref HabilitarNatGateway, "true"]
+  CrearBd: !Equals [!Ref CrearBaseDeDatos, "true"]
+  RestaurarSnapshot: !Not [!Equals [!Ref SnapshotParaRestaurar, ""]]
+  TieneDominio: !Not [!Equals [!Ref DominioWeb, ""]]
+  CrearPresupuesto: !Not [!Equals [!Ref CorreoAlertasPresupuesto, ""]]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Red
+  # ---------------------------------------------------------------------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref CidrVpc
+      EnableDnsSupport: true
+      # Sin nombres DNS, el endpoint de RDS no resuelve a su IP privada dentro
+      # de la VPC.
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-vpc" }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-igw" }]
+
+  AdjuntoInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  SubredPublica:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [!Ref CidrVpc, 3, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      # IP pública al lanzar aunque luego se asocie la elástica: el UserData
+      # instala Docker en el primer arranque, antes de que exista la
+      # asociación, y sin IP no tendría salida.
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-publica" }]
+
+  # Worker y RDS en la misma zona que el Web Server: el tráfico entre zonas se
+  # cobra y añade latencia. La segunda subred privada existe solo porque RDS
+  # exige un DB subnet group con dos zonas aunque la instancia sea Single-AZ.
+  SubredPrivadaA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [1, !Cidr [!Ref CidrVpc, 3, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-privada-a" }]
+
+  SubredPrivadaB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [2, !Cidr [!Ref CidrVpc, 3, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-privada-b" }]
+
+  TablaRutasPublica:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-rutas-publica" }]
+
+  RutaPublicaInternet:
+    Type: AWS::EC2::Route
+    DependsOn: AdjuntoInternetGateway
+    Properties:
+      RouteTableId: !Ref TablaRutasPublica
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  AsociacionSubredPublica:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPublica
+      RouteTableId: !Ref TablaRutasPublica
+
+  TablaRutasPrivada:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-rutas-privada" }]
+
+  AsociacionSubredPrivadaA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPrivadaA
+      RouteTableId: !Ref TablaRutasPrivada
+
+  AsociacionSubredPrivadaB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPrivadaB
+      RouteTableId: !Ref TablaRutasPrivada
+
+  # Salida a Internet de la subred privada.
+  #
+  # Alternativas evaluadas:
+  # - NAT Gateway (esta): administrado, sin parches ni reglas de iptables;
+  #   ~0,045 USD/h + 0,045 USD/GB (~32 USD/mes encendido siempre). Se puede
+  #   apagar con HabilitarNatGateway=false sin tocar nada más.
+  # - NAT instance (t4g.nano, ~3 USD/mes): barata, pero es una tercera VM que
+  #   el enunciado no contempla y hay que mantener (AMI, iptables, source/dest
+  #   check). Usar el Web Server como NAT evitaría la VM, pero Docker pone la
+  #   cadena FORWARD en DROP y mezcla el tráfico del Worker con el que se mide.
+  # - Worker en subred pública sin puertos de entrada: gratis y seguro por el
+  #   SG, pero contradice la separación público/privado que pide la entrega.
+  #
+  # El tráfico pesado del Worker (originales y derivados en S3) NO pasa por la
+  # NAT: va por el endpoint de gateway de abajo, que es gratis. Por la NAT solo
+  # sale la instalación de paquetes, las imágenes base, SSM y CloudWatch, de
+  # modo que puede apagarse fuera de las sesiones de trabajo: el Worker sigue
+  # procesando (S3, RDS y Redis quedan dentro de la VPC).
+  IpElasticaNat:
+    Type: AWS::EC2::EIP
+    Condition: UsarNat
+    DependsOn: AdjuntoInternetGateway
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-nat" }]
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: UsarNat
+    Properties:
+      AllocationId: !GetAtt IpElasticaNat.AllocationId
+      SubnetId: !Ref SubredPublica
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-nat" }]
+
+  RutaPrivadaInternet:
+    Type: AWS::EC2::Route
+    Condition: UsarNat
+    Properties:
+      RouteTableId: !Ref TablaRutasPrivada
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # Endpoint de gateway para S3: gratis, y saca de la NAT y de Internet todo el
+  # tráfico de la API y el Worker con el bucket. También en la tabla pública:
+  # así la API no paga transferencia de salida por hablar con S3 de su región.
+  EndpointS3:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref TablaRutasPublica, !Ref TablaRutasPrivada]
+
+  # ---------------------------------------------------------------------------
+  # Security groups. Las reglas entre grupos van en recursos aparte para que
+  # las referencias cruzadas no formen un ciclo.
+  # ---------------------------------------------------------------------------
+  SgWeb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web Server - HTTP/HTTPS publico
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        # 80 solo para redirigir a 443 y para el reto HTTP-01 de Let's Encrypt.
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: "HTTP (redireccion y ACME)" }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-sg-web" }]
+
+  SgWebSshAdmin:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: PermitirSsh
+    Properties:
+      GroupId: !Ref SgWeb
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref CidrAdministracion
+      Description: SSH solo desde el CIDR de administracion
+
+  SgWorker:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Worker Server - sin entradas publicas
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-sg-worker" }]
+
+  # Redis no tiene contraseña (ver deploy/worker/docker-compose.yml): esta
+  # regla es su único control de acceso, y por eso referencia el SG de la API
+  # y no un CIDR que podría incluir otras máquinas de la subred.
+  SgWorkerRedisDesdeWeb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SgWorker
+      SourceSecurityGroupId: !Ref SgWeb
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+      Description: Redis (asynq) desde la API
+
+  # Salto SSH Web -> Worker para cuando la NAT está apagada y SSM no llega.
+  SgWorkerSshDesdeWeb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: UsarLlave
+    Properties:
+      GroupId: !Ref SgWorker
+      SourceSecurityGroupId: !Ref SgWeb
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      Description: SSH por salto desde el Web Server
+
+  SgBd:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS PostgreSQL - solo API y Worker
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-sg-bd" }]
+
+  SgBdDesdeWeb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SgBd
+      SourceSecurityGroupId: !Ref SgWeb
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      Description: PostgreSQL desde la API
+
+  SgBdDesdeWorker:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SgBd
+      SourceSecurityGroupId: !Ref SgWorker
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      Description: PostgreSQL desde el Worker
+
+  # ---------------------------------------------------------------------------
+  # IAM: solo cuando la cuenta lo permite. El bucket se nombra por su ARN
+  # construido y no con !GetAtt: el CORS del bucket depende de la IP elástica
+  # del Web Server, y el rol del Web Server dependiendo del bucket cerraría un
+  # ciclo.
+  # En Learner Lab las dos máquinas
+  # comparten LabRole, que tiene permisos amplios: la diferenciación por
+  # componente que pide el enunciado queda documentada aquí y aplicada solo
+  # fuera del laboratorio.
+  # ---------------------------------------------------------------------------
+  RolApi:
+    Type: AWS::IAM::Role
+    Condition: CrearRoles
+    Properties:
+      RoleName: !Sub "${Proyecto}-api-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
+      Policies:
+        - PolicyName: s3-api
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # HeadBucket al arrancar.
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}"
+              # Lo que suben los usuarios (originales) y lo que genera la
+              # propia API (subtítulos, insignias): subida simple y multipart,
+              # verificación, y borrado cuando el escaneo rechaza el objeto.
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/resources/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/subtitulos/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/badges/*"
+              # Derivados del Worker: la API solo firma su lectura.
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/hls/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/presentaciones/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/artefactos/*"
+        - PolicyName: secretos
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Proyecto}/*"
+
+  PerfilApi:
+    Type: AWS::IAM::InstanceProfile
+    Condition: CrearRoles
+    Properties:
+      Roles: [!Ref RolApi]
+
+  RolWorker:
+    Type: AWS::IAM::Role
+    Condition: CrearRoles
+    Properties:
+      RoleName: !Sub "${Proyecto}-worker-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
+      Policies:
+        - PolicyName: s3-worker
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}"
+              # Lee originales; no puede borrarlos ni reescribirlos, que es la
+              # garantía de "original conservado" puesta también en IAM.
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/resources/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/artefactos/*"
+              - Effect: Allow
+                Action: [s3:PutObject, s3:AbortMultipartUpload]
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/hls/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${Proyecto}-${AWS::AccountId}-${AWS::Region}/presentaciones/*"
+        - PolicyName: secretos
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Proyecto}/*"
+
+  PerfilWorker:
+    Type: AWS::IAM::InstanceProfile
+    Condition: CrearRoles
+    Properties:
+      Roles: [!Ref RolWorker]
+
+  # ---------------------------------------------------------------------------
+  # Máquinas virtuales
+  # ---------------------------------------------------------------------------
+  # Plantillas de lanzamiento y no propiedades de la instancia porque
+  # MetadataOptions solo se puede fijar así. Importa: IMDSv2 exige un PUT cuyo
+  # TTL de IP se agota en cada salto, y un contenedor en red bridge está a dos
+  # saltos del servicio de metadatos. Con el límite por defecto (1) la API y el
+  # Worker no obtienen las credenciales del instance profile y S3 responde 403.
+  PlantillaWeb:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${Proyecto}-web"
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref TipoInstancia
+        KeyName: !If [UsarLlave, !Ref NombreLlaveSsh, !Ref AWS::NoValue]
+        IamInstanceProfile:
+          Name: !If [CrearRoles, !Ref PerfilApi, !Ref PerfilInstanciaExistente]
+        MetadataOptions:
+          HttpTokens: required
+          HttpPutResponseHopLimit: 2
+          HttpEndpoint: enabled
+        # Standard y no unlimited: con unlimited, una prueba de estrés larga
+        # cobra vCPU extra sin avisar y los resultados dejan de corresponder a
+        # la configuración declarada. Con standard la degradación por créditos
+        # agotados es visible (CPUCreditBalance en CloudWatch) y se documenta.
+        CreditSpecification:
+          CpuCredits: standard
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: !Ref TamanoDiscoGiB
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: volume
+            Tags: [{ Key: Name, Value: !Sub "${Proyecto}-web" }]
+        # Solo instala; no despliega ni lleva secretos. El UserData es legible
+        # por cualquiera con ec2:DescribeInstanceAttribute, así que la
+        # configuración sensible llega después (deploy/aws/en-vm.sh).
+        UserData:
+          Fn::Base64: !FindInMap [Arranque, Script, Contenido]
+
+  PlantillaWorker:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${Proyecto}-worker"
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref TipoInstancia
+        KeyName: !If [UsarLlave, !Ref NombreLlaveSsh, !Ref AWS::NoValue]
+        IamInstanceProfile:
+          Name: !If [CrearRoles, !Ref PerfilWorker, !Ref PerfilInstanciaExistente]
+        MetadataOptions:
+          HttpTokens: required
+          HttpPutResponseHopLimit: 2
+          HttpEndpoint: enabled
+        CreditSpecification:
+          CpuCredits: standard
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: !Ref TamanoDiscoGiB
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: volume
+            Tags: [{ Key: Name, Value: !Sub "${Proyecto}-worker" }]
+        UserData:
+          Fn::Base64: !FindInMap [Arranque, Script, Contenido]
+
+  InstanciaWeb:
+    Type: AWS::EC2::Instance
+    DependsOn: RutaPublicaInternet
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref PlantillaWeb
+        Version: !GetAtt PlantillaWeb.LatestVersionNumber
+      SubnetId: !Ref SubredPublica
+      SecurityGroupIds: [!Ref SgWeb]
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-web" }, { Key: Rol, Value: web }]
+
+  InstanciaWorker:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref PlantillaWorker
+        Version: !GetAtt PlantillaWorker.LatestVersionNumber
+      SubnetId: !Ref SubredPrivadaA
+      SecurityGroupIds: [!Ref SgWorker]
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-worker" }, { Key: Rol, Value: worker }]
+
+  # IP elástica para el Web Server: sin ella la IP pública cambia en cada
+  # detener/iniciar, y con ella el dominio sslip.io, el certificado, el CORS
+  # del bucket y PUBLIC_BASE_URL. Cuesta lo mismo que cualquier IPv4 pública
+  # (0,005 USD/h) y se cobra también con la instancia detenida.
+  #
+  # IP y asociación van separadas para que la IP exista antes que la máquina:
+  # el CORS del bucket la necesita, y la máquina depende del bucket vía IAM.
+  IpElasticaWeb:
+    Type: AWS::EC2::EIP
+    DependsOn: AdjuntoInternetGateway
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-web" }]
+
+  AsociacionIpElasticaWeb:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt IpElasticaWeb.AllocationId
+      InstanceId: !Ref InstanciaWeb
+
+  # ---------------------------------------------------------------------------
+  # Base de datos
+  # ---------------------------------------------------------------------------
+  GrupoSubredesBd:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subredes privadas de la base (RDS exige dos zonas)
+      SubnetIds: [!Ref SubredPrivadaA, !Ref SubredPrivadaB]
+
+  # Snapshot al borrar y al reemplazar: poner CrearBaseDeDatos=false, o un
+  # cambio de propiedad que obligue a recrearla, deja siempre un respaldo.
+  BaseDeDatos:
+    Type: AWS::RDS::DBInstance
+    Condition: CrearBd
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "${Proyecto}-bd"
+      Engine: postgres
+      EngineVersion: !Ref VersionMotorBD
+      DBInstanceClass: !Ref ClaseInstanciaBD
+      AllocatedStorage: !Ref AlmacenamientoBDGiB
+      StorageType: gp3
+      MultiAZ: false
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref GrupoSubredesBd
+      VPCSecurityGroups: [!Ref SgBd]
+      # Al restaurar, nombre, usuario, contraseña y cifrado vienen del
+      # snapshot y RDS rechaza que se especifiquen. La contraseña sigue siendo
+      # la del parámetro de SSM, que no se borra con la instancia.
+      DBSnapshotIdentifier: !If [RestaurarSnapshot, !Ref SnapshotParaRestaurar, !Ref AWS::NoValue]
+      DBName: !If [RestaurarSnapshot, !Ref AWS::NoValue, !Ref NombreBD]
+      MasterUsername: !If [RestaurarSnapshot, !Ref AWS::NoValue, !Ref UsuarioMaestroBD]
+      # Referencia dinámica: CloudFormation la resuelve al crear y nunca la
+      # muestra. No se usa ManageMasterUserPassword (Secrets Manager) a
+      # propósito: ese secreto se borra con la instancia, y una base
+      # restaurada desde snapshot conservaría una contraseña que ya nadie
+      # conoce.
+      MasterUserPassword: !If
+        - RestaurarSnapshot
+        - !Ref AWS::NoValue
+        - !Sub "{{resolve:ssm-secure:${ParametroPasswordBD}}}"
+      StorageEncrypted: !If [RestaurarSnapshot, !Ref AWS::NoValue, true]
+      BackupRetentionPeriod: !Ref RetencionBackupsDias
+      CopyTagsToSnapshot: true
+      # Sin protección: el enunciado pide borrarla al final, y el snapshot de
+      # la DeletionPolicy es la red de seguridad.
+      DeletionProtection: false
+      AutoMinorVersionUpgrade: true
+      EnablePerformanceInsights: false
+      MonitoringInterval: 0
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-bd" }]
+
+  # ---------------------------------------------------------------------------
+  # Almacenamiento de objetos
+  # ---------------------------------------------------------------------------
+  # Sin DeletionPolicy Retain: CloudFormation no borra un bucket con objetos,
+  # así que la pila no puede llevarse los datos por accidente; vaciarlo es un
+  # paso explícito de deploy/aws/destruir.sh.
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Proyecto}-${AWS::AccountId}-${AWS::Region}"
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      # Las ACL quedan bloqueadas del todo; las políticas públicas no, porque
+      # la de abajo abre hls/* a lectura anónima. Si la cuenta tiene el bloqueo
+      # de acceso público activado a nivel de CUENTA, esa política falla al
+      # crearse: ver deploy/aws/README.md.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+            BucketKeyEnabled: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET, HEAD, PUT]
+            AllowedOrigins: !If
+              - TieneDominio
+              - [!Sub "https://${DominioWeb}"]
+              - [!Sub "https://${IpElasticaWeb}.sslip.io", !Sub "https://${IpElasticaWeb}"]
+            AllowedHeaders: ["*"]
+            # Sin ETag expuesto el navegador no puede leerlo en la respuesta de
+            # cada parte y la subida multipart falla al completar.
+            ExposedHeaders: [ETag]
+            MaxAge: 3000
+      LifecycleConfiguration:
+        Rules:
+          # Dos días y no uno: la reanudación de subidas admite hasta 24 h y
+          # la regla se evalúa una vez al día.
+          - Id: abortar-multipart-incompletos
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 2 }
+          # Imágenes de contenedor subidas por deploy/aws/construir-imagenes.sh.
+          - Id: caducar-artefactos
+            Status: Enabled
+            Prefix: artefactos/
+            ExpirationInDays: 14
+      Tags: [{ Key: Name, Value: !Sub "${Proyecto}-objetos" }]
+
+  PoliticaBucket:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # El reproductor pide listas de variante y segmentos con rutas
+          # relativas al manifiesto, y una URL relativa no hereda la firma:
+          # sin CDN en esta entrega, hls/ tiene que ser legible. Solo hls/,
+          # con nombres por UUID; originales, PDF y descargas se firman uno a
+          # uno. Solo GetObject: sin ListBucket nadie puede enumerar claves.
+          - Sid: LecturaAnonimaHls
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${Bucket.Arn}/hls/*"
+          - Sid: SoloHttps
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt Bucket.Arn, !Sub "${Bucket.Arn}/*"]
+            Condition:
+              Bool: { "aws:SecureTransport": "false" }
+
+  # ---------------------------------------------------------------------------
+  # Costos
+  # ---------------------------------------------------------------------------
+  Presupuesto:
+    Type: AWS::Budgets::Budget
+    Condition: CrearPresupuesto
+    Properties:
+      Budget:
+        BudgetName: !Sub "${Proyecto}-mensual"
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: { Amount: !Ref PresupuestoMensualUSD, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref CorreoAlertasPresupuesto }]
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref CorreoAlertasPresupuesto }]
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref CorreoAlertasPresupuesto }]
+
+Outputs:
+  Proyecto:
+    Value: !Ref Proyecto
+  WebIpPublica:
+    Description: IP elástica del Web Server
+    Value: !Ref IpElasticaWeb
+  WebDnsPublico:
+    Description: DNS público de EC2 del Web Server
+    Value: !GetAtt InstanciaWeb.PublicDnsName
+  UrlPublica:
+    Description: Origen HTTPS de la plataforma (PUBLIC_BASE_URL)
+    Value: !If
+      - TieneDominio
+      - !Sub "https://${DominioWeb}"
+      - !Sub "https://${IpElasticaWeb}.sslip.io"
+  NombreHostWeb:
+    Description: Nombre para el certificado TLS
+    Value: !If [TieneDominio, !Ref DominioWeb, !Sub "${IpElasticaWeb}.sslip.io"]
+  WebInstanceId:
+    Value: !Ref InstanciaWeb
+  WorkerIpPrivada:
+    Description: IP privada del Worker Server (REDIS_ADDR de la API)
+    Value: !GetAtt InstanciaWorker.PrivateIp
+  WorkerInstanceId:
+    Value: !Ref InstanciaWorker
+  BdEndpoint:
+    Condition: CrearBd
+    Description: Endpoint privado de RDS
+    Value: !GetAtt BaseDeDatos.Endpoint.Address
+  BdPuerto:
+    Condition: CrearBd
+    Value: !GetAtt BaseDeDatos.Endpoint.Port
+  BdIdentificador:
+    Condition: CrearBd
+    Value: !Ref BaseDeDatos
+  BdUsuario:
+    Value: !Ref UsuarioMaestroBD
+  BdNombre:
+    Value: !Ref NombreBD
+  ParametroPasswordBD:
+    Value: !Ref ParametroPasswordBD
+  NombreBucket:
+    Value: !Ref Bucket
+  S3Endpoint:
+    Description: Endpoint regional de S3 (S3_ENDPOINT y S3_PUBLIC_ENDPOINT)
+    Value: !Sub "s3.${AWS::Region}.amazonaws.com"
+  Region:
+    Value: !Ref AWS::Region
+  NatGatewayActiva:
+    Value: !Ref HabilitarNatGateway
