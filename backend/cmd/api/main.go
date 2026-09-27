@@ -40,7 +40,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := postgres.Connect(ctx, cfg.DatabaseURL)
+	pool, err := postgres.ConnectConMaximo(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		log.Fatalf("api: postgres: %v", err)
 	}
@@ -57,8 +57,8 @@ func main() {
 	defer rdb.Close()
 
 	storageClient, err := storage.New(ctx, storage.Config{
-		Endpoint: cfg.S3Endpoint, AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey, SessionToken: cfg.S3SessionToken,
-		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, Region: cfg.S3Region, PublicURL: cfg.S3PublicURL,
+		Endpoint: cfg.S3Endpoint, AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey,
+		UseSSL: cfg.S3UseSSL, Bucket: cfg.S3Bucket, BucketHLS: cfg.S3BucketHLS, Region: cfg.S3Region, PublicURL: cfg.S3PublicURL,
 		PublicEndpoint: cfg.S3PublicEndpoint, PublicUseSSL: cfg.S3PublicUseSSL, CrearBucket: cfg.S3CreateBucket,
 	})
 	if err != nil {

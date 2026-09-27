@@ -12,21 +12,29 @@ type Config struct {
 	Env         string
 	HTTPPort    string
 	DatabaseURL string
-	RedisAddr   string
+	// DBMaxConns es el tamaño del pool de PostgreSQL de cada proceso. Se
+	// suma entre la API y el worker y tiene que caber en el max_connections
+	// de la base administrada, que depende del tamaño de la instancia (en
+	// Cloud SQL, 25 en db-f1-micro y 50 en db-g1-small).
+	DBMaxConns int
+	RedisAddr  string
 
 	S3Endpoint string
 	S3Bucket   string
-	// S3AccessKey vacía (definida pero sin valor) hace que el almacén use la
-	// cadena de credenciales de AWS: variables AWS_* y, en EC2, el perfil de
-	// instancia. Es lo que se quiere en la nube, donde no debe haber llaves
-	// estáticas en el .env.
-	S3AccessKey    string
-	S3SecretKey    string
-	S3SessionToken string
-	S3UseSSL       bool
+	// S3BucketHLS, si no está vacío, aloja las claves hls/*. En GCP es un
+	// bucket aparte y legible por cualquiera, porque el reproductor pide los
+	// segmentos sin firma; ver storage.Config.BucketHLS.
+	S3BucketHLS string
+	// S3AccessKey vacía (definida pero sin valor) es un error de arranque, no
+	// un "usar otra cosa": en la nube tiene que llegar la clave HMAC y un
+	// olvido no debe acabar firmando con la llave local de MinIO.
+	S3AccessKey string
+	S3SecretKey string
+	S3UseSSL    bool
 	// S3CreateBucket permite que la API y el worker creen el bucket si no
-	// existe. Cierto en local (MinIO arranca vacío); falso en AWS, donde el
-	// bucket lo crea CloudFormation con su política, su CORS y su cifrado.
+	// existe. Cierto en local (MinIO arranca vacío); falso en GCP, donde los
+	// buckets los crea Terraform con su CORS, su ciclo de vida y su
+	// prevención de acceso público.
 	S3CreateBucket bool
 	S3Region       string
 	S3PublicURL    string // base URL pública/CDN para servir objetos (opcional)
@@ -90,15 +98,17 @@ func Load() Config {
 		Env:         getEnv("APP_ENV", "development"),
 		HTTPPort:    getEnv("API_PORT", "8080"),
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://mooc:mooc@localhost:5432/mooc?sslmode=disable"),
+		DBMaxConns:  getInt("DB_MAX_CONNS", 20),
 		RedisAddr:   getEnv("REDIS_ADDR", "localhost:6379"),
 
-		S3Endpoint: getEnv("S3_ENDPOINT", "localhost:9000"),
-		S3Bucket:   getEnv("S3_BUCKET", "mooc"),
+		S3Endpoint:  getEnv("S3_ENDPOINT", "localhost:9000"),
+		S3Bucket:    getEnv("S3_BUCKET", "mooc"),
+		S3BucketHLS: getEnv("S3_BUCKET_HLS", ""),
 		// Definida y vacía no es lo mismo que ausente: ausente conserva la
-		// llave de MinIO para `go run` en local; vacía pide la cadena de AWS.
+		// llave de MinIO para `go run` en local; vacía llega vacía y el
+		// almacén se niega a arrancar sin credenciales.
 		S3AccessKey:    getEnvDefinida("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:    getEnvDefinida("S3_SECRET_KEY", "minioadmin"),
-		S3SessionToken: getEnv("S3_SESSION_TOKEN", ""),
 		S3UseSSL:       getBool("S3_USE_SSL", false),
 		S3CreateBucket: getBool("S3_CREATE_BUCKET", true),
 		S3Region:       getEnv("S3_REGION", "us-east-1"),
